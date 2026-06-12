@@ -102,33 +102,10 @@ struct HomeView: View {
         onChatCreated(chat.id)
 
         Task {
-            await completeInitialChat(chat)
+            await ChatCompletionService.completeChat(chat, in: modelContext)
         }
 
         return true
-    }
-
-    private func completeInitialChat(_ chat: Chat) async {
-        do {
-            let messages = chat.sortedMessages.compactMap(\.inferenceMessage)
-            let response = try await InferenceService.shared.complete(
-                messages: messages,
-                model: chat.modelSelection
-            )
-
-            chat.appendMessage(role: .assistant, content: response)
-            chat.isGenerating = false
-            chat.errorMessage = nil
-        } catch {
-            chat.isGenerating = false
-            chat.errorMessage = error.localizedDescription
-        }
-
-        do {
-            try modelContext.save()
-        } catch {
-            HomeBlurb.logger.error("Saving chat response failed: \(String(describing: error), privacy: .public)")
-        }
     }
 
     private func generateBlurb() async {

@@ -95,6 +95,7 @@ enum SettingsKeys {
     static let neuralwattAPIKey = "settings.neuralwatt.apiKey"
     static let neuralwattModels = "settings.neuralwatt.models"
     static let openRouterAPIKey = "settings.openRouter.apiKey"
+    static let braveSearchAPIKey = "settings.braveSearch.apiKey"
     static let openRouterModels = "settings.openRouter.models"
     static let swiftModel = "settings.behaviors.swiftModel"
     static let clawModel = "settings.behaviors.clawModel"

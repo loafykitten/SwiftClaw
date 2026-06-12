@@ -333,32 +333,10 @@ private struct ChatTranscriptView: View {
         }
 
         Task {
-            await completeChat()
+            await ChatCompletionService.completeChat(chat, in: modelContext)
         }
 
         return true
-    }
-
-    private func completeChat() async {
-        do {
-            let response = try await InferenceService.shared.complete(
-                messages: chat.sortedMessages.compactMap(\.inferenceMessage),
-                model: chat.modelSelection
-            )
-
-            chat.appendMessage(role: .assistant, content: response)
-            chat.isGenerating = false
-            chat.errorMessage = nil
-        } catch {
-            chat.isGenerating = false
-            chat.errorMessage = error.localizedDescription
-        }
-
-        do {
-            try modelContext.save()
-        } catch {
-            chat.errorMessage = "Couldn't save the assistant response."
-        }
     }
 }
 

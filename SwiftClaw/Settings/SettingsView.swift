@@ -496,6 +496,7 @@ private struct ProviderSettingsView: View {
     @KeychainStorage(SettingsKeys.azureAPIKey) private var azureAPIKey
     @KeychainStorage(SettingsKeys.neuralwattAPIKey) private var neuralwattAPIKey
     @KeychainStorage(SettingsKeys.openRouterAPIKey) private var openRouterAPIKey
+    @KeychainStorage(SettingsKeys.braveSearchAPIKey) private var braveSearchAPIKey
 
     @State private var azureDeployments = SettingsStorage.loadDeployments()
     @State private var neuralwattModels = SettingsStorage.loadStringList(forKey: SettingsKeys.neuralwattModels)
@@ -504,6 +505,7 @@ private struct ProviderSettingsView: View {
     @State private var azureExpanded = true
     @State private var neuralwattExpanded = true
     @State private var openRouterExpanded = true
+    @State private var braveSearchExpanded = true
 
     private var azureResourceNameMissing: Bool {
         azureResourceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -548,6 +550,15 @@ private struct ProviderSettingsView: View {
                 )
             } header: {
                 Text("OpenRouter")
+            }
+
+            Section(isExpanded: $braveSearchExpanded) {
+                APIKeyField(title: "API Key", text: $braveSearchAPIKey)
+                Text("Used by the Web Search tool.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Brave Search")
             }
         }
         .formStyle(.grouped)
