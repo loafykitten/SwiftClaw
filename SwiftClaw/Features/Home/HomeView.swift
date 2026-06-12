@@ -3,6 +3,7 @@ import SwiftUI
 struct HomeView: View {
     @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
+    @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
 
     @State private var messageText = ""
     @State private var selectedMode = "Chat"
@@ -13,10 +14,26 @@ struct HomeView: View {
             return "(N/A)"
         }
 
+        if selectedModel == HomeModelSelection.swiftModel, isSwiftModelAvailable {
+            return "Swift Model"
+        }
+
+        if selectedModel == HomeModelSelection.clawModel, isClawModelAvailable {
+            return "Claw Model"
+        }
+
         return effectiveModel ?? availableModels[0]
     }
 
     private var effectiveModel: String? {
+        if selectedModel == HomeModelSelection.swiftModel {
+            return isSwiftModelAvailable ? swiftModel : nil
+        }
+
+        if selectedModel == HomeModelSelection.clawModel {
+            return isClawModelAvailable ? clawModel : nil
+        }
+
         if !selectedModel.isEmpty, availableModels.contains(selectedModel) {
             return selectedModel
         }
@@ -30,6 +47,32 @@ struct HomeView: View {
 
     private var chatControlsDisabled: Bool {
         availableModels.isEmpty
+    }
+
+    private var isSwiftModelAvailable: Bool {
+        !swiftModel.isEmpty && availableModels.contains(swiftModel)
+    }
+
+    private var isClawModelAvailable: Bool {
+        !clawModel.isEmpty && availableModels.contains(clawModel)
+    }
+
+    private var quickModelOptions: [HomeModelOption] {
+        var options: [HomeModelOption] = []
+
+        if isSwiftModelAvailable {
+            options.append(HomeModelOption(title: "Swift Model", selection: HomeModelSelection.swiftModel))
+        }
+
+        if isClawModelAvailable {
+            options.append(HomeModelOption(title: "Claw Model", selection: HomeModelSelection.clawModel))
+        }
+
+        return options
+    }
+
+    private var isQuickModelSelection: Bool {
+        selectedModel == HomeModelSelection.swiftModel || selectedModel == HomeModelSelection.clawModel
     }
 
     var body: some View {
@@ -61,18 +104,45 @@ struct HomeView: View {
             Spacer()
 
             VStack(spacing: 0) {
-                HStack(spacing: 8) {
-                    TextField("Message SwiftClaw...", text: $messageText)
+                HStack(alignment: .top, spacing: 8) {
+                    TextField("Message SwiftClaw...", text: $messageText, axis: .vertical)
                         .textFieldStyle(.plain)
                         .font(.body)
+                        .lineLimit(1...3)
+                        .fixedSize(horizontal: false, vertical: true)
                         .disabled(chatControlsDisabled)
+                        .onKeyPress { keyPress in
+                            guard keyPress.key == .return,
+                                  keyPress.modifiers.contains(.shift) else {
+                                return .ignored
+                            }
+
+                            messageText.append("\n")
+                            return .handled
+                        }
 
                     Menu {
+                        ForEach(quickModelOptions) { option in
+                            Button {
+                                selectedModel = option.selection
+                            } label: {
+                                if selectedModel == option.selection {
+                                    Label(option.title, systemImage: "checkmark")
+                                } else {
+                                    Text(option.title)
+                                }
+                            }
+                        }
+
+                        if !quickModelOptions.isEmpty {
+                            Divider()
+                        }
+
                         ForEach(availableModels, id: \.self) { model in
                             Button {
                                 selectedModel = model
                             } label: {
-                                if model == effectiveModel {
+                                if !isQuickModelSelection, model == effectiveModel {
                                     Label(model, systemImage: "checkmark")
                                 } else {
                                     Text(model)
@@ -90,6 +160,7 @@ struct HomeView: View {
                         .foregroundStyle(.secondary)
                     }
                     .menuIndicator(.hidden)
+                    .padding(.top, 2)
                     .disabled(chatControlsDisabled)
                 }
 
@@ -149,6 +220,18 @@ struct HomeView: View {
     private func refreshModels() {
         availableModels = SettingsStorage.loadAvailableModels()
     }
+}
+
+private enum HomeModelSelection {
+    static let swiftModel = "settings.home.modelPreset.swift"
+    static let clawModel = "settings.home.modelPreset.claw"
+}
+
+private struct HomeModelOption: Identifiable {
+    let title: String
+    let selection: String
+
+    var id: String { selection }
 }
 
 #Preview {
