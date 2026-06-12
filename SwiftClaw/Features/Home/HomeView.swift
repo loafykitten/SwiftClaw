@@ -2,12 +2,13 @@ import SwiftUI
 import os
 
 struct HomeView: View {
+    private let composerControlRowHeight: CGFloat = 28
+
     @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
     @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
 
     @State private var messageText = ""
-    @State private var selectedMode = "Chat"
     @State private var availableModels = SettingsStorage.loadAvailableModels()
     @State private var blurb = HomeBlurb.initial
 
@@ -77,6 +78,50 @@ struct HomeView: View {
         selectedModel == HomeModelSelection.swiftModel || selectedModel == HomeModelSelection.clawModel
     }
 
+    private var modelSelectionMenu: some View {
+        Menu {
+            ForEach(quickModelOptions) { option in
+                Button {
+                    selectedModel = option.selection
+                } label: {
+                    if selectedModel == option.selection {
+                        Label(option.title, systemImage: "checkmark")
+                    } else {
+                        Text(option.title)
+                    }
+                }
+            }
+
+            if !quickModelOptions.isEmpty {
+                Divider()
+            }
+
+            ForEach(availableModels, id: \.self) { model in
+                Button {
+                    selectedModel = model
+                } label: {
+                    if !isQuickModelSelection, model == effectiveModel {
+                        Label(model, systemImage: "checkmark")
+                    } else {
+                        Text(model)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(selectedModelTitle)
+                    .font(.caption)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2)
+            }
+            .foregroundStyle(.secondary)
+        }
+        .menuIndicator(.hidden)
+        .disabled(chatControlsDisabled)
+        .frame(height: composerControlRowHeight, alignment: .center)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -129,57 +174,16 @@ struct HomeView: View {
                             messageText.append("\n")
                             return .handled
                         }
-
-                    Menu {
-                        ForEach(quickModelOptions) { option in
-                            Button {
-                                selectedModel = option.selection
-                            } label: {
-                                if selectedModel == option.selection {
-                                    Label(option.title, systemImage: "checkmark")
-                                } else {
-                                    Text(option.title)
-                                }
-                            }
-                        }
-
-                        if !quickModelOptions.isEmpty {
-                            Divider()
-                        }
-
-                        ForEach(availableModels, id: \.self) { model in
-                            Button {
-                                selectedModel = model
-                            } label: {
-                                if !isQuickModelSelection, model == effectiveModel {
-                                    Label(model, systemImage: "checkmark")
-                                } else {
-                                    Text(model)
-                                }
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(selectedModelTitle)
-                                .font(.caption)
-                                .lineLimit(1)
-                            Image(systemName: "chevron.down")
-                                .font(.caption2)
-                        }
-                        .foregroundStyle(.secondary)
-                    }
-                    .menuIndicator(.hidden)
-                    .padding(.top, 2)
-                    .disabled(chatControlsDisabled)
                 }
 
                 Divider()
-                    .padding(.vertical, 4)
+                    .padding(.top, 4)
 
-                HStack {
+                HStack(alignment: .center) {
                     HStack(spacing: 12) {
                         Button {} label: {
                             Image(systemName: "paperclip")
+                                .frame(width: composerControlRowHeight, height: composerControlRowHeight)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
@@ -187,6 +191,7 @@ struct HomeView: View {
 
                         Button {} label: {
                             Image(systemName: "magnifyingglass")
+                                .frame(width: composerControlRowHeight, height: composerControlRowHeight)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
@@ -196,25 +201,24 @@ struct HomeView: View {
                     Spacer()
 
                     HStack(spacing: 8) {
-                        Picker("", selection: $selectedMode) {
-                            Text("Agent").tag("Agent")
-                            Text("Chat").tag("Chat")
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 130)
-                        .disabled(chatControlsDisabled)
+                        modelSelectionMenu
+                            .frame(width: 160, alignment: .trailing)
 
                         Button {} label: {
                             Image(systemName: "arrow.up.circle.fill")
                                 .font(.title2)
+                                .frame(width: composerControlRowHeight, height: composerControlRowHeight)
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.tint)
                         .disabled(chatControlsDisabled)
                     }
                 }
+                .frame(height: composerControlRowHeight, alignment: .center)
+                .padding(.vertical, 8)
             }
-            .padding(16)
+            .padding(.horizontal, 16)
+            .padding(.top, 16)
             .glassEffect(in: .rect(cornerRadius: 16.0))
             .padding(.horizontal, 40)
             .padding(.bottom, 24)
