@@ -131,10 +131,10 @@ enum SettingsStorage {
         openRouterModels: [String]
     ) -> [String] {
         let azureModels = azureDeployments.map { deployment in
-            "Azure: \(deployment.modelPickerTitle)"
+            InferenceProviderID.azure.modelPrefix + deployment.modelPickerTitle
         }
-        let neuralwatt = neuralwattModels.map { "Neuralwatt: \($0)" }
-        let openRouter = openRouterModels.map { "OpenRouter: \($0)" }
+        let neuralwatt = neuralwattModels.map { InferenceProviderID.neuralwatt.modelPrefix + $0 }
+        let openRouter = openRouterModels.map { InferenceProviderID.openRouter.modelPrefix + $0 }
 
         return azureModels + neuralwatt + openRouter
     }

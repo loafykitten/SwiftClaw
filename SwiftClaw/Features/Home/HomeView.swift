@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 struct HomeView: View {
     @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
@@ -8,6 +9,7 @@ struct HomeView: View {
     @State private var messageText = ""
     @State private var selectedMode = "Chat"
     @State private var availableModels = SettingsStorage.loadAvailableModels()
+    @State private var blurb = HomeBlurb.initial
 
     private var selectedModelTitle: String {
         guard !availableModels.isEmpty else {
@@ -95,11 +97,13 @@ struct HomeView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Text("There's no place like 127.0.0.1")
+            Text(blurb)
                 .font(.callout)
                 .italic()
                 .foregroundStyle(.tertiary)
                 .padding(.top, 12)
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.4), value: blurb)
 
             Spacer()
 
@@ -215,10 +219,84 @@ struct HomeView: View {
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             refreshModels()
         }
+        .task {
+            await generateBlurb()
+        }
     }
 
     private func refreshModels() {
         availableModels = SettingsStorage.loadAvailableModels()
+    }
+
+    private func generateBlurb() async {
+        // Previews must not hit the Keychain or the network; the 60s request
+        // timeout blows past the preview engine's 5s update budget.
+        guard !HomeBlurb.isRunningInPreview else {
+            return
+        }
+
+        guard !swiftModel.isEmpty else {
+            HomeBlurb.logger.info("Skipping blurb generation: no Swift Model configured")
+            return
+        }
+
+        do {
+            let response = try await InferenceService.shared.complete(
+                messages: [
+                    .system(HomeBlurb.systemPrompt),
+                    .user("Write one new blurb."),
+                ],
+                model: swiftModel
+            )
+
+            let cleaned = HomeBlurb.cleaned(response)
+            if !cleaned.isEmpty {
+                blurb = cleaned
+            }
+        } catch {
+            // Keep the blank line; details land in the unified log.
+            HomeBlurb.logger.error("Blurb generation failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+}
+
+private enum HomeBlurb {
+    static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
+        category: "HomeBlurb"
+    )
+
+    static let previewFallback = "There's no place like 127.0.0.1"
+
+    static var isRunningInPreview: Bool {
+        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
+
+    /// Blank at runtime (a space reserves the line height) so users never see
+    /// the blurb swap; previews show the static fallback since generation is
+    /// disabled there.
+    static var initial: String {
+        isRunningInPreview ? previewFallback : " "
+    }
+
+    static let systemPrompt = """
+        You write the single-line greeting blurb shown on the home screen of SwiftClaw, \
+        a personal macOS AI assistant app with a cat mascot. Write one short, cozy, witty \
+        one-liner that blends programming, networking, or terminal culture with warmth or \
+        cat energy. The tone to match: "There's no place like 127.0.0.1" or \
+        "sudo make me a good day" - but never reuse those examples. Hard rules: at most \
+        60 characters, no emoji, no surrounding quotes, no explanation. Reply with the \
+        blurb text only.
+        """
+
+    /// Trims the response to a single line and strips wrapping quotes some models add.
+    static func cleaned(_ raw: String) -> String {
+        let firstLine = raw
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { !$0.isEmpty } ?? ""
+
+        return firstLine.trimmingCharacters(in: CharacterSet(charactersIn: "\"'\u{201C}\u{201D}\u{2018}\u{2019}"))
     }
 }
 
