@@ -8,16 +8,28 @@ import OpenDirectory
 #endif
 
 struct ChatsView: View {
+    @Environment(\.modelContext) private var modelContext
+
     @Binding private var selectedChatID: UUID?
     @Query(sort: \Chat.updatedAt, order: .reverse) private var chats: [Chat]
 
+    private var orderedChats: [Chat] {
+        chats.sorted { lhs, rhs in
+            if lhs.isPinned != rhs.isPinned {
+                return lhs.isPinned
+            }
+
+            return lhs.updatedAt > rhs.updatedAt
+        }
+    }
+
     private var selectedChat: Chat? {
         if let selectedChatID,
-           let chat = chats.first(where: { $0.id == selectedChatID }) {
+           let chat = orderedChats.first(where: { $0.id == selectedChatID }) {
             return chat
         }
 
-        return chats.first
+        return orderedChats.first
     }
 
     init(selectedChatID: Binding<UUID?> = .constant(nil)) {
@@ -27,9 +39,11 @@ struct ChatsView: View {
     var body: some View {
         HStack(spacing: 0) {
             ChatHistoryView(
-                chats: chats,
+                chats: orderedChats,
                 selectedChatID: selectedChat?.id,
-                selectChat: { selectedChatID = $0 }
+                selectChat: { selectedChatID = $0 },
+                togglePin: togglePin,
+                deleteChat: deleteChat
             )
 
             Divider()
@@ -53,7 +67,28 @@ struct ChatsView: View {
             return
         }
 
-        selectedChatID = chats.first?.id
+        selectedChatID = orderedChats.first?.id
+    }
+
+    private func togglePin(_ chat: Chat) {
+        chat.isPinned.toggle()
+        saveChatListChange()
+    }
+
+    private func deleteChat(_ chat: Chat) {
+        let fallback = orderedChats.first { $0.id != chat.id }?.id
+
+        modelContext.delete(chat)
+        selectedChatID = selectedChatID == chat.id ? fallback : selectedChatID
+        saveChatListChange()
+    }
+
+    private func saveChatListChange() {
+        do {
+            try modelContext.save()
+        } catch {
+            assertionFailure("Couldn't save chat list change: \(error.localizedDescription)")
+        }
     }
 }
 
@@ -61,6 +96,8 @@ private struct ChatHistoryView: View {
     let chats: [Chat]
     let selectedChatID: UUID?
     let selectChat: (UUID) -> Void
+    let togglePin: (Chat) -> Void
+    let deleteChat: (Chat) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -75,15 +112,13 @@ private struct ChatHistoryView: View {
             ScrollView {
                 LazyVStack(spacing: 4) {
                     ForEach(chats) { chat in
-                        Button {
-                            selectChat(chat.id)
-                        } label: {
-                            ChatHistoryRow(
-                                chat: chat,
-                                isSelected: chat.id == selectedChatID
-                            )
-                        }
-                        .buttonStyle(.plain)
+                        ChatHistoryRow(
+                            chat: chat,
+                            isSelected: chat.id == selectedChatID,
+                            selectChat: { selectChat(chat.id) },
+                            togglePin: { togglePin(chat) },
+                            deleteChat: { deleteChat(chat) }
+                        )
                     }
                 }
                 .padding(.horizontal, 8)
@@ -98,39 +133,114 @@ private struct ChatHistoryView: View {
 private struct ChatHistoryRow: View {
     let chat: Chat
     let isSelected: Bool
+    let selectChat: () -> Void
+    let togglePin: () -> Void
+    let deleteChat: () -> Void
+
+    @State private var isHovering = false
+
+    private var showsActions: Bool {
+        isSelected || isHovering || chat.isPinned
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                Text(chat.title)
-                    .font(.callout)
-                    .fontWeight(isSelected ? .semibold : .regular)
-                    .lineLimit(2)
+        HStack(alignment: .top, spacing: 6) {
+            Button(action: selectChat) {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 6) {
+                        Text(chat.title)
+                            .font(.callout)
+                            .fontWeight(isSelected ? .semibold : .regular)
+                            .lineLimit(2)
 
-                if chat.isGenerating {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .frame(width: 12, height: 12)
+                        if chat.isGenerating {
+                            ProgressView()
+                                .controlSize(.mini)
+                                .frame(width: 12, height: 12)
+                        }
+                    }
+
+                    Text(chat.modelSelection)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+
+                    Text(chat.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 10)
+                .padding(.vertical, 9)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
 
-            Text(chat.modelSelection)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            HStack(spacing: 2) {
+                ChatHistoryActionButton(
+                    systemName: chat.isPinned ? "pin.fill" : "pin",
+                    label: chat.isPinned ? "Unpin chat" : "Pin chat",
+                    action: togglePin
+                )
 
-            Text(chat.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                ChatHistoryActionButton(
+                    systemName: "trash",
+                    label: "Delete chat",
+                    role: .destructive,
+                    action: deleteChat
+                )
+            }
+            .opacity(showsActions ? 1 : 0)
+            .disabled(!showsActions)
+            .accessibilityHidden(!showsActions)
+            .frame(width: 46, alignment: .trailing)
+            .padding(.trailing, 8)
+            .padding(.vertical, 7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
         .background {
             RoundedRectangle(cornerRadius: 8)
                 .fill(isSelected ? Color.accentColor.opacity(0.18) : .clear)
         }
         .contentShape(RoundedRectangle(cornerRadius: 8))
+        .onHover { isHovering = $0 }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct ChatHistoryActionButton: View {
+    let systemName: String
+    let label: String
+    var role: ButtonRole?
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    private var foregroundStyle: Color {
+        if role == .destructive, isHovering {
+            return .red
+        }
+
+        return isHovering ? .primary : .secondary
+    }
+
+    var body: some View {
+        Button(role: role, action: action) {
+            Image(systemName: systemName)
+                .frame(width: 18, height: 18)
+                .padding(3)
+                .foregroundStyle(foregroundStyle)
+                .background {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(isHovering ? Color.secondary.opacity(0.14) : .clear)
+                }
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .help(label)
+        .accessibilityLabel(label)
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 }
 

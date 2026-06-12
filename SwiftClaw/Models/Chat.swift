@@ -9,6 +9,7 @@ final class Chat {
     var createdAt: Date
     var updatedAt: Date
     var isGenerating: Bool
+    var isPinned: Bool = false
     var errorMessage: String?
 
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.chat)
@@ -21,6 +22,7 @@ final class Chat {
         createdAt: Date = .now,
         updatedAt: Date = .now,
         isGenerating: Bool = false,
+        isPinned: Bool = false,
         errorMessage: String? = nil,
         messages: [ChatMessage] = []
     ) {
@@ -30,6 +32,7 @@ final class Chat {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.isGenerating = isGenerating
+        self.isPinned = isPinned
         self.errorMessage = errorMessage
         self.messages = messages
     }
