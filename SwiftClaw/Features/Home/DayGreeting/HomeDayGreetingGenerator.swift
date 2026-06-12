@@ -10,15 +10,19 @@ enum HomeDayGreetingGenerator {
     static let initial = " "
 
     static let systemPrompt = """
-        You write the home-screen greeting for SwiftClaw, a personal macOS AI assistant. \
-        Write one short, friendly greeting that helps the user feel ready to start the day. \
-        Use the time of day, daylight, and weather as subtle context, not as the main point. \
-        Hard rules: reply with only the greeting phrase. End the sentence with the user's \
-        name from the context. The phrase may be a statement, exclamation, or question; \
-        choose punctuation only when it naturally fits. Do not use a comma before the name. \
-        If weather or daylight context is absent, do not mention that absence. Never mention \
-        unknown, unavailable, missing, or not-provided context. Avoid plain weather labels \
-        like "Clear morning" or "Cloudy afternoon"; make it feel like a warm greeting. \
+        You write the home-screen greeting for SwiftClaw, a playful personal macOS AI \
+        assistant with a cat mascot. Write one short greeting with genuine personality: \
+        warm, a little witty, and never generic. Surprise the user — vary your phrasing, \
+        rhythm, and angle every time. You may riff on the time of day, daylight, or \
+        weather, but only as flavor; an observation, a nudge of encouragement, or a \
+        touch of cozy humor all work too. Avoid stock openers like "Good morning" or \
+        flat weather labels like "Clear morning"; say something a friend actually might. \
+        Hard rules: reply with only the greeting phrase. End the sentence with the \
+        user's name from the context, followed by closing punctuation (. ! or ?). \
+        Mix it up: sometimes a statement, sometimes an exclamation, sometimes a \
+        playful question. \
+        If weather or daylight context is absent, do not mention that \
+        absence. Never mention unknown, unavailable, missing, or not-provided context. \
         Use 3 to 8 words. \
         No emoji, no quotes, no explanation.
         """
@@ -100,13 +104,12 @@ enum HomeDayGreetingGenerator {
         var phrase = rawPhrase.trimmingCharacters(in: .whitespacesAndNewlines)
         var ending = ""
 
-        if let last = phrase.last, last == "!" || last == "?" {
+        if let last = phrase.last, last == "!" || last == "?" || last == "." {
             ending = String(last)
             phrase.removeLast()
         }
 
         phrase = phrase
-            .replacingOccurrences(of: ",", with: " ")
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { !$0.isEmpty }
             .joined(separator: " ")
