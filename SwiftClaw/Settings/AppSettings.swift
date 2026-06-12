@@ -99,6 +99,7 @@ enum SettingsKeys {
     static let swiftModel = "settings.behaviors.swiftModel"
     static let clawModel = "settings.behaviors.clawModel"
     static let deepResearchModel = "settings.behaviors.deepResearchModel"
+    static let homeModel = "settings.home.model"
 }
 
 struct AzureDeployment: Identifiable, Codable, Hashable {
@@ -116,6 +117,28 @@ struct AzureDeployment: Identifiable, Codable, Hashable {
 }
 
 enum SettingsStorage {
+    static func loadAvailableModels() -> [String] {
+        availableModels(
+            azureDeployments: loadDeployments(),
+            neuralwattModels: loadStringList(forKey: SettingsKeys.neuralwattModels),
+            openRouterModels: loadStringList(forKey: SettingsKeys.openRouterModels)
+        )
+    }
+
+    static func availableModels(
+        azureDeployments: [AzureDeployment],
+        neuralwattModels: [String],
+        openRouterModels: [String]
+    ) -> [String] {
+        let azureModels = azureDeployments.map { deployment in
+            "Azure: \(deployment.modelPickerTitle)"
+        }
+        let neuralwatt = neuralwattModels.map { "Neuralwatt: \($0)" }
+        let openRouter = openRouterModels.map { "OpenRouter: \($0)" }
+
+        return azureModels + neuralwatt + openRouter
+    }
+
     static func loadDeployments() -> [AzureDeployment] {
         guard let data = UserDefaults.standard.data(forKey: SettingsKeys.azureDeployments) else {
             return []

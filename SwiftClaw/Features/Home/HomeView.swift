@@ -1,8 +1,36 @@
 import SwiftUI
 
 struct HomeView: View {
+    @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
+    @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
+
     @State private var messageText = ""
     @State private var selectedMode = "Chat"
+    @State private var availableModels = SettingsStorage.loadAvailableModels()
+
+    private var selectedModelTitle: String {
+        guard !availableModels.isEmpty else {
+            return "(N/A)"
+        }
+
+        return effectiveModel ?? availableModels[0]
+    }
+
+    private var effectiveModel: String? {
+        if !selectedModel.isEmpty, availableModels.contains(selectedModel) {
+            return selectedModel
+        }
+
+        if !swiftModel.isEmpty, availableModels.contains(swiftModel) {
+            return swiftModel
+        }
+
+        return nil
+    }
+
+    private var chatControlsDisabled: Bool {
+        availableModels.isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,19 +65,32 @@ struct HomeView: View {
                     TextField("Message SwiftClaw...", text: $messageText)
                         .textFieldStyle(.plain)
                         .font(.body)
+                        .disabled(chatControlsDisabled)
 
                     Menu {
-                        Button("GLM 5.1") {}
+                        ForEach(availableModels, id: \.self) { model in
+                            Button {
+                                selectedModel = model
+                            } label: {
+                                if model == effectiveModel {
+                                    Label(model, systemImage: "checkmark")
+                                } else {
+                                    Text(model)
+                                }
+                            }
+                        }
                     } label: {
                         HStack(spacing: 4) {
-                            Text("GLM 5.1")
+                            Text(selectedModelTitle)
                                 .font(.caption)
+                                .lineLimit(1)
                             Image(systemName: "chevron.down")
                                 .font(.caption2)
                         }
                         .foregroundStyle(.secondary)
                     }
                     .menuIndicator(.hidden)
+                    .disabled(chatControlsDisabled)
                 }
 
                 Divider()
@@ -62,12 +103,14 @@ struct HomeView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
+                        .disabled(chatControlsDisabled)
 
                         Button {} label: {
                             Image(systemName: "magnifyingglass")
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.secondary)
+                        .disabled(chatControlsDisabled)
                     }
 
                     Spacer()
@@ -79,6 +122,7 @@ struct HomeView: View {
                         }
                         .pickerStyle(.segmented)
                         .frame(width: 130)
+                        .disabled(chatControlsDisabled)
 
                         Button {} label: {
                             Image(systemName: "arrow.up.circle.fill")
@@ -86,6 +130,7 @@ struct HomeView: View {
                         }
                         .buttonStyle(.plain)
                         .foregroundStyle(.tint)
+                        .disabled(chatControlsDisabled)
                     }
                 }
             }
@@ -95,6 +140,14 @@ struct HomeView: View {
             .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear(perform: refreshModels)
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            refreshModels()
+        }
+    }
+
+    private func refreshModels() {
+        availableModels = SettingsStorage.loadAvailableModels()
     }
 }
 

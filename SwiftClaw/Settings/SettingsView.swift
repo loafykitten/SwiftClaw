@@ -552,19 +552,7 @@ private struct BehaviorSettingsView: View {
     @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
     @AppStorage(SettingsKeys.deepResearchModel) private var deepResearchModel = ""
 
-    @State private var azureDeployments = SettingsStorage.loadDeployments()
-    @State private var neuralwattModels = SettingsStorage.loadStringList(forKey: SettingsKeys.neuralwattModels)
-    @State private var openRouterModels = SettingsStorage.loadStringList(forKey: SettingsKeys.openRouterModels)
-
-    private var availableModels: [String] {
-        let azureModels = azureDeployments.map { deployment in
-            "Azure: \(deployment.modelPickerTitle)"
-        }
-        let neuralwatt = neuralwattModels.map { "Neuralwatt: \($0)" }
-        let openRouter = openRouterModels.map { "OpenRouter: \($0)" }
-
-        return azureModels + neuralwatt + openRouter
-    }
+    @State private var availableModels = SettingsStorage.loadAvailableModels()
 
     var body: some View {
         Form {
@@ -604,9 +592,7 @@ private struct BehaviorSettingsView: View {
     }
 
     private func refreshModels() {
-        azureDeployments = SettingsStorage.loadDeployments()
-        neuralwattModels = SettingsStorage.loadStringList(forKey: SettingsKeys.neuralwattModels)
-        openRouterModels = SettingsStorage.loadStringList(forKey: SettingsKeys.openRouterModels)
+        availableModels = SettingsStorage.loadAvailableModels()
     }
 }
 
