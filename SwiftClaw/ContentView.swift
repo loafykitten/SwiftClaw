@@ -27,7 +27,7 @@ enum NavigationItem: String, CaseIterable, Identifiable {
         }
     }
 
-    @ViewBuilder
+    @MainActor @ViewBuilder
     var destination: some View {
         switch self {
         case .home: HomeView()
@@ -45,6 +45,8 @@ enum NavigationItem: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @State private var selectedNavigationItem: NavigationItem? = .home
+    @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
+    @AppStorage(SettingsKeys.accentBrightness) private var accentBrightness = AccentColor.defaultBrightness
 
     var body: some View {
         NavigationSplitView {
@@ -54,6 +56,7 @@ struct ContentView: View {
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
             .listStyle(.sidebar)
+            .listItemTint(AccentColor.color(hue: accentHue, brightness: accentBrightness))
         } detail: {
             if let item = selectedNavigationItem {
                 item.destination
@@ -62,7 +65,6 @@ struct ContentView: View {
                 Text("Select an item")
             }
         }
-        .tint(Color.accentColor)
     }
 }
 

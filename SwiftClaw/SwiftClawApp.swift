@@ -10,6 +10,14 @@ import SwiftData
 
 @main
 struct SwiftClawApp: App {
+    @AppStorage(SettingsKeys.theme) private var theme = AppTheme.system.rawValue
+    @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
+    @AppStorage(SettingsKeys.accentBrightness) private var accentBrightness = AccentColor.defaultBrightness
+
+    private var accent: Color {
+        AccentColor.color(hue: accentHue, brightness: accentBrightness)
+    }
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
             Item.self,
@@ -23,10 +31,22 @@ struct SwiftClawApp: App {
         }
     }()
 
+    init() {
+        Keychain.migrateAPIKeysFromUserDefaults()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
+                .tint(accent)
         }
         .modelContainer(sharedModelContainer)
+
+        Settings {
+            SettingsView()
+                .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
+                .tint(accent)
+        }
     }
 }

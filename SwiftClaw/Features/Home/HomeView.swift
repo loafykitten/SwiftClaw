@@ -13,7 +13,7 @@ struct HomeView: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: 80, height: 80)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.tint)
 
                 Text("SwiftClaw")
                     .font(.largeTitle)
@@ -85,7 +85,7 @@ struct HomeView: View {
                                 .font(.title2)
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(.tint)
                     }
                 }
             }
