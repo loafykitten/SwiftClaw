@@ -260,6 +260,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -291,6 +293,8 @@
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSLocationUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",

@@ -32,9 +32,7 @@ struct HomeView: View {
                 }
 
                 VStack(spacing: 4) {
-                    Text("Good morning, User!")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
+                    HomeDayGreetingView(swiftModel: swiftModel)
 
                     Text(blurb)
                         .font(.callout)
