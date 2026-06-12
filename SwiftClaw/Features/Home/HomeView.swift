@@ -1,126 +1,16 @@
 import SwiftUI
+import SwiftData
 import os
 
 struct HomeView: View {
-    private let composerControlRowHeight: CGFloat = 28
+    var onChatCreated: (UUID) -> Void = { _ in }
 
-    @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
+    @Environment(\.modelContext) private var modelContext
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
-    @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
 
-    @State private var messageText = ""
-    @State private var availableModels = SettingsStorage.loadAvailableModels()
     @State private var blurb = HomeBlurb.initial
-
-    private var selectedModelTitle: String {
-        guard !availableModels.isEmpty else {
-            return "(N/A)"
-        }
-
-        if selectedModel == HomeModelSelection.swiftModel, isSwiftModelAvailable {
-            return "Swift Model"
-        }
-
-        if selectedModel == HomeModelSelection.clawModel, isClawModelAvailable {
-            return "Claw Model"
-        }
-
-        return effectiveModel ?? availableModels[0]
-    }
-
-    private var effectiveModel: String? {
-        if selectedModel == HomeModelSelection.swiftModel {
-            return isSwiftModelAvailable ? swiftModel : nil
-        }
-
-        if selectedModel == HomeModelSelection.clawModel {
-            return isClawModelAvailable ? clawModel : nil
-        }
-
-        if !selectedModel.isEmpty, availableModels.contains(selectedModel) {
-            return selectedModel
-        }
-
-        if !swiftModel.isEmpty, availableModels.contains(swiftModel) {
-            return swiftModel
-        }
-
-        return nil
-    }
-
-    private var chatControlsDisabled: Bool {
-        availableModels.isEmpty
-    }
-
-    private var isSwiftModelAvailable: Bool {
-        !swiftModel.isEmpty && availableModels.contains(swiftModel)
-    }
-
-    private var isClawModelAvailable: Bool {
-        !clawModel.isEmpty && availableModels.contains(clawModel)
-    }
-
-    private var quickModelOptions: [HomeModelOption] {
-        var options: [HomeModelOption] = []
-
-        if isSwiftModelAvailable {
-            options.append(HomeModelOption(title: "Swift Model", selection: HomeModelSelection.swiftModel))
-        }
-
-        if isClawModelAvailable {
-            options.append(HomeModelOption(title: "Claw Model", selection: HomeModelSelection.clawModel))
-        }
-
-        return options
-    }
-
-    private var isQuickModelSelection: Bool {
-        selectedModel == HomeModelSelection.swiftModel || selectedModel == HomeModelSelection.clawModel
-    }
-
-    private var modelSelectionMenu: some View {
-        Menu {
-            ForEach(quickModelOptions) { option in
-                Button {
-                    selectedModel = option.selection
-                } label: {
-                    if selectedModel == option.selection {
-                        Label(option.title, systemImage: "checkmark")
-                    } else {
-                        Text(option.title)
-                    }
-                }
-            }
-
-            if !quickModelOptions.isEmpty {
-                Divider()
-            }
-
-            ForEach(availableModels, id: \.self) { model in
-                Button {
-                    selectedModel = model
-                } label: {
-                    if !isQuickModelSelection, model == effectiveModel {
-                        Label(model, systemImage: "checkmark")
-                    } else {
-                        Text(model)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(selectedModelTitle)
-                    .font(.caption)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-            }
-            .foregroundStyle(.secondary)
-        }
-        .menuIndicator(.hidden)
-        .disabled(chatControlsDisabled)
-        .frame(height: composerControlRowHeight, alignment: .center)
-    }
+    @State private var isCreatingChat = false
+    @State private var submissionError: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -157,84 +47,92 @@ struct HomeView: View {
 
             Spacer()
 
-            VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 8) {
-                    TextField("Message SwiftClaw...", text: $messageText, axis: .vertical)
-                        .textFieldStyle(.plain)
-                        .font(.body)
-                        .lineLimit(1...3)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .disabled(chatControlsDisabled)
-                        .onKeyPress { keyPress in
-                            guard keyPress.key == .return,
-                                  keyPress.modifiers.contains(.shift) else {
-                                return .ignored
-                            }
-
-                            messageText.append("\n")
-                            return .handled
-                        }
-                }
-
-                Divider()
-                    .padding(.top, 4)
-
-                HStack(alignment: .center) {
-                    HStack(spacing: 12) {
-                        Button {} label: {
-                            Image(systemName: "paperclip")
-                                .frame(width: composerControlRowHeight, height: composerControlRowHeight)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .disabled(chatControlsDisabled)
-
-                        Button {} label: {
-                            Image(systemName: "magnifyingglass")
-                                .frame(width: composerControlRowHeight, height: composerControlRowHeight)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .disabled(chatControlsDisabled)
-                    }
-
-                    Spacer()
-
-                    HStack(spacing: 8) {
-                        modelSelectionMenu
-                            .frame(width: 160, alignment: .trailing)
-
-                        Button {} label: {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.title2)
-                                .frame(width: composerControlRowHeight, height: composerControlRowHeight)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-                        .disabled(chatControlsDisabled)
-                    }
-                }
-                .frame(height: composerControlRowHeight, alignment: .center)
-                .padding(.vertical, 8)
+            ChatComposerView(
+                isBusy: isCreatingChat,
+                submissionError: submissionError
+            ) { input, model in
+                submitMessage(input: input, model: model)
             }
-            .padding(.horizontal, 16)
-            .padding(.top, 16)
-            .glassEffect(in: .rect(cornerRadius: 16.0))
             .padding(.horizontal, 40)
             .padding(.bottom, 24)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear(perform: refreshModels)
-        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
-            refreshModels()
-        }
         .task {
             await generateBlurb()
         }
     }
 
-    private func refreshModels() {
-        availableModels = SettingsStorage.loadAvailableModels()
+    private func submitMessage(input: String, model: String) -> Bool {
+        guard !input.isEmpty, !isCreatingChat else {
+            return false
+        }
+
+        isCreatingChat = true
+        submissionError = nil
+
+        let chat = Chat(
+            title: ChatDefaults.title(for: input),
+            modelSelection: model,
+            isGenerating: true
+        )
+        let systemMessage = ChatMessage(
+            role: .system,
+            content: ChatDefaults.systemPrompt,
+            sortIndex: 0
+        )
+        let userMessage = ChatMessage(
+            role: .user,
+            content: input,
+            sortIndex: 1
+        )
+
+        systemMessage.chat = chat
+        userMessage.chat = chat
+        chat.messages = [systemMessage, userMessage]
+
+        modelContext.insert(chat)
+        modelContext.insert(systemMessage)
+        modelContext.insert(userMessage)
+
+        do {
+            try modelContext.save()
+        } catch {
+            submissionError = "Couldn't create the chat."
+            isCreatingChat = false
+            return false
+        }
+
+        isCreatingChat = false
+        onChatCreated(chat.id)
+
+        Task {
+            await completeInitialChat(chat)
+        }
+
+        return true
+    }
+
+    private func completeInitialChat(_ chat: Chat) async {
+        do {
+            let messages = chat.sortedMessages.compactMap(\.inferenceMessage)
+            let response = try await InferenceService.shared.complete(
+                messages: messages,
+                model: chat.modelSelection
+            )
+
+            chat.appendMessage(role: .assistant, content: response)
+            chat.isGenerating = false
+            chat.errorMessage = nil
+        } catch {
+            chat.isGenerating = false
+            chat.errorMessage = error.localizedDescription
+        }
+
+        do {
+            try modelContext.save()
+        } catch {
+            HomeBlurb.logger.error("Saving chat response failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     private func generateBlurb() async {
@@ -307,18 +205,6 @@ private enum HomeBlurb {
 
         return firstLine.trimmingCharacters(in: CharacterSet(charactersIn: "\"'\u{201C}\u{201D}\u{2018}\u{2019}"))
     }
-}
-
-private enum HomeModelSelection {
-    static let swiftModel = "settings.home.modelPreset.swift"
-    static let clawModel = "settings.home.modelPreset.claw"
-}
-
-private struct HomeModelOption: Identifiable {
-    let title: String
-    let selection: String
-
-    var id: String { selection }
 }
 
 #Preview {

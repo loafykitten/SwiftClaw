@@ -45,6 +45,7 @@ enum NavigationItem: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @State private var selectedNavigationItem: NavigationItem? = .home
+    @State private var selectedChatID: UUID?
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
     @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
 
@@ -64,13 +65,28 @@ struct ContentView: View {
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             if let item = selectedNavigationItem {
-                item.destination
+                destination(for: item)
                     .navigationTitle(item.rawValue)
             } else {
                 Text("Select an item")
             }
         }
         .tint(accent)
+    }
+
+    @MainActor @ViewBuilder
+    private func destination(for item: NavigationItem) -> some View {
+        switch item {
+        case .home:
+            HomeView { chatID in
+                selectedChatID = chatID
+                selectedNavigationItem = .chats
+            }
+        case .chats:
+            ChatsView(selectedChatID: $selectedChatID)
+        default:
+            item.destination
+        }
     }
 }
 
