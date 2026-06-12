@@ -181,6 +181,7 @@ private struct ChatHistoryRow: View {
                     systemName: "trash",
                     label: "Delete chat",
                     role: .destructive,
+                    requiresSecondClick: true,
                     action: deleteChat
                 )
             }
@@ -206,11 +207,18 @@ private struct ChatHistoryActionButton: View {
     let systemName: String
     let label: String
     var role: ButtonRole?
+    var requiresSecondClick = false
     let action: () -> Void
 
     @State private var isHovering = false
+    @State private var isWaitingForSecondClick = false
+    @State private var secondClickResetTask: Task<Void, Never>?
 
     private var foregroundStyle: Color {
+        if role == .destructive, isWaitingForSecondClick {
+            return .red
+        }
+
         if role == .destructive, isHovering {
             return .red
         }
@@ -218,9 +226,17 @@ private struct ChatHistoryActionButton: View {
         return isHovering ? .primary : .secondary
     }
 
+    private var effectiveSystemName: String {
+        isWaitingForSecondClick ? "\(systemName).fill" : systemName
+    }
+
+    private var effectiveLabel: String {
+        isWaitingForSecondClick ? "Click again to \(label.lowercased())" : label
+    }
+
     var body: some View {
-        Button(role: role, action: action) {
-            Image(systemName: systemName)
+        Button(role: role, action: performAction) {
+            Image(systemName: effectiveSystemName)
                 .frame(width: 18, height: 18)
                 .padding(3)
                 .foregroundStyle(foregroundStyle)
@@ -231,10 +247,52 @@ private struct ChatHistoryActionButton: View {
         }
         .buttonStyle(.borderless)
         .controlSize(.small)
-        .help(label)
-        .accessibilityLabel(label)
-        .onHover { isHovering = $0 }
+        .help(effectiveLabel)
+        .accessibilityLabel(effectiveLabel)
+        .onHover { isHovering in
+            self.isHovering = isHovering
+            if !isHovering {
+                cancelSecondClickRequirement()
+            }
+        }
+        .onDisappear(perform: cancelSecondClickRequirement)
         .animation(.easeOut(duration: 0.12), value: isHovering)
+        .animation(.easeOut(duration: 0.12), value: isWaitingForSecondClick)
+    }
+
+    private func performAction() {
+        guard requiresSecondClick else {
+            action()
+            return
+        }
+
+        guard isWaitingForSecondClick else {
+            waitForSecondClick()
+            return
+        }
+
+        cancelSecondClickRequirement()
+        action()
+    }
+
+    private func waitForSecondClick() {
+        isWaitingForSecondClick = true
+        secondClickResetTask?.cancel()
+        secondClickResetTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else {
+                return
+            }
+
+            isWaitingForSecondClick = false
+            secondClickResetTask = nil
+        }
+    }
+
+    private func cancelSecondClickRequirement() {
+        isWaitingForSecondClick = false
+        secondClickResetTask?.cancel()
+        secondClickResetTask = nil
     }
 }
 
