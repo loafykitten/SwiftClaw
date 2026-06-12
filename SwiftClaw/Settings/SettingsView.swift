@@ -26,33 +26,41 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             AccentSidebarList(
                 items: SettingsSection.allCases,
                 selection: $selectedSection,
                 accent: accent,
+                topContentInset: 11,
                 title: { $0.rawValue },
                 systemImage: { $0.systemImage }
             )
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-        } detail: {
-            Group {
-                switch selectedSection {
-                case .appearance:
-                    AppearanceSettingsView()
-                case .providers:
-                    ProviderSettingsView()
-                case .behaviors:
-                    BehaviorSettingsView()
-                case nil:
-                    Text("Select a settings section")
-                        .foregroundStyle(.secondary)
-                }
+            .frame(width: 200)
+
+            Divider()
+
+            NavigationStack {
+                detailContent
+                    .navigationTitle(selectedSection?.rawValue ?? "Settings")
             }
-            .navigationTitle(selectedSection?.rawValue ?? "Settings")
         }
         .tint(accent)
         .frame(minWidth: 760, minHeight: 640)
+    }
+
+    @ViewBuilder
+    private var detailContent: some View {
+        switch selectedSection {
+        case .appearance:
+            AppearanceSettingsView()
+        case .providers:
+            ProviderSettingsView()
+        case .behaviors:
+            BehaviorSettingsView()
+        case nil:
+            Text("Select a settings section")
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

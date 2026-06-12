@@ -4,6 +4,7 @@ struct AccentSidebarList<Item: Identifiable & Hashable>: View {
     let items: [Item]
     @Binding var selection: Item?
     let accent: Color
+    var topContentInset: CGFloat = 0
     let title: (Item) -> String
     let systemImage: (Item) -> String
 
@@ -23,6 +24,7 @@ struct AccentSidebarList<Item: Identifiable & Hashable>: View {
             }
         }
         .listStyle(.sidebar)
+        .contentMargins(.top, topContentInset, for: .scrollContent)
     }
 }
 
