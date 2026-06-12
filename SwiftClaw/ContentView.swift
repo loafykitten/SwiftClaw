@@ -46,17 +46,22 @@ enum NavigationItem: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @State private var selectedNavigationItem: NavigationItem? = .home
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
-    @AppStorage(SettingsKeys.accentBrightness) private var accentBrightness = AccentColor.defaultBrightness
+    @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
+
+    private var accent: Color {
+        AccentColor.color(hue: accentHue, lightness: accentLightness)
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(NavigationItem.allCases, selection: $selectedNavigationItem) { item in
-                Label(item.rawValue, systemImage: item.systemImage)
-                    .tag(item)
-            }
+            AccentSidebarList(
+                items: NavigationItem.allCases,
+                selection: $selectedNavigationItem,
+                accent: accent,
+                title: { $0.rawValue },
+                systemImage: { $0.systemImage }
+            )
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-            .listStyle(.sidebar)
-            .listItemTint(AccentColor.color(hue: accentHue, brightness: accentBrightness))
         } detail: {
             if let item = selectedNavigationItem {
                 item.destination
@@ -65,6 +70,7 @@ struct ContentView: View {
                 Text("Select an item")
             }
         }
+        .tint(accent)
     }
 }
 

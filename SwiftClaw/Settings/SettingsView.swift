@@ -18,13 +18,22 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @State private var selectedSection: SettingsSection? = .appearance
+    @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
+    @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
+
+    private var accent: Color {
+        AccentColor.color(hue: accentHue, lightness: accentLightness)
+    }
 
     var body: some View {
         NavigationSplitView {
-            List(SettingsSection.allCases, selection: $selectedSection) { section in
-                Label(section.rawValue, systemImage: section.systemImage)
-                    .tag(section)
-            }
+            AccentSidebarList(
+                items: SettingsSection.allCases,
+                selection: $selectedSection,
+                accent: accent,
+                title: { $0.rawValue },
+                systemImage: { $0.systemImage }
+            )
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             Group {
@@ -42,6 +51,7 @@ struct SettingsView: View {
             }
             .navigationTitle(selectedSection?.rawValue ?? "Settings")
         }
+        .tint(accent)
         .frame(minWidth: 760, minHeight: 520)
     }
 }
@@ -49,7 +59,7 @@ struct SettingsView: View {
 private struct AppearanceSettingsView: View {
     @AppStorage(SettingsKeys.theme) private var theme = AppTheme.system.rawValue
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
-    @AppStorage(SettingsKeys.accentBrightness) private var accentBrightness = AccentColor.defaultBrightness
+    @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
 
     var body: some View {
         Form {
@@ -58,7 +68,7 @@ private struct AppearanceSettingsView: View {
             }
 
             Section("Accent Color") {
-                AccentColorEditor(hue: $accentHue, brightness: $accentBrightness)
+                AccentColorEditor(hue: $accentHue, lightness: $accentLightness)
             }
         }
         .formStyle(.grouped)
@@ -205,30 +215,30 @@ private struct MiniDesktop: View {
 
 private struct AccentColorEditor: View {
     @Binding var hue: Double
-    @Binding var brightness: Double
+    @Binding var lightness: Double
 
     private var isDefault: Bool {
         abs(hue - AccentColor.defaultHue) < 0.001
-            && abs(brightness - AccentColor.defaultBrightness) < 0.001
+            && abs(lightness - AccentColor.defaultLightness) < 0.001
     }
 
     private var hueGradient: Gradient {
         Gradient(colors: stride(from: 0.0, through: 1.0, by: 0.1).map {
-            AccentColor.color(hue: $0, brightness: brightness)
+            AccentColor.color(hue: $0, lightness: lightness)
         })
     }
 
-    private var brightnessGradient: Gradient {
+    private var lightnessGradient: Gradient {
         Gradient(colors: [
-            AccentColor.color(hue: hue, brightness: AccentColor.brightnessRange.lowerBound),
-            AccentColor.color(hue: hue, brightness: AccentColor.brightnessRange.upperBound),
+            AccentColor.color(hue: hue, lightness: AccentColor.lightnessRange.lowerBound),
+            AccentColor.color(hue: hue, lightness: AccentColor.lightnessRange.upperBound),
         ])
     }
 
     var body: some View {
         HStack(spacing: 14) {
             Circle()
-                .fill(AccentColor.color(hue: hue, brightness: brightness))
+                .fill(AccentColor.color(hue: hue, lightness: lightness))
                 .frame(width: 36, height: 36)
                 .overlay {
                     Circle()
@@ -240,21 +250,21 @@ private struct AccentColorEditor: View {
                     value: $hue,
                     range: 0...1,
                     gradient: hueGradient,
-                    knobColor: AccentColor.color(hue: hue, brightness: brightness),
+                    knobColor: AccentColor.color(hue: hue, lightness: lightness),
                     label: "Hue"
                 )
                 GradientSlider(
-                    value: $brightness,
-                    range: AccentColor.brightnessRange,
-                    gradient: brightnessGradient,
-                    knobColor: AccentColor.color(hue: hue, brightness: brightness),
-                    label: "Brightness"
+                    value: $lightness,
+                    range: AccentColor.lightnessRange,
+                    gradient: lightnessGradient,
+                    knobColor: AccentColor.color(hue: hue, lightness: lightness),
+                    label: "Lightness"
                 )
             }
 
             Button("Reset") {
                 hue = AccentColor.defaultHue
-                brightness = AccentColor.defaultBrightness
+                lightness = AccentColor.defaultLightness
             }
             .disabled(isDefault)
         }
