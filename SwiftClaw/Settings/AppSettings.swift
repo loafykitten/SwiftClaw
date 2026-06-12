@@ -100,6 +100,8 @@ enum SettingsKeys {
     static let clawModel = "settings.behaviors.clawModel"
     static let deepResearchModel = "settings.behaviors.deepResearchModel"
     static let homeModel = "settings.home.model"
+    static let personaDisplayName = "settings.persona.displayName"
+    static let personaAvatarData = "settings.persona.avatarData"
 }
 
 struct AzureDeployment: Identifiable, Codable, Hashable {

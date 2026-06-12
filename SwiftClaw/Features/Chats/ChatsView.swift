@@ -1,11 +1,5 @@
 import SwiftUI
 import SwiftData
-#if os(macOS)
-import AppKit
-import Collaboration
-import Darwin
-import OpenDirectory
-#endif
 
 struct ChatsView: View {
     @Environment(\.modelContext) private var modelContext
@@ -505,10 +499,25 @@ private struct AssistantAvatarView: View {
 }
 
 private struct UserAvatarView: View {
-    private let image = CurrentUserProfileImage.image
+    @AppStorage(SettingsKeys.personaAvatarData) private var avatarData = Data()
+    @AppStorage(SettingsKeys.personaDisplayName) private var displayNameOverride = ""
+
+    #if os(macOS)
+    private var image: NSImage? {
+        PersonaProfile.avatarImage(
+            overrideData: avatarData.isEmpty ? nil : avatarData,
+            pointSize: ChatAvatarMetrics.size
+        )
+    }
+    #endif
+
+    private var displayName: String {
+        PersonaProfile.sanitizedDisplayName(displayNameOverride) ?? PersonaProfile.detectedDisplayName
+    }
 
     var body: some View {
         ZStack {
+            #if os(macOS)
             if let image {
                 Image(nsImage: image)
                     .resizable()
@@ -520,10 +529,17 @@ private struct UserAvatarView: View {
                     .foregroundStyle(.secondary)
                     .padding(1)
             }
+            #else
+            Image(systemName: "person.crop.circle.fill")
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(.secondary)
+                .padding(1)
+            #endif
         }
         .frame(width: ChatAvatarMetrics.size, height: ChatAvatarMetrics.size)
         .clipShape(Circle())
-        .accessibilityLabel("User")
+        .accessibilityLabel(displayName)
     }
 }
 
@@ -550,112 +566,6 @@ private struct EmptyChatsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
-
-private enum CurrentUserProfileImage {
-    #if os(macOS)
-    static let image: NSImage? = {
-        if let image = openDirectoryImage() {
-            return image
-        }
-
-        return CBUserIdentity(
-            posixUID: getuid(),
-            authority: .default()
-        )?.image?.normalizedForAvatar()
-    }()
-
-    private static func openDirectoryImage(username: String = NSUserName()) -> NSImage? {
-        guard let localNode = try? ODNode(session: .default(), name: "/Local/Default"),
-              let record = try? localNode.record(
-                withRecordType: kODRecordTypeUsers,
-                name: username,
-                attributes: [
-                    kODAttributeTypeJPEGPhoto,
-                    kODAttributeTypePicture,
-                ]
-              ),
-              let details = try? record.recordDetails(
-                forAttributes: [
-                    kODAttributeTypeJPEGPhoto,
-                    kODAttributeTypePicture,
-                ]
-              ) else {
-            return nil
-        }
-
-        if let jpegData = firstAttributeValue(
-            in: details,
-            for: kODAttributeTypeJPEGPhoto,
-            as: Data.self
-        ), let image = NSImage(data: jpegData)?.normalizedForAvatar() {
-            return image
-        }
-
-        let picturePaths = attributeValues(
-            in: details,
-            for: kODAttributeTypePicture,
-            as: String.self
-        )
-
-        for path in picturePaths {
-            if let image = NSImage(contentsOfFile: path)?.normalizedForAvatar() {
-                return image
-            }
-        }
-
-        return nil
-    }
-
-    private static func firstAttributeValue<T>(
-        in details: [AnyHashable: Any],
-        for key: String,
-        as type: T.Type
-    ) -> T? {
-        attributeValues(in: details, for: key, as: type).first
-    }
-
-    private static func attributeValues<T>(
-        in details: [AnyHashable: Any],
-        for key: String,
-        as type: T.Type
-    ) -> [T] {
-        if let values = details[key] as? [T] {
-            return values
-        }
-
-        if let value = details[key] as? T {
-            return [value]
-        }
-
-        return []
-    }
-    #else
-    static let image: NSImage? = nil
-    #endif
-}
-
-#if os(macOS)
-private extension NSImage {
-    func normalizedForAvatar(pointSize: CGFloat = ChatAvatarMetrics.size) -> NSImage? {
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
-        let pixelSize = CGSize(width: pointSize * scale, height: pointSize * scale)
-        let image = NSImage(size: pixelSize)
-
-        image.lockFocus()
-        NSGraphicsContext.current?.imageInterpolation = .high
-        draw(
-            in: CGRect(origin: .zero, size: pixelSize),
-            from: .zero,
-            operation: .copy,
-            fraction: 1
-        )
-        image.unlockFocus()
-        image.size = CGSize(width: pointSize, height: pointSize)
-
-        return image
-    }
-}
-#endif
 
 #Preview {
     ChatsView()

@@ -28,9 +28,7 @@ enum HomeDayGreetingGenerator {
         """
 
     static var currentUserName: String {
-        sanitizedUserName(NSFullUserName()) ??
-            sanitizedUserName(NSUserName()) ??
-            "friend"
+        PersonaProfile.displayName
     }
 
     static func userPrompt(for context: HomeDayGreetingContext, userName: String) -> String {

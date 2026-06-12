@@ -62,6 +62,7 @@ private enum HomeDayGreetingLocationError: LocalizedError {
     case authorizationDenied
     case requestAlreadyRunning
     case locationUnavailable
+    case timedOut
 
     var errorDescription: String? {
         switch self {
@@ -73,6 +74,8 @@ private enum HomeDayGreetingLocationError: LocalizedError {
             "A location request is already running."
         case .locationUnavailable:
             "No location was returned."
+        case .timedOut:
+            "The location request timed out."
         }
     }
 }
@@ -86,6 +89,7 @@ private final class HomeDayGreetingLocationProvider: NSObject, CLLocationManager
 
     private var manager: CLLocationManager?
     private var continuation: CheckedContinuation<CLLocation, Error>?
+    private var timeoutTask: Task<Void, Never>?
 
     func currentLocation() async throws -> CLLocation {
         guard CLLocationManager.locationServicesEnabled() else {
@@ -108,6 +112,7 @@ private final class HomeDayGreetingLocationProvider: NSObject, CLLocationManager
 
             logger.notice("Starting home greeting location request. authorizationStatus=\(manager.authorizationStatus.logName, privacy: .public)")
             handleAuthorizationStatus(manager.authorizationStatus)
+            startTimeout()
         }
     }
 
@@ -138,6 +143,8 @@ private final class HomeDayGreetingLocationProvider: NSObject, CLLocationManager
     private func finish(with result: Result<CLLocation, Error>) {
         let continuation = continuation
         self.continuation = nil
+        timeoutTask?.cancel()
+        timeoutTask = nil
         manager?.delegate = nil
         manager = nil
 
@@ -148,6 +155,19 @@ private final class HomeDayGreetingLocationProvider: NSObject, CLLocationManager
         case .failure(let error):
             logger.error("Home greeting location request failed: \(error.localizedDescription, privacy: .public)")
             continuation?.resume(throwing: error)
+        }
+    }
+
+    private func startTimeout() {
+        timeoutTask?.cancel()
+        timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(8))
+
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self?.finish(with: .failure(HomeDayGreetingLocationError.timedOut))
         }
     }
 
