@@ -17,15 +17,13 @@ struct HomeView: View {
             Spacer()
 
             VStack(spacing: 18) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Image(systemName: "cat")
+                HStack(alignment: .center, spacing: 10) {
+                    Image("HomeMascot")
                         .resizable()
+                        .interpolation(.high)
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 52, height: 52)
-                        .foregroundStyle(.tint)
-                        .alignmentGuide(.firstTextBaseline) { dimensions in
-                            dimensions[VerticalAlignment.center] + 12
-                        }
+                        .frame(width: 48, height: 48)
+                        .accessibilityHidden(true)
 
                     Text("SwiftClaw")
                         .font(.system(size: 32, weight: .bold))
