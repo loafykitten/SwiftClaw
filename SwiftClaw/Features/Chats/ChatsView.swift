@@ -435,9 +435,15 @@ private struct ChatMessageRow: View {
 
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
     @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
+    @AppStorage(SettingsKeys.quoteAccentHue) private var quoteAccentHue = AccentColor.defaultQuoteHue
+    @AppStorage(SettingsKeys.quoteAccentLightness) private var quoteAccentLightness = AccentColor.defaultQuoteLightness
 
     private var accent: Color {
         AccentColor.color(hue: accentHue, lightness: accentLightness)
+    }
+
+    private var quoteAccent: Color {
+        AccentColor.color(hue: quoteAccentHue, lightness: quoteAccentLightness)
     }
 
     private var isUser: Bool {
@@ -452,12 +458,15 @@ private struct ChatMessageRow: View {
                 AssistantAvatarView()
             }
 
-            Text(message.content)
+            ChatMarkdownView(
+                content: message.content,
+                defaultForeground: isUser ? .white : .primary,
+                codeAccent: isUser ? .white : accent,
+                quoteAccent: quoteAccent
+            )
                 .textSelection(.enabled)
-                .font(.body)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
-                .foregroundStyle(isUser ? .white : .primary)
                 .background {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(isUser ? accent : Color.secondary.opacity(0.12))

@@ -76,6 +76,8 @@ private struct AppearanceSettingsView: View {
     @AppStorage(SettingsKeys.theme) private var theme = AppTheme.system.rawValue
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
     @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
+    @AppStorage(SettingsKeys.quoteAccentHue) private var quoteAccentHue = AccentColor.defaultQuoteHue
+    @AppStorage(SettingsKeys.quoteAccentLightness) private var quoteAccentLightness = AccentColor.defaultQuoteLightness
 
     var body: some View {
         Form {
@@ -85,6 +87,16 @@ private struct AppearanceSettingsView: View {
 
             Section("Accent Color") {
                 AccentColorEditor(hue: $accentHue, lightness: $accentLightness)
+            }
+
+            Section("Quote Accent") {
+                AccentColorEditor(
+                    hue: $quoteAccentHue,
+                    lightness: $quoteAccentLightness,
+                    defaultHue: AccentColor.defaultQuoteHue,
+                    defaultLightness: AccentColor.defaultQuoteLightness,
+                    accessibilityName: "Quote accent"
+                )
             }
         }
         .formStyle(.grouped)
@@ -377,9 +389,13 @@ private struct AccentColorEditor: View {
     @Binding var hue: Double
     @Binding var lightness: Double
 
+    var defaultHue = AccentColor.defaultHue
+    var defaultLightness = AccentColor.defaultLightness
+    var accessibilityName = "Accent color"
+
     private var isDefault: Bool {
-        abs(hue - AccentColor.defaultHue) < 0.001
-            && abs(lightness - AccentColor.defaultLightness) < 0.001
+        abs(hue - defaultHue) < 0.001
+            && abs(lightness - defaultLightness) < 0.001
     }
 
     private var hueGradient: Gradient {
@@ -411,20 +427,22 @@ private struct AccentColorEditor: View {
                     range: 0...1,
                     gradient: hueGradient,
                     knobColor: AccentColor.color(hue: hue, lightness: lightness),
-                    label: "Hue"
+                    label: "Hue",
+                    accessibilityName: accessibilityName
                 )
                 GradientSlider(
                     value: $lightness,
                     range: AccentColor.lightnessRange,
                     gradient: lightnessGradient,
                     knobColor: AccentColor.color(hue: hue, lightness: lightness),
-                    label: "Lightness"
+                    label: "Lightness",
+                    accessibilityName: accessibilityName
                 )
             }
 
             Button("Reset") {
-                hue = AccentColor.defaultHue
-                lightness = AccentColor.defaultLightness
+                hue = defaultHue
+                lightness = defaultLightness
             }
             .disabled(isDefault)
         }
@@ -438,6 +456,7 @@ private struct GradientSlider: View {
     let gradient: Gradient
     let knobColor: Color
     let label: String
+    let accessibilityName: String
 
     private let knobSize: CGFloat = 26
     private let trackHeight: CGFloat = 18
@@ -478,7 +497,7 @@ private struct GradientSlider: View {
         }
         .frame(height: knobSize)
         .accessibilityElement()
-        .accessibilityLabel("Accent color \(label.lowercased())")
+        .accessibilityLabel("\(accessibilityName) \(label.lowercased())")
         .accessibilityValue("\(Int(fraction * 100)) percent")
         .accessibilityAdjustableAction { direction in
             let step = (range.upperBound - range.lowerBound) * 0.05

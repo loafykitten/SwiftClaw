@@ -21,6 +21,8 @@ enum AccentColor {
     static let defaultSaturation = 0.72
     static let defaultBrightness = 0.82
     static let defaultLightness = defaultBrightness * (2 - defaultSaturation) / 2
+    static let defaultQuoteHue = 0.08
+    static let defaultQuoteLightness = 0.62
     static let lightnessRange: ClosedRange<Double> = 0.18...0.95
 
     static func color(hue: Double, lightness: Double = defaultLightness) -> Color {
@@ -89,6 +91,8 @@ enum SettingsKeys {
     static let accentHue = "settings.appearance.accentHue"
     static let accentLightness = "settings.appearance.accentLightness"
     static let accentBrightness = "settings.appearance.accentBrightness"
+    static let quoteAccentHue = "settings.appearance.quoteAccentHue"
+    static let quoteAccentLightness = "settings.appearance.quoteAccentLightness"
     static let azureResourceName = "settings.azure.resourceName"
     static let azureAPIKey = "settings.azure.apiKey"
     static let azureDeployments = "settings.azure.deployments"
