@@ -50,7 +50,7 @@ enum HomeDayPhase: Sendable {
         let solarNoon = sunrise.addingTimeInterval(sunset.timeIntervalSince(sunrise) / 2)
         let morningTwilightStart = sunrise.addingTimeInterval(-90 * 60)
         let dawnStart = sunrise.addingTimeInterval(-30 * 60)
-        let morningStart = sunrise.addingTimeInterval(20 * 60)
+        let morningStart = sunrise.addingTimeInterval(5 * 60)
         let eveningStart = sunset.addingTimeInterval(-2 * 60 * 60)
         let eveningTwilightStart = sunset.addingTimeInterval(-30 * 60)
         let duskStart = sunset.addingTimeInterval(30 * 60)
@@ -80,9 +80,9 @@ enum HomeDayPhase: Sendable {
         switch hour {
         case 4..<6:
             return .morningTwilight
-        case 6..<8:
+        case 6..<7:
             return .dawn
-        case 8..<12:
+        case 7..<12:
             return .morning
         case 12..<17:
             return .afternoon

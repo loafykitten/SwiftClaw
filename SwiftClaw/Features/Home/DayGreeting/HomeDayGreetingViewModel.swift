@@ -26,8 +26,10 @@ final class HomeDayGreetingViewModel: ObservableObject {
             return
         }
 
+        let userName = HomeDayGreetingGenerator.currentUserName
+
         guard !swiftModel.isEmpty else {
-            greeting = HomeDayGreetingGenerator.fallbackGreeting(for: .localOnly())
+            greeting = HomeDayGreetingGenerator.fallbackGreeting(for: .localOnly(), userName: userName)
             return
         }
 
@@ -37,21 +39,21 @@ final class HomeDayGreetingViewModel: ObservableObject {
             let response = try await InferenceService.shared.complete(
                 messages: [
                     .system(HomeDayGreetingGenerator.systemPrompt),
-                    .user(HomeDayGreetingGenerator.userPrompt(for: context)),
+                    .user(HomeDayGreetingGenerator.userPrompt(for: context, userName: userName)),
                 ],
                 model: swiftModel,
                 temperature: 0.8
             )
 
-            let cleaned = HomeDayGreetingGenerator.cleaned(response)
+            let cleaned = HomeDayGreetingGenerator.cleaned(response, userName: userName)
             if !cleaned.isEmpty {
                 greeting = cleaned
             } else {
-                greeting = HomeDayGreetingGenerator.fallbackGreeting(for: context)
+                greeting = HomeDayGreetingGenerator.fallbackGreeting(for: context, userName: userName)
             }
         } catch {
             HomeDayGreetingGenerator.logger.error("Greeting generation failed: \(String(describing: error), privacy: .public)")
-            greeting = HomeDayGreetingGenerator.fallbackGreeting(for: context)
+            greeting = HomeDayGreetingGenerator.fallbackGreeting(for: context, userName: userName)
         }
     }
 }

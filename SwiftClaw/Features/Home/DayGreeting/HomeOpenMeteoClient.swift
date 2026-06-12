@@ -1,8 +1,11 @@
 import CoreLocation
 import Foundation
+import os
 
 struct HomeOpenMeteoWeather: Sendable {
     let timeZoneIdentifier: String
+    let rawSunrise: String?
+    let rawSunset: String?
     let sunrise: Date?
     let sunset: Date?
     let weatherSummary: String
@@ -13,6 +16,11 @@ struct HomeOpenMeteoWeather: Sendable {
 }
 
 struct HomeOpenMeteoClient: Sendable {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
+        category: "HomeDayGreeting"
+    )
+
     func weather(for location: CLLocation) async throws -> HomeOpenMeteoWeather {
         var components = URLComponents()
         components.scheme = "https"
@@ -32,15 +40,24 @@ struct HomeOpenMeteoClient: Sendable {
             throw HomeOpenMeteoError.invalidURL
         }
 
+        Self.logger.notice("Fetching Open-Meteo home greeting weather.")
         let (data, response) = try await URLSession.shared.data(from: url)
 
-        guard let response = response as? HTTPURLResponse,
-              (200..<300).contains(response.statusCode) else {
-            throw HomeOpenMeteoError.badResponse
+        guard let response = response as? HTTPURLResponse else {
+            throw HomeOpenMeteoError.badResponse(statusCode: nil)
         }
 
-        let forecast = try JSONDecoder().decode(OpenMeteoForecastResponse.self, from: data)
-        return forecast.weather
+        guard (200..<300).contains(response.statusCode) else {
+            throw HomeOpenMeteoError.badResponse(statusCode: response.statusCode)
+        }
+
+        do {
+            let forecast = try JSONDecoder().decode(OpenMeteoForecastResponse.self, from: data)
+            return forecast.weather
+        } catch {
+            Self.logger.error("Open-Meteo response decode failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
     }
 
     private static var temperatureUnit: String {
@@ -50,14 +67,18 @@ struct HomeOpenMeteoClient: Sendable {
 
 private enum HomeOpenMeteoError: LocalizedError {
     case invalidURL
-    case badResponse
+    case badResponse(statusCode: Int?)
 
     var errorDescription: String? {
         switch self {
         case .invalidURL:
             "Open-Meteo URL could not be built."
-        case .badResponse:
-            "Open-Meteo returned an unsuccessful response."
+        case .badResponse(let statusCode):
+            if let statusCode {
+                "Open-Meteo returned HTTP \(statusCode)."
+            } else {
+                "Open-Meteo returned a non-HTTP response."
+            }
         }
     }
 }
@@ -70,13 +91,17 @@ private struct OpenMeteoForecastResponse: Decodable, Sendable {
 
     var weather: HomeOpenMeteoWeather {
         let timeZone = TimeZone(identifier: timezone) ?? .current
-        let sunrise = daily.sunrise.first.flatMap { Self.localDate(from: $0, timeZone: timeZone) }
-        let sunset = daily.sunset.first.flatMap { Self.localDate(from: $0, timeZone: timeZone) }
+        let rawSunrise = daily.sunrise.first
+        let rawSunset = daily.sunset.first
+        let sunrise = rawSunrise.flatMap { Self.localDate(from: $0, timeZone: timeZone) }
+        let sunset = rawSunset.flatMap { Self.localDate(from: $0, timeZone: timeZone) }
         let temperatureUnit = currentUnits?.temperature ?? "F"
         let temperature = Int(current.temperature.rounded())
 
         return HomeOpenMeteoWeather(
             timeZoneIdentifier: timezone,
+            rawSunrise: rawSunrise,
+            rawSunset: rawSunset,
             sunrise: sunrise,
             sunset: sunset,
             weatherSummary: "\(Self.conditionDescription(for: current.weatherCode)), \(temperature) \(temperatureUnit)"
