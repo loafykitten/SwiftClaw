@@ -81,29 +81,34 @@ struct HomeView: View {
         VStack(spacing: 0) {
             Spacer()
 
-            VStack(spacing: 4) {
-                Image(systemName: "cat")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 80, height: 80)
-                    .foregroundStyle(.tint)
+            VStack(spacing: 18) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "cat")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 52, height: 52)
+                        .foregroundStyle(.tint)
+                        .alignmentGuide(.firstTextBaseline) { dimensions in
+                            dimensions[VerticalAlignment.center] + 12
+                        }
 
-                Text("SwiftClaw")
-                    .font(.largeTitle)
-                    .fontWeight(.bold)
+                    Text("SwiftClaw")
+                        .font(.system(size: 32, weight: .bold))
+                }
 
-                Text("Good morning, User!")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 4) {
+                    Text("Good morning, User!")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+
+                    Text(blurb)
+                        .font(.callout)
+                        .italic()
+                        .foregroundStyle(.tertiary)
+                        .contentTransition(.opacity)
+                        .animation(.easeInOut(duration: 0.4), value: blurb)
+                }
             }
-
-            Text(blurb)
-                .font(.callout)
-                .italic()
-                .foregroundStyle(.tertiary)
-                .padding(.top, 12)
-                .contentTransition(.opacity)
-                .animation(.easeInOut(duration: 0.4), value: blurb)
 
             Spacer()
 
