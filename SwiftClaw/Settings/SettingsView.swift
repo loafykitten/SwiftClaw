@@ -52,7 +52,7 @@ struct SettingsView: View {
             .navigationTitle(selectedSection?.rawValue ?? "Settings")
         }
         .tint(accent)
-        .frame(minWidth: 760, minHeight: 520)
+        .frame(minWidth: 760, minHeight: 640)
     }
 }
 
@@ -341,31 +341,53 @@ private struct ProviderSettingsView: View {
     @State private var neuralwattModels = SettingsStorage.loadStringList(forKey: SettingsKeys.neuralwattModels)
     @State private var openRouterModels = SettingsStorage.loadStringList(forKey: SettingsKeys.openRouterModels)
 
+    @State private var azureExpanded = true
+    @State private var neuralwattExpanded = true
+    @State private var openRouterExpanded = true
+
+    private var azureResourceNameMissing: Bool {
+        azureResourceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!azureAPIKey.isEmpty || !azureDeployments.isEmpty)
+    }
+
     var body: some View {
         Form {
-            Section("Azure") {
-                TextField("Resource Name", text: $azureResourceName)
-                    .autocorrectionDisabled()
-                SecureField("API Key", text: $azureAPIKey)
+            Section(isExpanded: $azureExpanded) {
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("Resource Name", text: $azureResourceName)
+                        .autocorrectionDisabled()
+                    if azureResourceNameMissing {
+                        Text("Resource Name is required to use Azure.")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    }
+                }
+                APIKeyField(title: "API Key", text: $azureAPIKey)
                 AzureDeploymentList(deployments: $azureDeployments)
+            } header: {
+                Text("Azure")
             }
 
-            Section("Neuralwatt") {
-                SecureField("API Key", text: $neuralwattAPIKey)
+            Section(isExpanded: $neuralwattExpanded) {
+                APIKeyField(title: "API Key", text: $neuralwattAPIKey)
                 StringListEditor(
                     title: "Models",
                     placeholder: "Model name",
                     values: $neuralwattModels
                 )
+            } header: {
+                Text("Neuralwatt")
             }
 
-            Section("OpenRouter") {
-                SecureField("API Key", text: $openRouterAPIKey)
+            Section(isExpanded: $openRouterExpanded) {
+                APIKeyField(title: "API Key", text: $openRouterAPIKey)
                 StringListEditor(
                     title: "Models",
                     placeholder: "Model name",
                     values: $openRouterModels
                 )
+            } header: {
+                Text("OpenRouter")
             }
         }
         .formStyle(.grouped)
@@ -377,6 +399,34 @@ private struct ProviderSettingsView: View {
         }
         .onChange(of: openRouterModels) { _, newValue in
             SettingsStorage.saveStringList(newValue, forKey: SettingsKeys.openRouterModels)
+        }
+    }
+}
+
+// MARK: - API key field with reveal toggle
+
+private struct APIKeyField: View {
+    let title: String
+    @Binding var text: String
+    @State private var isRevealed = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if isRevealed {
+                TextField(title, text: $text)
+                    .autocorrectionDisabled()
+            } else {
+                SecureField(title, text: $text)
+            }
+            Button {
+                isRevealed.toggle()
+            } label: {
+                Image(systemName: isRevealed ? "eye.slash" : "eye")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(isRevealed ? "Hide API key" : "Show API key")
+            .accessibilityLabel(isRevealed ? "Hide API key" : "Show API key")
         }
     }
 }
@@ -394,7 +444,7 @@ private struct AzureDeploymentList: View {
             ForEach($deployments) { $deployment in
                 HStack(spacing: 8) {
                     TextField("Deployment Name", text: $deployment.deploymentName)
-                    TextField("Display Name", text: $deployment.displayName)
+                    TextField("Display Name (optional)", text: $deployment.displayName)
                     Button {
                         deployments.removeAll { $0.id == deployment.id }
                     } label: {
@@ -403,12 +453,13 @@ private struct AzureDeploymentList: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .help("Remove deployment")
+                    .accessibilityLabel("Remove deployment \(deployment.deploymentName)")
                 }
             }
 
             HStack(spacing: 8) {
                 TextField("Deployment Name", text: $deploymentName)
-                TextField("Display Name", text: $displayName)
+                TextField("Display Name (optional)", text: $displayName)
                 Button {
                     addDeployment()
                 } label: {
@@ -417,6 +468,7 @@ private struct AzureDeploymentList: View {
                 .buttonStyle(.plain)
                 .disabled(deploymentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help("Add deployment")
+                .accessibilityLabel("Add deployment")
             }
         }
     }
@@ -463,6 +515,7 @@ private struct StringListEditor: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .help("Remove model")
+                    .accessibilityLabel("Remove model \(value)")
                 }
             }
 
@@ -477,6 +530,7 @@ private struct StringListEditor: View {
                 .buttonStyle(.plain)
                 .disabled(newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .help("Add model")
+                .accessibilityLabel("Add model")
             }
         }
     }
