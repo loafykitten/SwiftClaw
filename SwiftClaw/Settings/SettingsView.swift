@@ -273,6 +273,14 @@ private struct PersonalitySettingsView: View {
         AssistantPersonalityLibrary.presets.firstIndex { $0.id == selectedPreset.id } ?? 0
     }
 
+    private var effectivePersonalityPrompt: String {
+        AssistantPersonalityLibrary.prompt(
+            presetID: personalityPresetID,
+            usesCustomPersonality: usesCustomPersonality,
+            customPersonality: customPersonality
+        )
+    }
+
     private var personalitySliderValue: Binding<Double> {
         Binding(
             get: { Double(selectedPresetIndex) },
@@ -375,6 +383,20 @@ private struct PersonalitySettingsView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 4)
                 }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Prompt")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Text(effectivePersonalityPrompt)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.top, 4)
             }
         }
         .formStyle(.grouped)
