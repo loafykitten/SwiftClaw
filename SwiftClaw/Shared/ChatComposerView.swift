@@ -213,7 +213,7 @@ struct ChatComposerView: View {
 
     private var reasoningMenu: some View {
         Menu {
-            ForEach(ModelReasoningEffort.allCases) { effort in
+            ForEach(ModelReasoningEffort.selectableCases) { effort in
                 Button {
                     setReasoningEffort(effort)
                 } label: {
@@ -593,7 +593,6 @@ struct ChatComposerView: View {
             messageText = ""
             imageAttachments = []
             imageAttachmentError = nil
-            setReasoningEffort(.off)
             // Investigation is a one-shot toggle: it always resets after the
             // message is submitted.
             setInvestigation(false)

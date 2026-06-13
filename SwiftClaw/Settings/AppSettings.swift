@@ -225,6 +225,8 @@ enum ModelReasoningEffort: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    static let selectableCases: [Self] = [.off, .low, .medium, .high]
+
     var displayName: String {
         switch self {
         case .off: "Off"

@@ -4,6 +4,10 @@ import Testing
 @testable import SwiftClaw
 
 struct InferenceQueryTests {
+    @Test func selectableReasoningEffortsDoNotIncludeMinimal() {
+        #expect(ModelReasoningEffort.selectableCases == [.off, .low, .medium, .high])
+    }
+
     @Test func encodesReasoningEfforts() throws {
         let cases: [(ModelReasoningEffort, String)] = [
             (.off, "none"),
