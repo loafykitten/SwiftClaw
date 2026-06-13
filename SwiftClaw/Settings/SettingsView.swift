@@ -520,8 +520,8 @@ private struct ProviderSettingsView: View {
     private var braveSearchRequestsPerSecond = SettingsStorage.defaultBraveSearchRequestsPerSecond
 
     @State private var azureDeployments = SettingsStorage.loadDeployments()
-    @State private var neuralwattModels = SettingsStorage.loadStringList(forKey: SettingsKeys.neuralwattModels)
-    @State private var openRouterModels = SettingsStorage.loadStringList(forKey: SettingsKeys.openRouterModels)
+    @State private var neuralwattModels = SettingsStorage.loadProviderModels(forKey: SettingsKeys.neuralwattModels)
+    @State private var openRouterModels = SettingsStorage.loadProviderModels(forKey: SettingsKeys.openRouterModels)
 
     @State private var azureExpanded = true
     @State private var neuralwattExpanded = true
@@ -553,10 +553,10 @@ private struct ProviderSettingsView: View {
 
             Section(isExpanded: $neuralwattExpanded) {
                 APIKeyField(title: "API Key", text: $neuralwattAPIKey)
-                StringListEditor(
+                ProviderModelListEditor(
                     title: "Models",
                     placeholder: "Model name",
-                    values: $neuralwattModels
+                    models: $neuralwattModels
                 )
             } header: {
                 Text("Neuralwatt")
@@ -564,10 +564,10 @@ private struct ProviderSettingsView: View {
 
             Section(isExpanded: $openRouterExpanded) {
                 APIKeyField(title: "API Key", text: $openRouterAPIKey)
-                StringListEditor(
+                ProviderModelListEditor(
                     title: "Models",
                     placeholder: "Model name",
-                    values: $openRouterModels
+                    models: $openRouterModels
                 )
             } header: {
                 Text("OpenRouter")
@@ -605,10 +605,10 @@ private struct ProviderSettingsView: View {
             SettingsStorage.saveDeployments(newValue)
         }
         .onChange(of: neuralwattModels) { _, newValue in
-            SettingsStorage.saveStringList(newValue, forKey: SettingsKeys.neuralwattModels)
+            SettingsStorage.saveProviderModels(newValue, forKey: SettingsKeys.neuralwattModels)
         }
         .onChange(of: openRouterModels) { _, newValue in
-            SettingsStorage.saveStringList(newValue, forKey: SettingsKeys.openRouterModels)
+            SettingsStorage.saveProviderModels(newValue, forKey: SettingsKeys.openRouterModels)
         }
     }
 }
@@ -645,41 +645,75 @@ private struct AzureDeploymentList: View {
     @Binding var deployments: [AzureDeployment]
     @State private var deploymentName = ""
     @State private var displayName = ""
+    @State private var capabilities = ModelCapability.defaultCapabilities
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Deployments")
                 .font(.headline)
 
             ForEach($deployments) { $deployment in
-                HStack(spacing: 8) {
-                    TextField("Deployment Name", text: $deployment.deploymentName)
-                    TextField("Display Name (optional)", text: $deployment.displayName)
-                    Button {
-                        deployments.removeAll { $0.id == deployment.id }
-                    } label: {
-                        Image(systemName: "minus.circle.fill")
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .bottom, spacing: 10) {
+                        SettingsTextField(
+                            label: "Deployment Name",
+                            text: $deployment.deploymentName
+                        )
+                        SettingsTextField(
+                            label: "Display Name",
+                            placeholder: "Optional",
+                            text: $deployment.displayName
+                        )
+                        Button {
+                            deployments.removeAll { $0.id == deployment.id }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Remove deployment")
+                        .accessibilityLabel("Remove deployment \(deployment.deploymentName)")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Remove deployment")
-                    .accessibilityLabel("Remove deployment \(deployment.deploymentName)")
+
+                    ModelCapabilitySelector(capabilities: $deployment.capabilities)
                 }
+                .padding(10)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
             }
 
-            HStack(spacing: 8) {
-                TextField("Deployment Name", text: $deploymentName)
-                TextField("Display Name (optional)", text: $displayName)
-                Button {
-                    addDeployment()
-                } label: {
-                    Image(systemName: "plus.circle.fill")
+            Divider()
+                .padding(.vertical, 2)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .bottom, spacing: 10) {
+                    SettingsTextField(
+                        label: "Deployment Name",
+                        text: $deploymentName
+                    )
+                    SettingsTextField(
+                        label: "Display Name",
+                        placeholder: "Optional",
+                        text: $displayName
+                    )
+                    Button {
+                        addDeployment()
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(deploymentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Add deployment")
+                    .accessibilityLabel("Add deployment")
                 }
-                .buttonStyle(.plain)
-                .disabled(deploymentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .help("Add deployment")
-                .accessibilityLabel("Add deployment")
+
+                ModelCapabilitySelector(capabilities: $capabilities)
             }
+            .padding(10)
+            .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(.quaternary, lineWidth: 1)
+            )
         }
     }
 
@@ -694,66 +728,154 @@ private struct AzureDeploymentList: View {
         deployments.append(
             AzureDeployment(
                 deploymentName: trimmedDeployment,
-                displayName: trimmedDisplay
+                displayName: trimmedDisplay,
+                capabilities: capabilities
             )
         )
         deploymentName = ""
         displayName = ""
+        capabilities = ModelCapability.defaultCapabilities
     }
 }
 
-private struct StringListEditor: View {
+private struct ProviderModelListEditor: View {
     let title: String
     let placeholder: String
-    @Binding var values: [String]
+    @Binding var models: [ProviderModel]
     @State private var newValue = ""
+    @State private var capabilities = ModelCapability.defaultCapabilities
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Text(title)
                 .font(.headline)
 
-            ForEach(values, id: \.self) { value in
-                HStack {
-                    Text(value)
-                    Spacer()
-                    Button {
-                        values.removeAll { $0 == value }
-                    } label: {
-                        Image(systemName: "minus.circle.fill")
+            ForEach($models) { $model in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .bottom, spacing: 10) {
+                        SettingsTextField(
+                            label: "Model Name",
+                            text: $model.name
+                        )
+                        Button {
+                            models.removeAll { $0.id == model.id }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .help("Remove model")
+                        .accessibilityLabel("Remove model \(model.name)")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .help("Remove model")
-                    .accessibilityLabel("Remove model \(value)")
+
+                    ModelCapabilitySelector(capabilities: $model.capabilities)
                 }
+                .padding(10)
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
             }
 
-            HStack {
-                TextField(placeholder, text: $newValue)
-                    .onSubmit(addValue)
-                Button {
-                    addValue()
-                } label: {
-                    Image(systemName: "plus.circle.fill")
+            Divider()
+                .padding(.vertical, 2)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .bottom, spacing: 10) {
+                    SettingsTextField(
+                        label: "Model Name",
+                        placeholder: placeholder,
+                        text: $newValue,
+                        onSubmit: addValue
+                    )
+                    Button {
+                        addValue()
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canAddValue)
+                    .help("Add model")
+                    .accessibilityLabel("Add model")
                 }
-                .buttonStyle(.plain)
-                .disabled(newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .help("Add model")
-                .accessibilityLabel("Add model")
+
+                ModelCapabilitySelector(capabilities: $capabilities)
             }
+            .padding(10)
+            .background(.quaternary.opacity(0.25), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(.quaternary, lineWidth: 1)
+            )
         }
+    }
+
+    private var canAddValue: Bool {
+        let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedValue.isEmpty && !models.contains { $0.name == trimmedValue }
     }
 
     private func addValue() {
         let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard !trimmedValue.isEmpty, !values.contains(trimmedValue) else {
+        guard canAddValue else {
             return
         }
 
-        values.append(trimmedValue)
+        models.append(ProviderModel(name: trimmedValue, capabilities: capabilities))
         newValue = ""
+        capabilities = ModelCapability.defaultCapabilities
+    }
+}
+
+private struct SettingsTextField: View {
+    let label: String
+    var placeholder: String = ""
+    @Binding var text: String
+    var onSubmit: () -> Void = {}
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextField("", text: $text, prompt: Text(placeholder))
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+                .onSubmit(onSubmit)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 5)
+                .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
+                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color(nsColor: .separatorColor)))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ModelCapabilitySelector: View {
+    @Binding var capabilities: Set<ModelCapability>
+
+    var body: some View {
+        HStack(spacing: 14) {
+            ForEach(ModelCapability.allCases) { capability in
+                Toggle(
+                    capability.displayName,
+                    isOn: Binding(
+                        get: {
+                            capabilities.contains(capability)
+                        },
+                        set: { isEnabled in
+                            if isEnabled {
+                                capabilities.insert(capability)
+                            } else {
+                                capabilities.remove(capability)
+                            }
+                        }
+                    )
+                )
+                .toggleStyle(.checkbox)
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 }
 
