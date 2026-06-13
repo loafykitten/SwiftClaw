@@ -434,7 +434,8 @@ private struct ChatTranscriptView: View {
                 chat,
                 in: modelContext,
                 allowInvestigation: submission.isInvestigationEnabled,
-                supportsImages: submission.supportsImages
+                supportsImages: submission.supportsImages,
+                reasoningEffort: submission.reasoningEffort
             )
         }
 

@@ -14,7 +14,8 @@ enum ChatCompletionService {
         _ chat: Chat,
         in modelContext: ModelContext,
         allowInvestigation: Bool = false,
-        supportsImages: Bool = true
+        supportsImages: Bool = true,
+        reasoningEffort: ModelReasoningEffort? = nil
     ) async {
         let activityScope = ToolActivityScope(chatID: chat.id, generationID: UUID())
 
@@ -28,7 +29,8 @@ enum ChatCompletionService {
                 chat,
                 in: modelContext,
                 allowInvestigation: allowInvestigation,
-                supportsImages: supportsImages
+                supportsImages: supportsImages,
+                reasoningEffort: reasoningEffort
             )
         }
     }
@@ -37,13 +39,25 @@ enum ChatCompletionService {
         _ chat: Chat,
         in modelContext: ModelContext,
         allowInvestigation: Bool,
-        supportsImages: Bool
+        supportsImages: Bool,
+        reasoningEffort: ModelReasoningEffort?
     ) async {
+        let capabilities = SettingsStorage.capabilities(for: chat.modelSelection)
+        let canUseTools = capabilities.contains(.tools)
+        let canUseImages = supportsImages && capabilities.contains(.vision)
+        let effectiveReasoningEffort = InferenceService.effectiveReasoningEffort(
+            reasoningEffort,
+            capabilities: capabilities
+        )
+        let canInvestigate = allowInvestigation
+            && canUseTools
+            && effectiveReasoningEffort?.isReasoningEnabled == true
+
         var messages = chat.sortedMessages.compactMap {
-            $0.inferenceMessage(includingImages: supportsImages)
+            $0.inferenceMessage(includingImages: canUseImages)
         }
 
-        if allowInvestigation {
+        if canInvestigate {
             // Transient steering hint; deliberately not persisted to the chat.
             messages.append(.system("""
                 The user enabled Investigation mode for this message. Use the \
@@ -60,9 +74,10 @@ enum ChatCompletionService {
             let response = try await InferenceService.shared.complete(
                 messages: messages,
                 model: chat.modelSelection,
-                tools: ToolRegistry.shared.availableTools(
-                    includingExplicitlyEnabled: allowInvestigation
-                )
+                reasoningEffort: effectiveReasoningEffort,
+                tools: canUseTools
+                    ? ToolRegistry.shared.availableTools(includingExplicitlyEnabled: canInvestigate)
+                    : []
             )
 
             chat.appendMessage(role: .assistant, content: response)

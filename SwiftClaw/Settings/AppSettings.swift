@@ -120,6 +120,7 @@ struct AzureDeployment: Identifiable, Codable, Hashable {
     var id = UUID()
     var deploymentName: String
     var displayName: String
+    var capabilities = ModelCapability.defaultCapabilities
 
     var modelPickerTitle: String {
         if displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -128,53 +129,200 @@ struct AzureDeployment: Identifiable, Codable, Hashable {
 
         return displayName
     }
+
+    init(
+        id: UUID = UUID(),
+        deploymentName: String,
+        displayName: String,
+        capabilities: Set<ModelCapability> = ModelCapability.defaultCapabilities
+    ) {
+        self.id = id
+        self.deploymentName = deploymentName
+        self.displayName = displayName
+        self.capabilities = capabilities
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case deploymentName
+        case displayName
+        case capabilities
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        deploymentName = try container.decode(String.self, forKey: .deploymentName)
+        displayName = try container.decodeIfPresent(String.self, forKey: .displayName) ?? ""
+        capabilities = try container.decodeIfPresent(Set<ModelCapability>.self, forKey: .capabilities)
+            ?? ModelCapability.defaultCapabilities
+    }
+}
+
+enum ModelCapability: String, CaseIterable, Codable, Hashable, Identifiable {
+    case reasoning
+    case tools
+    case vision
+    case json
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .reasoning: "Reasoning"
+        case .tools: "Tools"
+        case .vision: "Vision"
+        case .json: "JSON"
+        }
+    }
+
+    static let defaultCapabilities: Set<ModelCapability> = [.json]
+}
+
+struct ProviderModel: Identifiable, Codable, Hashable {
+    var id = UUID()
+    var name: String
+    var capabilities = ModelCapability.defaultCapabilities
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        capabilities: Set<ModelCapability> = ModelCapability.defaultCapabilities
+    ) {
+        self.id = id
+        self.name = name
+        self.capabilities = capabilities
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case capabilities
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        capabilities = try container.decodeIfPresent(Set<ModelCapability>.self, forKey: .capabilities)
+            ?? ModelCapability.defaultCapabilities
+    }
+}
+
+enum ModelReasoningEffort: String, CaseIterable, Identifiable, Sendable {
+    case off
+    case minimal
+    case low
+    case medium
+    case high
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .off: "Off"
+        case .minimal: "Minimal"
+        case .low: "Low"
+        case .medium: "Medium"
+        case .high: "High"
+        }
+    }
+
+    var isReasoningEnabled: Bool {
+        self != .off
+    }
 }
 
 enum SettingsStorage {
-    static func loadAvailableModels() -> [String] {
+    static func loadAvailableModels(userDefaults: UserDefaults = .standard) -> [String] {
         availableModels(
-            azureDeployments: loadDeployments(),
-            neuralwattModels: loadStringList(forKey: SettingsKeys.neuralwattModels),
-            openRouterModels: loadStringList(forKey: SettingsKeys.openRouterModels)
+            azureDeployments: loadDeployments(userDefaults: userDefaults),
+            neuralwattModels: loadProviderModels(forKey: SettingsKeys.neuralwattModels, userDefaults: userDefaults),
+            openRouterModels: loadProviderModels(forKey: SettingsKeys.openRouterModels, userDefaults: userDefaults)
         )
     }
 
     static func availableModels(
         azureDeployments: [AzureDeployment],
-        neuralwattModels: [String],
-        openRouterModels: [String]
+        neuralwattModels: [ProviderModel],
+        openRouterModels: [ProviderModel]
     ) -> [String] {
         let azureModels = azureDeployments.map { deployment in
             InferenceProviderID.azure.modelPrefix + deployment.modelPickerTitle
         }
-        let neuralwatt = neuralwattModels.map { InferenceProviderID.neuralwatt.modelPrefix + $0 }
-        let openRouter = openRouterModels.map { InferenceProviderID.openRouter.modelPrefix + $0 }
+        let neuralwatt = neuralwattModels.map { InferenceProviderID.neuralwatt.modelPrefix + $0.name }
+        let openRouter = openRouterModels.map { InferenceProviderID.openRouter.modelPrefix + $0.name }
 
         return azureModels + neuralwatt + openRouter
     }
 
-    static func loadDeployments() -> [AzureDeployment] {
-        guard let data = UserDefaults.standard.data(forKey: SettingsKeys.azureDeployments) else {
+    static func capabilities(
+        for modelSelection: String,
+        userDefaults: UserDefaults = .standard
+    ) -> Set<ModelCapability> {
+        let selection = modelSelection.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let title = selection.removingPrefix(InferenceProviderID.azure.modelPrefix) {
+            return loadDeployments(userDefaults: userDefaults)
+                .first { $0.modelPickerTitle == title }?
+                .capabilities ?? ModelCapability.defaultCapabilities
+        }
+
+        if let model = selection.removingPrefix(InferenceProviderID.neuralwatt.modelPrefix) {
+            return loadProviderModels(forKey: SettingsKeys.neuralwattModels, userDefaults: userDefaults)
+                .first { $0.name == model }?
+                .capabilities ?? ModelCapability.defaultCapabilities
+        }
+
+        if let model = selection.removingPrefix(InferenceProviderID.openRouter.modelPrefix) {
+            return loadProviderModels(forKey: SettingsKeys.openRouterModels, userDefaults: userDefaults)
+                .first { $0.name == model }?
+                .capabilities ?? ModelCapability.defaultCapabilities
+        }
+
+        return ModelCapability.defaultCapabilities
+    }
+
+    static func loadDeployments(userDefaults: UserDefaults = .standard) -> [AzureDeployment] {
+        guard let data = userDefaults.data(forKey: SettingsKeys.azureDeployments) else {
             return []
         }
 
         return (try? JSONDecoder().decode([AzureDeployment].self, from: data)) ?? []
     }
 
-    static func saveDeployments(_ deployments: [AzureDeployment]) {
+    static func saveDeployments(_ deployments: [AzureDeployment], userDefaults: UserDefaults = .standard) {
         guard let data = try? JSONEncoder().encode(deployments) else {
             return
         }
 
-        UserDefaults.standard.set(data, forKey: SettingsKeys.azureDeployments)
+        userDefaults.set(data, forKey: SettingsKeys.azureDeployments)
     }
 
-    static func loadStringList(forKey key: String) -> [String] {
-        UserDefaults.standard.stringArray(forKey: key) ?? []
+    static func loadProviderModels(
+        forKey key: String,
+        userDefaults: UserDefaults = .standard
+    ) -> [ProviderModel] {
+        if let data = userDefaults.data(forKey: key),
+           let models = try? JSONDecoder().decode([ProviderModel].self, from: data) {
+            return models
+        }
+
+        return userDefaults.stringArray(forKey: key)?.map {
+            ProviderModel(name: $0)
+        } ?? []
     }
 
-    static func saveStringList(_ values: [String], forKey key: String) {
-        UserDefaults.standard.set(values, forKey: key)
+    static func saveProviderModels(
+        _ models: [ProviderModel],
+        forKey key: String,
+        userDefaults: UserDefaults = .standard
+    ) {
+        guard let data = try? JSONEncoder().encode(models) else {
+            return
+        }
+
+        userDefaults.set(data, forKey: key)
     }
 
     static let defaultBraveSearchRequestsPerSecond = 1.0
@@ -207,5 +355,15 @@ enum SettingsStorage {
             max(stored, investigationMaxSubAgentsRange.lowerBound),
             investigationMaxSubAgentsRange.upperBound
         )
+    }
+}
+
+private extension String {
+    func removingPrefix(_ prefix: String) -> String? {
+        guard hasPrefix(prefix) else {
+            return nil
+        }
+
+        return String(dropFirst(prefix.count))
     }
 }

@@ -8,12 +8,15 @@ struct ChatComposerSubmission {
     let text: String
     let model: String
     let isInvestigationEnabled: Bool
+    let reasoningEffort: ModelReasoningEffort?
     let imageAttachments: [ImageAttachmentRecord]
     let supportsImages: Bool
 }
 
 struct ChatComposerView: View {
     private let controlRowHeight: CGFloat = 28
+    private let reasoningControlWidth: CGFloat = 92
+    private let modelControlWidth: CGFloat = 132
 
     var isBusy = false
     var submissionError: String?
@@ -34,11 +37,36 @@ struct ChatComposerView: View {
     @State private var previewSelection: ImageAttachmentPreviewSelection?
     @State private var availableModels = SettingsStorage.loadAvailableModels()
     @State private var isInvestigationEnabled = false
+    @State private var selectedReasoningEffort = ModelReasoningEffort.off
     @State private var isInvestigationAvailable = InvestigateTool().isConfigured
     @FocusState private var isMessageFieldFocused: Bool
 
     private var activeModelSelection: String {
-        isInvestigationEnabled ? HomeModelSelection.clawModel : selectedModel
+        selectedModel
+    }
+
+    private var selectedModelCapabilities: Set<ModelCapability> {
+        guard let effectiveModel else {
+            return ModelCapability.defaultCapabilities
+        }
+
+        return SettingsStorage.capabilities(for: effectiveModel)
+    }
+
+    private var selectedModelSupportsReasoning: Bool {
+        selectedModelCapabilities.contains(.reasoning)
+    }
+
+    private var selectedModelSupportsTools: Bool {
+        selectedModelCapabilities.contains(.tools)
+    }
+
+    private var selectedModelSupportsVision: Bool {
+        selectedModelCapabilities.contains(.vision)
+    }
+
+    private var effectiveReasoningEffort: ModelReasoningEffort? {
+        selectedModelSupportsReasoning ? selectedReasoningEffort : nil
     }
 
     private var selectedModelTitle: String {
@@ -78,9 +106,7 @@ struct ChatComposerView: View {
     }
 
     private var modelSelectionDisabled: Bool {
-        // Investigation sends this message with the Claw Model, so the
-        // selector locks while the one-shot toggle is on.
-        availableModels.isEmpty || isBusy || isInvestigationEnabled
+        availableModels.isEmpty || isBusy
     }
 
     private var composerControlsDisabled: Bool {
@@ -88,7 +114,7 @@ struct ChatComposerView: View {
     }
 
     private var canImportImageAttachments: Bool {
-        allowsImageAttachments && !composerControlsDisabled
+        allowsImageAttachments && !composerControlsDisabled && selectedModelSupportsVision
     }
 
     private var canSubmitMessage: Bool {
@@ -101,6 +127,13 @@ struct ChatComposerView: View {
 
     private var isClawModelAvailable: Bool {
         !clawModel.isEmpty && availableModels.contains(clawModel)
+    }
+
+    private var canEnableInvestigation: Bool {
+        isInvestigationAvailable
+            && selectedModelSupportsTools
+            && selectedModelSupportsReasoning
+            && selectedReasoningEffort.isReasoningEnabled
     }
 
     private var quickModelOptions: [HomeModelOption] {
@@ -155,14 +188,49 @@ struct ChatComposerView: View {
                 Text(selectedModelTitle)
                     .font(.caption)
                     .lineLimit(1)
+                    .truncationMode(.middle)
                 Image(systemName: "chevron.down")
                     .font(.caption2)
             }
+            .frame(width: modelControlWidth, height: controlRowHeight, alignment: .center)
             .foregroundStyle(.secondary)
         }
         .menuIndicator(.hidden)
         .disabled(modelSelectionDisabled)
         .frame(height: controlRowHeight, alignment: .center)
+    }
+
+    private var reasoningMenu: some View {
+        Menu {
+            ForEach(ModelReasoningEffort.allCases) { effort in
+                Button {
+                    setReasoningEffort(effort)
+                } label: {
+                    if selectedReasoningEffort == effort {
+                        Label(effort.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(effort.displayName)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "brain")
+                    .font(.caption)
+                Text(selectedReasoningEffort.displayName)
+                    .font(.caption)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.caption2)
+            }
+            .frame(width: reasoningControlWidth, height: controlRowHeight, alignment: .center)
+            .foregroundStyle(.secondary)
+        }
+        .menuIndicator(.hidden)
+        .disabled(composerControlsDisabled || !selectedModelSupportsReasoning)
+        .frame(height: controlRowHeight, alignment: .center)
+        .help("Reasoning effort")
+        .accessibilityLabel("Reasoning effort \(selectedReasoningEffort.displayName)")
     }
 
     var body: some View {
@@ -216,8 +284,8 @@ struct ChatComposerView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .disabled(composerControlsDisabled || !allowsImageAttachments)
-                    .help("Attach images")
+                    .disabled(!canImportImageAttachments)
+                    .help(selectedModelSupportsVision ? "Attach images" : "Selected model does not support vision")
                     .accessibilityLabel("Attach images")
 
                     Button {
@@ -234,11 +302,11 @@ struct ChatComposerView: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(isInvestigationEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                    .disabled(composerControlsDisabled || !isInvestigationAvailable || !isClawModelAvailable)
+                    .disabled(composerControlsDisabled || !canEnableInvestigation)
                     .help(
-                        isInvestigationAvailable && isClawModelAvailable
-                            ? "Investigate this message in depth using the Claw Model"
-                            : "Investigation needs a Brave Search key plus Claw and Swift Models"
+                        canEnableInvestigation
+                            ? "Investigate this message in depth"
+                            : "Investigation needs Brave Search plus a selected model with Tools, Reasoning, and reasoning turned on"
                     )
                     .accessibilityLabel("Investigation mode")
                     .accessibilityAddTraits(isInvestigationEnabled ? .isSelected : [])
@@ -247,8 +315,11 @@ struct ChatComposerView: View {
                 Spacer()
 
                 HStack(spacing: 8) {
+                    if selectedModelSupportsReasoning {
+                        reasoningMenu
+                    }
+
                     modelSelectionMenu
-                        .frame(width: 160, alignment: .trailing)
 
                     Button {
                         submitMessage()
@@ -314,6 +385,9 @@ struct ChatComposerView: View {
                 clearDraftImageAttachments()
             }
         }
+        .onChange(of: effectiveModel) { _, _ in
+            syncCapabilityState()
+        }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             refreshModels()
         }
@@ -351,19 +425,38 @@ struct ChatComposerView: View {
         availableModels = SettingsStorage.loadAvailableModels()
         isInvestigationAvailable = InvestigateTool().isConfigured
 
-        if !isInvestigationAvailable || !isClawModelAvailable {
+        syncCapabilityState()
+    }
+
+    private func syncCapabilityState() {
+        if !selectedModelSupportsReasoning {
+            setReasoningEffort(.off)
+        }
+
+        if !canEnableInvestigation {
             setInvestigation(false)
+        }
+
+        if !allowsImageAttachments || !selectedModelSupportsVision {
+            clearDraftImageAttachments()
         }
     }
 
-    /// Turns investigation mode on or off. While on, this message uses the
-    /// Claw Model without changing the saved home model selection.
+    /// Turns investigation mode on or off for the selected model.
     private func setInvestigation(_ enabled: Bool) {
         guard enabled != isInvestigationEnabled else {
             return
         }
 
-        isInvestigationEnabled = enabled
+        isInvestigationEnabled = enabled && canEnableInvestigation
+    }
+
+    private func setReasoningEffort(_ effort: ModelReasoningEffort) {
+        selectedReasoningEffort = selectedModelSupportsReasoning ? effort : .off
+
+        if !canEnableInvestigation {
+            setInvestigation(false)
+        }
     }
 
     private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
@@ -475,21 +568,23 @@ struct ChatComposerView: View {
             return
         }
 
-        let attachments = allowsImageAttachments ? imageAttachments : []
+        let attachments = allowsImageAttachments && selectedModelSupportsVision ? imageAttachments : []
         let submission = ChatComposerSubmission(
             text: input,
             model: model,
-            isInvestigationEnabled: isInvestigationEnabled && isInvestigationAvailable,
+            isInvestigationEnabled: isInvestigationEnabled && canEnableInvestigation,
+            reasoningEffort: effectiveReasoningEffort,
             imageAttachments: attachments,
-            supportsImages: allowsImageAttachments
+            supportsImages: selectedModelSupportsVision
         )
 
         if onSubmit(submission) {
             messageText = ""
             imageAttachments = []
             imageAttachmentError = nil
-            // Investigation is a one-shot toggle: it always resets (and the
-            // model selector unlocks) after the message is submitted.
+            setReasoningEffort(.off)
+            // Investigation is a one-shot toggle: it always resets after the
+            // message is submitted.
             setInvestigation(false)
         }
     }

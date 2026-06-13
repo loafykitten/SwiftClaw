@@ -38,13 +38,17 @@ enum InferenceMessage: Sendable {
     case assistant(String)
 
     var chatParam: ChatQuery.ChatCompletionMessageParam {
+        chatParam(includingImages: true)
+    }
+
+    func chatParam(includingImages: Bool) -> ChatQuery.ChatCompletionMessageParam {
         switch self {
         case .system(let content):
             return ChatQuery.ChatCompletionMessageParam.system(.init(content: .textContent(content)))
         case .user(let content, let imageAttachments):
-            let imageData = imageAttachments.compactMap { attachment in
+            let imageData = includingImages ? imageAttachments.compactMap { attachment in
                 try? Data(contentsOf: attachment.fileURL)
-            }
+            } : []
 
             guard !imageData.isEmpty else {
                 return ChatQuery.ChatCompletionMessageParam.user(.init(content: .string(content)))
@@ -71,6 +75,8 @@ struct ResolvedModel: Sendable {
 
     /// Identifier sent to the API: the deployment name for Azure, the model name otherwise.
     let modelID: String
+
+    let capabilities: Set<ModelCapability>
 }
 
 /// Runs chat completions against whichever provider backs a configured model.
@@ -98,16 +104,25 @@ struct InferenceService: Sendable {
 
             return ResolvedModel(
                 provider: AzureProvider.fromSettings(),
-                modelID: deployment.deploymentName
+                modelID: deployment.deploymentName,
+                capabilities: deployment.capabilities
             )
         }
 
         if let model = selection.removingPrefix(InferenceProviderID.neuralwatt.modelPrefix) {
-            return ResolvedModel(provider: NeuralwattProvider.fromSettings(), modelID: model)
+            return ResolvedModel(
+                provider: NeuralwattProvider.fromSettings(),
+                modelID: model,
+                capabilities: SettingsStorage.capabilities(for: selection)
+            )
         }
 
         if let model = selection.removingPrefix(InferenceProviderID.openRouter.modelPrefix) {
-            return ResolvedModel(provider: OpenRouterProvider.fromSettings(), modelID: model)
+            return ResolvedModel(
+                provider: OpenRouterProvider.fromSettings(),
+                modelID: model,
+                capabilities: SettingsStorage.capabilities(for: selection)
+            )
         }
 
         throw InferenceError.unknownModel(modelSelection)
@@ -122,20 +137,29 @@ struct InferenceService: Sendable {
         messages: [InferenceMessage],
         model modelSelection: String,
         temperature: Double? = nil,
+        reasoningEffort: ModelReasoningEffort? = nil,
         tools: [any Tool] = []
     ) async throws -> String {
         let resolved = try resolve(modelSelection)
         let client = try resolved.provider.makeClient()
 
-        var chatMessages = messages.map(\.chatParam)
-        let toolParams = tools.isEmpty ? nil : try tools.map { try $0.chatToolParam() }
+        let supportsImages = resolved.capabilities.contains(.vision)
+        let supportsTools = resolved.capabilities.contains(.tools)
+        let effectiveReasoningEffort = Self.effectiveReasoningEffort(
+            reasoningEffort,
+            capabilities: resolved.capabilities
+        )
+
+        var chatMessages = messages.map { $0.chatParam(includingImages: supportsImages) }
+        let toolParams = supportsTools && !tools.isEmpty ? try tools.map { try $0.chatToolParam() } : nil
         let maxRounds = 8
 
         for _ in 0..<maxRounds {
-            let query = ChatQuery(
+            let query = Self.makeChatQuery(
                 messages: chatMessages,
-                model: resolved.modelID,
+                modelID: resolved.modelID,
                 temperature: temperature,
+                reasoningEffort: effectiveReasoningEffort,
                 tools: toolParams
             )
 
@@ -243,9 +267,10 @@ struct InferenceService: Sendable {
     ) throws -> AsyncThrowingStream<String, Error> {
         let resolved = try resolve(modelSelection)
         let client = try resolved.provider.makeClient()
+        let supportsImages = resolved.capabilities.contains(.vision)
 
         let query = ChatQuery(
-            messages: messages.map(\.chatParam),
+            messages: messages.map { $0.chatParam(includingImages: supportsImages) },
             model: resolved.modelID,
             temperature: temperature
         )
@@ -273,6 +298,29 @@ struct InferenceService: Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    static func effectiveReasoningEffort(
+        _ reasoningEffort: ModelReasoningEffort?,
+        capabilities: Set<ModelCapability>
+    ) -> ModelReasoningEffort? {
+        capabilities.contains(.reasoning) ? reasoningEffort : nil
+    }
+
+    static func makeChatQuery(
+        messages: [ChatQuery.ChatCompletionMessageParam],
+        modelID: String,
+        temperature: Double?,
+        reasoningEffort: ModelReasoningEffort?,
+        tools: [ChatQuery.ChatCompletionToolParam]?
+    ) -> ChatQuery {
+        ChatQuery(
+            messages: messages,
+            model: modelID,
+            reasoningEffort: reasoningEffort?.chatQueryReasoningEffort,
+            temperature: temperature,
+            tools: tools
+        )
+    }
 }
 
 private extension String {
@@ -282,5 +330,17 @@ private extension String {
         }
 
         return String(dropFirst(prefix.count))
+    }
+}
+
+private extension ModelReasoningEffort {
+    var chatQueryReasoningEffort: ChatQuery.ReasoningEffort {
+        switch self {
+        case .off: .none
+        case .minimal: .minimal
+        case .low: .low
+        case .medium: .medium
+        case .high: .high
+        }
     }
 }
