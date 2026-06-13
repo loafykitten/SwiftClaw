@@ -1,23 +1,36 @@
 import SwiftUI
 
+struct ChatComposerSubmission {
+    let text: String
+    let model: String
+    let isInvestigationEnabled: Bool
+    let imageAttachments: [ImageAttachmentRecord]
+    let supportsImages: Bool
+}
+
 struct ChatComposerView: View {
     private let controlRowHeight: CGFloat = 28
 
     var isBusy = false
     var submissionError: String?
+    var allowsImageAttachments = true
 
-    /// Called with the message text, model selection, and whether the user
-    /// enabled Investigation for this message.
-    var onSubmit: (String, String, Bool) -> Bool
+    /// Called with the message text, model selection, per-message toggles, and
+    /// any finalized-ready draft image attachments.
+    var onSubmit: (ChatComposerSubmission) -> Bool
 
     @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
     @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
 
     @State private var messageText = ""
+    @State private var imageAttachments: [ImageAttachmentRecord] = []
+    @State private var imageAttachmentError: String?
+    @State private var previewSelection: ImageAttachmentPreviewSelection?
     @State private var availableModels = SettingsStorage.loadAvailableModels()
     @State private var isInvestigationEnabled = false
     @State private var isInvestigationAvailable = InvestigateTool().isConfigured
+    @FocusState private var isMessageFieldFocused: Bool
 
     private var activeModelSelection: String {
         isInvestigationEnabled ? HomeModelSelection.clawModel : selectedModel
@@ -145,6 +158,20 @@ struct ChatComposerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if allowsImageAttachments, !imageAttachments.isEmpty {
+                ImageAttachmentThumbnailStrip(
+                    attachments: imageAttachments,
+                    onSelect: {
+                        previewSelection = ImageAttachmentPreviewSelection(
+                            attachments: imageAttachments,
+                            initialIndex: $0
+                        )
+                    },
+                    onRemove: removeImageAttachment
+                )
+                .padding(.bottom, 8)
+            }
+
             HStack(alignment: .top, spacing: 8) {
                 TextField("Message SwiftClaw...", text: $messageText, axis: .vertical)
                     .textFieldStyle(.plain)
@@ -152,18 +179,9 @@ struct ChatComposerView: View {
                     .lineLimit(1...3)
                     .fixedSize(horizontal: false, vertical: true)
                     .disabled(composerControlsDisabled)
+                    .focused($isMessageFieldFocused)
                     .onKeyPress { keyPress in
-                        guard keyPress.key == .return else {
-                            return .ignored
-                        }
-
-                        if keyPress.modifiers.contains(.shift) {
-                            messageText.append("\n")
-                        } else {
-                            submitMessage()
-                        }
-
-                        return .handled
+                        handleKeyPress(keyPress)
                     }
             }
 
@@ -232,14 +250,36 @@ struct ChatComposerView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.bottom, 10)
             }
+
+            if let imageAttachmentError {
+                Text(imageAttachmentError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 10)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 16)
         .glassEffect(in: .rect(cornerRadius: 16.0))
+        .background {
+            ImagePasteKeyMonitor(
+                isEnabled: allowsImageAttachments && isMessageFieldFocused && !composerControlsDisabled,
+                onPasteImage: pasteImagesFromClipboard
+            )
+            .frame(width: 0, height: 0)
+        }
+        .imageAttachmentPreviewOverlay(selection: $previewSelection)
         .onAppear(perform: refreshModels)
         .onDisappear {
             // Reset the transient one-shot toggle if the composer goes away.
             setInvestigation(false)
+            clearDraftImageAttachments()
+        }
+        .onChange(of: allowsImageAttachments) { _, allowsImageAttachments in
+            if !allowsImageAttachments {
+                clearDraftImageAttachments()
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
             refreshModels()
@@ -272,14 +312,79 @@ struct ChatComposerView: View {
         isInvestigationEnabled = enabled
     }
 
+    private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        if keyPress.key == .return {
+            if keyPress.modifiers.contains(.shift) {
+                messageText.append("\n")
+            } else {
+                submitMessage()
+            }
+
+            return .handled
+        }
+
+        if keyPress.key == "v", keyPress.modifiers.contains(.command) {
+            return pasteImagesFromClipboard() ? .handled : .ignored
+        }
+
+        return .ignored
+    }
+
+    private func pasteImagesFromClipboard() -> Bool {
+        guard allowsImageAttachments, !composerControlsDisabled else {
+            return false
+        }
+
+        let images = ClipboardImageImporter.imagesForPaste()
+        guard !images.isEmpty else {
+            return false
+        }
+
+        do {
+            let newAttachments = try ImageAttachmentStore.shared.importImages(
+                images,
+                existingAttachments: imageAttachments
+            )
+            imageAttachments.append(contentsOf: newAttachments)
+            imageAttachmentError = nil
+        } catch {
+            imageAttachmentError = error.localizedDescription
+        }
+
+        return true
+    }
+
+    private func removeImageAttachment(_ attachment: ImageAttachmentRecord) {
+        imageAttachments.removeAll { $0.id == attachment.id }
+        ImageAttachmentStore.shared.deleteDraftAttachments([attachment])
+    }
+
+    private func clearDraftImageAttachments() {
+        ImageAttachmentStore.shared.deleteDraftAttachments(imageAttachments)
+        imageAttachments = []
+        imageAttachmentError = nil
+        previewSelection = nil
+    }
+
     private func submitMessage() {
         let input = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !input.isEmpty, let model = effectiveModel, !isBusy else {
             return
         }
 
-        if onSubmit(input, model, isInvestigationEnabled && isInvestigationAvailable) {
+        let attachments = allowsImageAttachments ? imageAttachments : []
+        let submission = ChatComposerSubmission(
+            text: input,
+            model: model,
+            isInvestigationEnabled: isInvestigationEnabled && isInvestigationAvailable,
+            imageAttachments: attachments,
+            supportsImages: allowsImageAttachments
+        )
+
+        if onSubmit(submission) {
             messageText = ""
+            imageAttachments = []
+            imageAttachmentError = nil
             // Investigation is a one-shot toggle: it always resets (and the
             // model selector unlocks) after the message is submitted.
             setInvestigation(false)

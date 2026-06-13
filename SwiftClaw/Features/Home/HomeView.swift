@@ -46,8 +46,8 @@ struct HomeView: View {
             ChatComposerView(
                 isBusy: isCreatingChat,
                 submissionError: submissionError
-            ) { input, model, investigate in
-                submitMessage(input: input, model: model, investigate: investigate)
+            ) { submission in
+                submitMessage(submission)
             }
             .padding(.horizontal, 40)
             .padding(.bottom, 24)
@@ -58,7 +58,8 @@ struct HomeView: View {
         }
     }
 
-    private func submitMessage(input: String, model: String, investigate: Bool) -> Bool {
+    private func submitMessage(_ submission: ChatComposerSubmission) -> Bool {
+        let input = submission.text
         guard !input.isEmpty, !isCreatingChat else {
             return false
         }
@@ -68,9 +69,22 @@ struct HomeView: View {
 
         let chat = Chat(
             title: ChatDefaults.title(for: input),
-            modelSelection: model,
+            modelSelection: submission.model,
             isGenerating: true
         )
+
+        let finalizedAttachments: [ImageAttachmentRecord]
+        do {
+            finalizedAttachments = try ImageAttachmentStore.shared.finalizeDraftAttachments(
+                submission.imageAttachments,
+                for: chat.id
+            )
+        } catch {
+            submissionError = error.localizedDescription
+            isCreatingChat = false
+            return false
+        }
+
         let systemMessage = ChatMessage(
             role: .system,
             content: ChatDefaults.systemPrompt,
@@ -79,7 +93,8 @@ struct HomeView: View {
         let userMessage = ChatMessage(
             role: .user,
             content: input,
-            sortIndex: 1
+            sortIndex: 1,
+            imageAttachments: finalizedAttachments
         )
 
         systemMessage.chat = chat
@@ -92,7 +107,9 @@ struct HomeView: View {
 
         do {
             try modelContext.save()
+            ImageAttachmentStore.shared.deleteDraftAttachments(submission.imageAttachments)
         } catch {
+            ImageAttachmentStore.shared.deleteAttachments(finalizedAttachments)
             submissionError = "Couldn't create the chat."
             isCreatingChat = false
             return false
@@ -105,7 +122,8 @@ struct HomeView: View {
             await ChatCompletionService.completeChat(
                 chat,
                 in: modelContext,
-                allowInvestigation: investigate
+                allowInvestigation: submission.isInvestigationEnabled,
+                supportsImages: submission.supportsImages
             )
         }
 

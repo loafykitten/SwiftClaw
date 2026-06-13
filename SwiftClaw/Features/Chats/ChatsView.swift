@@ -71,17 +71,23 @@ struct ChatsView: View {
 
     private func deleteChat(_ chat: Chat) {
         let fallback = orderedChats.first { $0.id != chat.id }?.id
+        let chatID = chat.id
 
         modelContext.delete(chat)
         selectedChatID = selectedChatID == chat.id ? fallback : selectedChatID
-        saveChatListChange()
+        if saveChatListChange() {
+            ImageAttachmentStore.shared.deleteImages(for: chatID)
+        }
     }
 
-    private func saveChatListChange() {
+    @discardableResult
+    private func saveChatListChange() -> Bool {
         do {
             try modelContext.save()
+            return true
         } catch {
             assertionFailure("Couldn't save chat list change: \(error.localizedDescription)")
+            return false
         }
     }
 }
@@ -300,10 +306,11 @@ private struct ChatTranscriptView: View {
     @Environment(\.modelContext) private var modelContext
 
     let chat: Chat
+    @State private var previewSelection: ImageAttachmentPreviewSelection?
 
     private var scrollTrigger: String {
         let messages = chat.visibleMessages
-            .map { "\($0.id.uuidString):\($0.content.count)" }
+            .map { "\($0.id.uuidString):\($0.content.count):\($0.imageAttachments.count)" }
             .joined(separator: "|")
         let error = chat.errorMessage ?? ""
 
@@ -320,7 +327,10 @@ private struct ChatTranscriptView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         ForEach(chat.visibleMessages) { message in
-                            ChatMessageRow(message: message)
+                            ChatMessageRow(
+                                message: message,
+                                showImagePreview: showImagePreview
+                            )
                                 .id(message.id.uuidString)
                         }
 
@@ -349,13 +359,14 @@ private struct ChatTranscriptView: View {
                 }
             }
 
-            ChatComposerView(isBusy: chat.isGenerating) { input, model, investigate in
-                submitMessage(input: input, model: model, investigate: investigate)
+            ChatComposerView(isBusy: chat.isGenerating) { submission in
+                submitMessage(submission)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .imageAttachmentPreviewOverlay(selection: $previewSelection)
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
@@ -372,19 +383,47 @@ private struct ChatTranscriptView: View {
         }
     }
 
-    private func submitMessage(input: String, model: String, investigate: Bool) -> Bool {
+    private func showImagePreview(
+        attachments: [ImageAttachmentRecord],
+        initialIndex: Int
+    ) {
+        previewSelection = ImageAttachmentPreviewSelection(
+            attachments: attachments,
+            initialIndex: initialIndex
+        )
+    }
+
+    private func submitMessage(_ submission: ChatComposerSubmission) -> Bool {
+        let input = submission.text
         guard !input.isEmpty, !chat.isGenerating else {
             return false
         }
 
-        chat.modelSelection = model
+        let finalizedAttachments: [ImageAttachmentRecord]
+        do {
+            finalizedAttachments = try ImageAttachmentStore.shared.finalizeDraftAttachments(
+                submission.imageAttachments,
+                for: chat.id
+            )
+        } catch {
+            chat.errorMessage = error.localizedDescription
+            return false
+        }
+
+        chat.modelSelection = submission.model
         chat.errorMessage = nil
         chat.isGenerating = true
-        chat.appendMessage(role: .user, content: input)
+        chat.appendMessage(
+            role: .user,
+            content: input,
+            imageAttachments: finalizedAttachments
+        )
 
         do {
             try modelContext.save()
+            ImageAttachmentStore.shared.deleteDraftAttachments(submission.imageAttachments)
         } catch {
+            ImageAttachmentStore.shared.deleteAttachments(finalizedAttachments)
             chat.isGenerating = false
             chat.errorMessage = "Couldn't save your message."
             return false
@@ -394,7 +433,8 @@ private struct ChatTranscriptView: View {
             await ChatCompletionService.completeChat(
                 chat,
                 in: modelContext,
-                allowInvestigation: investigate
+                allowInvestigation: submission.isInvestigationEnabled,
+                supportsImages: submission.supportsImages
             )
         }
 
@@ -436,6 +476,7 @@ private struct ChatHeaderView: View {
 
 private struct ChatMessageRow: View {
     let message: ChatMessage
+    let showImagePreview: ([ImageAttachmentRecord], Int) -> Void
 
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
     @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
@@ -454,6 +495,10 @@ private struct ChatMessageRow: View {
         message.role == .user
     }
 
+    private var imageAttachments: [ImageAttachmentRecord] {
+        isUser ? message.imageAttachments : []
+    }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 0) {
             if isUser {
@@ -462,14 +507,22 @@ private struct ChatMessageRow: View {
                 AssistantAvatarView()
             }
 
-            ChatMarkdownView(
-                content: message.content,
-                defaultForeground: isUser ? .white : .primary,
-                codeAccent: isUser ? .white : accent,
-                quoteAccent: quoteAccent,
-                linkAccent: isUser ? .white : accent,
-                maximumContentWidth: ChatBubbleLayout.contentMaxWidth
-            )
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
+                if !imageAttachments.isEmpty {
+                    ImageAttachmentFanStack(
+                        attachments: imageAttachments,
+                        onSelect: { showImagePreview(imageAttachments, $0) }
+                    )
+                }
+
+                ChatMarkdownView(
+                    content: message.content,
+                    defaultForeground: isUser ? .white : .primary,
+                    codeAccent: isUser ? .white : accent,
+                    quoteAccent: quoteAccent,
+                    linkAccent: isUser ? .white : accent,
+                    maximumContentWidth: ChatBubbleLayout.contentMaxWidth
+                )
                 .textSelection(.enabled)
                 .padding(.horizontal, ChatBubbleLayout.horizontalPadding)
                 .padding(.vertical, ChatBubbleLayout.verticalPadding)
@@ -477,6 +530,7 @@ private struct ChatMessageRow: View {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(isUser ? accent : Color.secondary.opacity(0.12))
                 }
+            }
                 .frame(maxWidth: ChatBubbleLayout.maxWidth, alignment: isUser ? .trailing : .leading)
                 .padding(isUser ? .trailing : .leading, ChatBubbleLayout.avatarSpacing)
                 .onAppear {

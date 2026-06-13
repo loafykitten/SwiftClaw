@@ -51,9 +51,18 @@ final class Chat {
         }
     }
 
-    func appendMessage(role: ChatMessageRole, content: String) {
+    func appendMessage(
+        role: ChatMessageRole,
+        content: String,
+        imageAttachments: [ImageAttachmentRecord] = []
+    ) {
         let nextIndex = (messages.map(\.sortIndex).max() ?? -1) + 1
-        let message = ChatMessage(role: role, content: content, sortIndex: nextIndex)
+        let message = ChatMessage(
+            role: role,
+            content: content,
+            sortIndex: nextIndex,
+            imageAttachments: imageAttachments
+        )
         message.chat = self
         messages.append(message)
         updatedAt = .now
@@ -65,6 +74,7 @@ final class ChatMessage {
     @Attribute(.unique) var id: UUID
     var roleRawValue: String
     var content: String
+    var imageAttachmentsData: Data?
     var createdAt: Date
     var sortIndex: Int
     var chat: Chat?
@@ -74,11 +84,13 @@ final class ChatMessage {
         role: ChatMessageRole,
         content: String,
         createdAt: Date = .now,
-        sortIndex: Int
+        sortIndex: Int,
+        imageAttachments: [ImageAttachmentRecord] = []
     ) {
         self.id = id
         self.roleRawValue = role.rawValue
         self.content = content
+        self.imageAttachmentsData = Self.encodeImageAttachments(imageAttachments)
         self.createdAt = createdAt
         self.sortIndex = sortIndex
     }
@@ -93,14 +105,45 @@ final class ChatMessage {
     }
 
     var inferenceMessage: InferenceMessage? {
+        inferenceMessage(includingImages: true)
+    }
+
+    var imageAttachments: [ImageAttachmentRecord] {
+        get {
+            guard let imageAttachmentsData,
+                  !imageAttachmentsData.isEmpty,
+                  let attachments = try? JSONDecoder().decode(
+                    [ImageAttachmentRecord].self,
+                    from: imageAttachmentsData
+                  ) else {
+                return []
+            }
+
+            return attachments
+        }
+        set {
+            imageAttachmentsData = Self.encodeImageAttachments(newValue)
+        }
+    }
+
+    func inferenceMessage(includingImages: Bool) -> InferenceMessage? {
         switch role {
         case .system:
             .system(content)
         case .user:
-            .user(content)
+            .user(content, imageAttachments: includingImages ? imageAttachments : [])
         case .assistant:
             .assistant(content)
         }
+    }
+
+    private static func encodeImageAttachments(_ attachments: [ImageAttachmentRecord]) -> Data? {
+        guard !attachments.isEmpty,
+              let data = try? JSONEncoder().encode(attachments) else {
+            return nil
+        }
+
+        return data
     }
 }
 

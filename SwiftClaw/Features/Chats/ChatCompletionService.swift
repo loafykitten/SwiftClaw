@@ -13,7 +13,8 @@ enum ChatCompletionService {
     static func completeChat(
         _ chat: Chat,
         in modelContext: ModelContext,
-        allowInvestigation: Bool = false
+        allowInvestigation: Bool = false,
+        supportsImages: Bool = true
     ) async {
         let activityScope = ToolActivityScope(chatID: chat.id, generationID: UUID())
 
@@ -26,7 +27,8 @@ enum ChatCompletionService {
             await completeScopedChat(
                 chat,
                 in: modelContext,
-                allowInvestigation: allowInvestigation
+                allowInvestigation: allowInvestigation,
+                supportsImages: supportsImages
             )
         }
     }
@@ -34,9 +36,12 @@ enum ChatCompletionService {
     private static func completeScopedChat(
         _ chat: Chat,
         in modelContext: ModelContext,
-        allowInvestigation: Bool
+        allowInvestigation: Bool,
+        supportsImages: Bool
     ) async {
-        var messages = chat.sortedMessages.compactMap(\.inferenceMessage)
+        var messages = chat.sortedMessages.compactMap {
+            $0.inferenceMessage(includingImages: supportsImages)
+        }
 
         if allowInvestigation {
             // Transient steering hint; deliberately not persisted to the chat.

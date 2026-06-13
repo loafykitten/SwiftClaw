@@ -34,14 +34,33 @@ enum InferenceError: LocalizedError {
 /// A chat message passed to ``InferenceService``.
 enum InferenceMessage: Sendable {
     case system(String)
-    case user(String)
+    case user(String, imageAttachments: [ImageAttachmentRecord] = [])
     case assistant(String)
 
     var chatParam: ChatQuery.ChatCompletionMessageParam {
         switch self {
-        case .system(let content): .system(.init(content: .textContent(content)))
-        case .user(let content): .user(.init(content: .string(content)))
-        case .assistant(let content): .assistant(.init(content: .textContent(content)))
+        case .system(let content):
+            return ChatQuery.ChatCompletionMessageParam.system(.init(content: .textContent(content)))
+        case .user(let content, let imageAttachments):
+            let imageData = imageAttachments.compactMap { attachment in
+                try? Data(contentsOf: attachment.fileURL)
+            }
+
+            guard !imageData.isEmpty else {
+                return ChatQuery.ChatCompletionMessageParam.user(.init(content: .string(content)))
+            }
+
+            var parts: [ChatQuery.ChatCompletionMessageParam.UserMessageParam.Content.ContentPart] = [
+                .text(.init(text: content))
+            ]
+
+            parts.append(contentsOf: imageData.map { data in
+                .image(.init(imageUrl: .init(imageData: data, detail: .auto)))
+            })
+
+            return ChatQuery.ChatCompletionMessageParam.user(.init(content: .contentParts(parts)))
+        case .assistant(let content):
+            return ChatQuery.ChatCompletionMessageParam.assistant(.init(content: .textContent(content)))
         }
     }
 }

@@ -27,5 +27,10 @@ let package = Package(
                 .process("Assets.xcassets"),
             ]
         ),
+        .testTarget(
+            name: "SwiftClawTests",
+            dependencies: ["SwiftClaw"],
+            path: "SwiftClawTests"
+        ),
     ]
 )
