@@ -5,7 +5,10 @@ struct ChatComposerView: View {
 
     var isBusy = false
     var submissionError: String?
-    var onSubmit: (String, String) -> Bool
+
+    /// Called with the message text, model selection, and whether the user
+    /// enabled Investigation for this message.
+    var onSubmit: (String, String, Bool) -> Bool
 
     @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
@@ -13,17 +16,23 @@ struct ChatComposerView: View {
 
     @State private var messageText = ""
     @State private var availableModels = SettingsStorage.loadAvailableModels()
+    @State private var isInvestigationEnabled = false
+    @State private var isInvestigationAvailable = InvestigateTool().isConfigured
+
+    private var activeModelSelection: String {
+        isInvestigationEnabled ? HomeModelSelection.clawModel : selectedModel
+    }
 
     private var selectedModelTitle: String {
         guard !availableModels.isEmpty else {
             return "(N/A)"
         }
 
-        if selectedModel == HomeModelSelection.swiftModel, isSwiftModelAvailable {
+        if activeModelSelection == HomeModelSelection.swiftModel, isSwiftModelAvailable {
             return "Swift Model"
         }
 
-        if selectedModel == HomeModelSelection.clawModel, isClawModelAvailable {
+        if activeModelSelection == HomeModelSelection.clawModel, isClawModelAvailable {
             return "Claw Model"
         }
 
@@ -31,16 +40,16 @@ struct ChatComposerView: View {
     }
 
     private var effectiveModel: String? {
-        if selectedModel == HomeModelSelection.swiftModel {
+        if activeModelSelection == HomeModelSelection.swiftModel {
             return isSwiftModelAvailable ? swiftModel : nil
         }
 
-        if selectedModel == HomeModelSelection.clawModel {
+        if activeModelSelection == HomeModelSelection.clawModel {
             return isClawModelAvailable ? clawModel : nil
         }
 
-        if !selectedModel.isEmpty, availableModels.contains(selectedModel) {
-            return selectedModel
+        if !activeModelSelection.isEmpty, availableModels.contains(activeModelSelection) {
+            return activeModelSelection
         }
 
         if !swiftModel.isEmpty, availableModels.contains(swiftModel) {
@@ -51,11 +60,13 @@ struct ChatComposerView: View {
     }
 
     private var modelSelectionDisabled: Bool {
-        availableModels.isEmpty || isBusy
+        // Investigation sends this message with the Claw Model, so the
+        // selector locks while the one-shot toggle is on.
+        availableModels.isEmpty || isBusy || isInvestigationEnabled
     }
 
     private var composerControlsDisabled: Bool {
-        modelSelectionDisabled || effectiveModel == nil
+        availableModels.isEmpty || isBusy || effectiveModel == nil
     }
 
     private var canSubmitMessage: Bool {
@@ -85,7 +96,7 @@ struct ChatComposerView: View {
     }
 
     private var isQuickModelSelection: Bool {
-        selectedModel == HomeModelSelection.swiftModel || selectedModel == HomeModelSelection.clawModel
+        activeModelSelection == HomeModelSelection.swiftModel || activeModelSelection == HomeModelSelection.clawModel
     }
 
     private var modelSelectionMenu: some View {
@@ -94,7 +105,7 @@ struct ChatComposerView: View {
                 Button {
                     selectedModel = option.selection
                 } label: {
-                    if selectedModel == option.selection {
+                    if activeModelSelection == option.selection {
                         Label(option.title, systemImage: "checkmark")
                     } else {
                         Text(option.title)
@@ -169,13 +180,28 @@ struct ChatComposerView: View {
                     .foregroundStyle(.secondary)
                     .disabled(composerControlsDisabled)
 
-                    Button {} label: {
+                    Button {
+                        setInvestigation(!isInvestigationEnabled)
+                    } label: {
                         Image(systemName: "magnifyingglass")
                             .frame(width: controlRowHeight, height: controlRowHeight)
+                            .background {
+                                if isInvestigationEnabled {
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(Color.accentColor.opacity(0.18))
+                                }
+                            }
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .disabled(composerControlsDisabled)
+                    .foregroundStyle(isInvestigationEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+                    .disabled(composerControlsDisabled || !isInvestigationAvailable || !isClawModelAvailable)
+                    .help(
+                        isInvestigationAvailable && isClawModelAvailable
+                            ? "Investigate this message in depth using the Claw Model"
+                            : "Investigation needs a Brave Search key plus Claw and Swift Models"
+                    )
+                    .accessibilityLabel("Investigation mode")
+                    .accessibilityAddTraits(isInvestigationEnabled ? .isSelected : [])
                 }
 
                 Spacer()
@@ -211,13 +237,39 @@ struct ChatComposerView: View {
         .padding(.top, 16)
         .glassEffect(in: .rect(cornerRadius: 16.0))
         .onAppear(perform: refreshModels)
+        .onDisappear {
+            // Reset the transient one-shot toggle if the composer goes away.
+            setInvestigation(false)
+        }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            refreshModels()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SettingsNotifications.keychainDidChange)) { notification in
+            guard notification.userInfo?[SettingsNotifications.changedKey] as? String == SettingsKeys.braveSearchAPIKey else {
+                return
+            }
+
             refreshModels()
         }
     }
 
     private func refreshModels() {
         availableModels = SettingsStorage.loadAvailableModels()
+        isInvestigationAvailable = InvestigateTool().isConfigured
+
+        if !isInvestigationAvailable || !isClawModelAvailable {
+            setInvestigation(false)
+        }
+    }
+
+    /// Turns investigation mode on or off. While on, this message uses the
+    /// Claw Model without changing the saved home model selection.
+    private func setInvestigation(_ enabled: Bool) {
+        guard enabled != isInvestigationEnabled else {
+            return
+        }
+
+        isInvestigationEnabled = enabled
     }
 
     private func submitMessage() {
@@ -226,8 +278,11 @@ struct ChatComposerView: View {
             return
         }
 
-        if onSubmit(input, model) {
+        if onSubmit(input, model, isInvestigationEnabled && isInvestigationAvailable) {
             messageText = ""
+            // Investigation is a one-shot toggle: it always resets (and the
+            // model selector unlocks) after the message is submitted.
+            setInvestigation(false)
         }
     }
 }

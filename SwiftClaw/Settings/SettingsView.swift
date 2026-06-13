@@ -516,6 +516,8 @@ private struct ProviderSettingsView: View {
     @KeychainStorage(SettingsKeys.neuralwattAPIKey) private var neuralwattAPIKey
     @KeychainStorage(SettingsKeys.openRouterAPIKey) private var openRouterAPIKey
     @KeychainStorage(SettingsKeys.braveSearchAPIKey) private var braveSearchAPIKey
+    @AppStorage(SettingsKeys.braveSearchRequestsPerSecond)
+    private var braveSearchRequestsPerSecond = SettingsStorage.defaultBraveSearchRequestsPerSecond
 
     @State private var azureDeployments = SettingsStorage.loadDeployments()
     @State private var neuralwattModels = SettingsStorage.loadStringList(forKey: SettingsKeys.neuralwattModels)
@@ -573,9 +575,27 @@ private struct ProviderSettingsView: View {
 
             Section(isExpanded: $braveSearchExpanded) {
                 APIKeyField(title: "API Key", text: $braveSearchAPIKey)
-                Text("Used by the Web Search tool.")
+                Text("Used by the Web Search and Investigation tools.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Request Limit")
+                        Spacer()
+                        Text("\(braveSearchRequestsPerSecond, specifier: "%.1f") req/s")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(
+                        value: $braveSearchRequestsPerSecond,
+                        in: SettingsStorage.braveSearchRequestsPerSecondRange,
+                        step: 0.5
+                    )
+                    Text("Match your Brave plan's rate limit. The free tier allows 1 request per second.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } header: {
                 Text("Brave Search")
             }

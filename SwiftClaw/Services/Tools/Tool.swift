@@ -130,7 +130,15 @@ protocol Tool: Sendable {
     /// Whether the tool has everything it needs (API keys, etc.) to run.
     var isConfigured: Bool { get }
 
+    /// Whether the tool is only offered when the user explicitly enables it
+    /// for a message (e.g. via a composer toggle), rather than on every request.
+    var requiresExplicitEnable: Bool { get }
+
     func execute(arguments: [String: JSONValue]) async throws -> String
+}
+
+extension Tool {
+    var requiresExplicitEnable: Bool { false }
 }
 
 extension Tool {

@@ -325,7 +325,7 @@ private struct ChatTranscriptView: View {
                         }
 
                         if chat.isGenerating {
-                            GeneratingMessageRow()
+                            GeneratingMessageRow(chatID: chat.id)
                                 .id("generating")
                         }
 
@@ -349,8 +349,8 @@ private struct ChatTranscriptView: View {
                 }
             }
 
-            ChatComposerView(isBusy: chat.isGenerating) { input, model in
-                submitMessage(input: input, model: model)
+            ChatComposerView(isBusy: chat.isGenerating) { input, model, investigate in
+                submitMessage(input: input, model: model, investigate: investigate)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 20)
@@ -372,7 +372,7 @@ private struct ChatTranscriptView: View {
         }
     }
 
-    private func submitMessage(input: String, model: String) -> Bool {
+    private func submitMessage(input: String, model: String, investigate: Bool) -> Bool {
         guard !input.isEmpty, !chat.isGenerating else {
             return false
         }
@@ -391,7 +391,11 @@ private struct ChatTranscriptView: View {
         }
 
         Task {
-            await ChatCompletionService.completeChat(chat, in: modelContext)
+            await ChatCompletionService.completeChat(
+                chat,
+                in: modelContext,
+                allowInvestigation: investigate
+            )
         }
 
         return true
@@ -462,16 +466,18 @@ private struct ChatMessageRow: View {
                 content: message.content,
                 defaultForeground: isUser ? .white : .primary,
                 codeAccent: isUser ? .white : accent,
-                quoteAccent: quoteAccent
+                quoteAccent: quoteAccent,
+                linkAccent: isUser ? .white : accent,
+                maximumContentWidth: ChatBubbleLayout.contentMaxWidth
             )
                 .textSelection(.enabled)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, ChatBubbleLayout.horizontalPadding)
+                .padding(.vertical, ChatBubbleLayout.verticalPadding)
                 .background {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(isUser ? accent : Color.secondary.opacity(0.12))
                 }
-                .frame(maxWidth: 560, alignment: isUser ? .trailing : .leading)
+                .frame(maxWidth: ChatBubbleLayout.maxWidth, alignment: isUser ? .trailing : .leading)
 
             if isUser {
                 UserAvatarView()
@@ -483,19 +489,27 @@ private struct ChatMessageRow: View {
 }
 
 private struct GeneratingMessageRow: View {
+    let chatID: UUID
+
+    private var statusLabel: String? {
+        ToolActivityMonitor.shared.statusLabel(forChatID: chatID)
+    }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 10) {
             AssistantAvatarView()
 
             HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Thinking")
-                    .font(.body)
-                    .foregroundStyle(.secondary)
+                if let statusLabel {
+                    Text(statusLabel)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.opacity)
+                }
+                AnimatedEllipsisView()
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.vertical, 12)
             .background {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.secondary.opacity(0.12))
@@ -503,6 +517,26 @@ private struct GeneratingMessageRow: View {
 
             Spacer(minLength: 80)
         }
+    }
+}
+
+/// Three dots pulsing in sequence — the default "assistant is working"
+/// indicator shown while a response generates.
+private struct AnimatedEllipsisView: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { index in
+                    let wave = sin((time * 2.2 - Double(index) * 0.4) * .pi)
+                    Circle()
+                        .fill(.secondary)
+                        .frame(width: 6, height: 6)
+                        .opacity(0.3 + 0.7 * max(0, wave))
+                }
+            }
+        }
+        .accessibilityLabel("Generating response")
     }
 }
 

@@ -100,6 +100,8 @@ enum SettingsKeys {
     static let neuralwattModels = "settings.neuralwatt.models"
     static let openRouterAPIKey = "settings.openRouter.apiKey"
     static let braveSearchAPIKey = "settings.braveSearch.apiKey"
+    static let braveSearchRequestsPerSecond = "settings.braveSearch.requestsPerSecond"
+    static let investigationMaxSubAgents = "settings.tools.investigation.maxSubAgents"
     static let openRouterModels = "settings.openRouter.models"
     static let swiftModel = "settings.behaviors.swiftModel"
     static let clawModel = "settings.behaviors.clawModel"
@@ -107,6 +109,11 @@ enum SettingsKeys {
     static let homeModel = "settings.home.model"
     static let personaDisplayName = "settings.persona.displayName"
     static let personaAvatarData = "settings.persona.avatarData"
+}
+
+enum SettingsNotifications {
+    static let keychainDidChange = Notification.Name("settings.keychain.didChange")
+    static let changedKey = "changedKey"
 }
 
 struct AzureDeployment: Identifiable, Codable, Hashable {
@@ -168,5 +175,37 @@ enum SettingsStorage {
 
     static func saveStringList(_ values: [String], forKey key: String) {
         UserDefaults.standard.set(values, forKey: key)
+    }
+
+    static let defaultBraveSearchRequestsPerSecond = 1.0
+    static let braveSearchRequestsPerSecondRange: ClosedRange<Double> = 0.5...20
+
+    static func loadBraveSearchRequestsPerSecond() -> Double {
+        let stored = UserDefaults.standard.double(forKey: SettingsKeys.braveSearchRequestsPerSecond)
+
+        guard stored > 0 else {
+            return defaultBraveSearchRequestsPerSecond
+        }
+
+        return min(
+            max(stored, braveSearchRequestsPerSecondRange.lowerBound),
+            braveSearchRequestsPerSecondRange.upperBound
+        )
+    }
+
+    static let defaultInvestigationMaxSubAgents = 3
+    static let investigationMaxSubAgentsRange: ClosedRange<Int> = 1...5
+
+    static func loadInvestigationMaxSubAgents() -> Int {
+        let stored = UserDefaults.standard.integer(forKey: SettingsKeys.investigationMaxSubAgents)
+
+        guard stored > 0 else {
+            return defaultInvestigationMaxSubAgents
+        }
+
+        return min(
+            max(stored, investigationMaxSubAgentsRange.lowerBound),
+            investigationMaxSubAgentsRange.upperBound
+        )
     }
 }

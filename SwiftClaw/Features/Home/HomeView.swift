@@ -46,8 +46,8 @@ struct HomeView: View {
             ChatComposerView(
                 isBusy: isCreatingChat,
                 submissionError: submissionError
-            ) { input, model in
-                submitMessage(input: input, model: model)
+            ) { input, model, investigate in
+                submitMessage(input: input, model: model, investigate: investigate)
             }
             .padding(.horizontal, 40)
             .padding(.bottom, 24)
@@ -58,7 +58,7 @@ struct HomeView: View {
         }
     }
 
-    private func submitMessage(input: String, model: String) -> Bool {
+    private func submitMessage(input: String, model: String, investigate: Bool) -> Bool {
         guard !input.isEmpty, !isCreatingChat else {
             return false
         }
@@ -102,7 +102,11 @@ struct HomeView: View {
         onChatCreated(chat.id)
 
         Task {
-            await ChatCompletionService.completeChat(chat, in: modelContext)
+            await ChatCompletionService.completeChat(
+                chat,
+                in: modelContext,
+                allowInvestigation: investigate
+            )
         }
 
         return true

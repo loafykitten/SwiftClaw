@@ -4,6 +4,7 @@ import Foundation
 struct ToolRegistry: Sendable {
     static let shared = ToolRegistry(tools: [
         WebSearchTool(),
+        InvestigateTool(),
     ])
 
     let tools: [any Tool]
@@ -16,9 +17,17 @@ struct ToolRegistry: Sendable {
         tools.first { $0.name == name }
     }
 
-    /// Tools that are currently configured and ready to run.
+    /// Tools that are configured and offered to the model on every request.
     var availableTools: [any Tool] {
-        tools.filter(\.isConfigured)
+        availableTools(includingExplicitlyEnabled: false)
+    }
+
+    /// Configured tools, optionally including those gated behind an explicit
+    /// per-message user toggle (like Investigation).
+    func availableTools(includingExplicitlyEnabled: Bool) -> [any Tool] {
+        tools.filter { tool in
+            tool.isConfigured && (includingExplicitlyEnabled || !tool.requiresExplicitEnable)
+        }
     }
 
     /// Looks up a tool by name and executes it with model-produced JSON arguments.

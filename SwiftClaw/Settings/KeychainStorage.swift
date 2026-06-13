@@ -24,8 +24,14 @@ enum Keychain {
     }
 
     static func set(_ value: String, forKey key: String) {
+        let existingValue = string(forKey: key)
+
         guard !value.isEmpty else {
             delete(key)
+            return
+        }
+
+        guard existingValue != value else {
             return
         }
 
@@ -41,11 +47,15 @@ enum Keychain {
             [kSecValueData as String: data] as CFDictionary
         )
 
-        if status == errSecItemNotFound {
+        if status == errSecSuccess {
+            postChange(forKey: key)
+        } else if status == errSecItemNotFound {
             var addQuery = query
             addQuery[kSecValueData as String] = data
             addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            SecItemAdd(addQuery as CFDictionary, nil)
+            if SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess {
+                postChange(forKey: key)
+            }
         }
     }
 
@@ -56,7 +66,9 @@ enum Keychain {
             kSecAttrAccount as String: key,
         ]
 
-        SecItemDelete(query as CFDictionary)
+        if SecItemDelete(query as CFDictionary) == errSecSuccess {
+            postChange(forKey: key)
+        }
     }
 
     /// One-time migration of API keys previously stored in UserDefaults.
@@ -65,6 +77,7 @@ enum Keychain {
             SettingsKeys.azureAPIKey,
             SettingsKeys.neuralwattAPIKey,
             SettingsKeys.openRouterAPIKey,
+            SettingsKeys.braveSearchAPIKey,
         ]
         let defaults = UserDefaults.standard
 
@@ -75,6 +88,14 @@ enum Keychain {
 
             defaults.removeObject(forKey: key)
         }
+    }
+
+    private static func postChange(forKey key: String) {
+        NotificationCenter.default.post(
+            name: SettingsNotifications.keychainDidChange,
+            object: nil,
+            userInfo: [SettingsNotifications.changedKey: key]
+        )
     }
 }
 

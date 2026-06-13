@@ -29,6 +29,9 @@ extension OpenAICompatibleProvider {
             token: apiKey,
             host: endpoint.host,
             basePath: endpoint.basePath,
+            // Generous timeout: investigation runs and slower local models
+            // routinely outlive the library's 60s default.
+            timeoutInterval: 300,
             // OpenAI-compatible providers commonly omit fields the strict
             // decoder treats as required.
             parsingOptions: .relaxed

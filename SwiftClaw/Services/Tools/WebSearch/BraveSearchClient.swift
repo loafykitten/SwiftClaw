@@ -13,15 +13,34 @@ struct BraveSearchClient: Sendable {
 
     enum ClientError: LocalizedError {
         case missingAPIKey
-        case badResponse(statusCode: Int, body: String)
+        case badResponse(statusCode: Int, body: String, retryAfter: TimeInterval?)
 
         var errorDescription: String? {
             switch self {
             case .missingAPIKey:
                 "Brave Search API key is not set. Add it in Settings → Providers."
-            case .badResponse(let statusCode, let body):
+            case .badResponse(let statusCode, let body, _):
                 "Brave Search returned HTTP \(statusCode): \(body)"
             }
+        }
+
+        /// Whether retrying the request may succeed (rate limiting or a
+        /// transient server-side failure).
+        var isRetryable: Bool {
+            guard case .badResponse(let statusCode, _, _) = self else {
+                return false
+            }
+
+            return statusCode == 429 || (500..<600).contains(statusCode)
+        }
+
+        /// Server-suggested wait before retrying, from the Retry-After header.
+        var suggestedRetryDelay: TimeInterval? {
+            guard case .badResponse(_, _, let retryAfter) = self else {
+                return nil
+            }
+
+            return retryAfter
         }
     }
 
@@ -37,6 +56,8 @@ struct BraveSearchClient: Sendable {
         guard !apiKey.isEmpty else {
             throw ClientError.missingAPIKey
         }
+
+        await BraveRateGate.shared.waitTurn()
 
         var components = URLComponents(url: Self.endpoint, resolvingAgainstBaseURL: false)!
         components.queryItems = [
@@ -54,7 +75,13 @@ struct BraveSearchClient: Sendable {
 
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
             let body = String(data: data.prefix(500), encoding: .utf8) ?? ""
-            throw ClientError.badResponse(statusCode: http.statusCode, body: body)
+            let retryAfter = http.value(forHTTPHeaderField: "Retry-After")
+                .flatMap(TimeInterval.init)
+            throw ClientError.badResponse(
+                statusCode: http.statusCode,
+                body: body,
+                retryAfter: retryAfter
+            )
         }
 
         let decoded = try JSONDecoder().decode(SearchResponse.self, from: data)
