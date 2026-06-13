@@ -192,12 +192,14 @@ struct ChatComposerView: View {
                 Image(systemName: "chevron.down")
                     .font(.caption2)
             }
-            .frame(width: modelControlWidth, height: controlRowHeight, alignment: .center)
             .foregroundStyle(.secondary)
+            .frame(width: modelControlWidth, height: controlRowHeight, alignment: .center)
+            .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .menuIndicator(.hidden)
         .disabled(modelSelectionDisabled)
         .frame(height: controlRowHeight, alignment: .center)
+        .pointingHandCursor(isDisabled: modelSelectionDisabled)
     }
 
     private var reasoningMenu: some View {
@@ -223,12 +225,14 @@ struct ChatComposerView: View {
                 Image(systemName: "chevron.down")
                     .font(.caption2)
             }
-            .frame(width: reasoningControlWidth, height: controlRowHeight, alignment: .center)
             .foregroundStyle(.secondary)
+            .frame(width: reasoningControlWidth, height: controlRowHeight, alignment: .center)
+            .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .menuIndicator(.hidden)
         .disabled(composerControlsDisabled || !selectedModelSupportsReasoning)
         .frame(height: controlRowHeight, alignment: .center)
+        .pointingHandCursor(isDisabled: composerControlsDisabled || !selectedModelSupportsReasoning)
         .help("Reasoning effort")
         .accessibilityLabel("Reasoning effort \(selectedReasoningEffort.displayName)")
     }
@@ -314,11 +318,17 @@ struct ChatComposerView: View {
                     } label: {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.title2)
-                            .frame(width: controlRowHeight, height: controlRowHeight)
+                            .foregroundStyle(.tint)
+                            .composerControlHoverEffect(
+                                width: controlRowHeight,
+                                height: controlRowHeight,
+                                isDisabled: !canSubmitMessage,
+                                hoverScale: 1.08
+                            )
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(.tint)
                     .disabled(!canSubmitMessage)
+                    .accessibilityLabel("Send message")
                 }
             }
             .frame(height: controlRowHeight, alignment: .center)
@@ -578,6 +588,132 @@ struct ChatComposerView: View {
     }
 }
 
+private struct ComposerControlHoverEffect: ViewModifier {
+    let width: CGFloat
+    let height: CGFloat
+    var isSelected = false
+    var isDisabled = false
+    var cornerRadius: CGFloat = 6
+    var hoverScale: CGFloat = 1.03
+
+    @State private var isHovering = false
+
+    private var isHoverActive: Bool {
+        isHovering && !isDisabled
+    }
+
+    private var isActive: Bool {
+        !isDisabled && (isHovering || isSelected)
+    }
+
+    private var fillOpacity: Double {
+        if isSelected {
+            return isHoverActive ? 0.26 : 0.18
+        }
+
+        return isHoverActive ? 0.12 : 0
+    }
+
+    private var strokeOpacity: Double {
+        isActive ? 0.22 : 0
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .frame(width: width, height: height, alignment: .center)
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(Color.accentColor.opacity(fillOpacity))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .strokeBorder(Color.accentColor.opacity(strokeOpacity), lineWidth: 1)
+            }
+            .shadow(
+                color: Color.accentColor.opacity(isHoverActive ? 0.14 : 0),
+                radius: isHoverActive ? 6 : 0,
+                x: 0,
+                y: isHoverActive ? 2 : 0
+            )
+            .scaleEffect(isHoverActive ? hoverScale : 1)
+            .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
+            .onHover { isHovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: isHovering)
+            .animation(.easeOut(duration: 0.12), value: isSelected)
+    }
+}
+
+private extension View {
+    func composerControlHoverEffect(
+        width: CGFloat,
+        height: CGFloat,
+        isSelected: Bool = false,
+        isDisabled: Bool = false,
+        hoverScale: CGFloat = 1.03
+    ) -> some View {
+        modifier(
+            ComposerControlHoverEffect(
+                width: width,
+                height: height,
+                isSelected: isSelected,
+                isDisabled: isDisabled,
+                hoverScale: hoverScale
+            )
+        )
+    }
+
+    func pointingHandCursor(isDisabled: Bool = false) -> some View {
+        modifier(PointingHandCursor(isDisabled: isDisabled))
+    }
+}
+
+private struct PointingHandCursor: ViewModifier {
+    let isDisabled: Bool
+
+    @State private var didPushCursor = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { isInside in
+                updateCursor(isInside: isInside)
+            }
+            .onChange(of: isDisabled) { _, isDisabled in
+                if isDisabled {
+                    popCursorIfNeeded()
+                }
+            }
+            .onDisappear {
+                popCursorIfNeeded()
+            }
+    }
+
+    private func updateCursor(isInside: Bool) {
+        #if os(macOS)
+        if isInside, !isDisabled {
+            guard !didPushCursor else {
+                return
+            }
+
+            NSCursor.pointingHand.push()
+            didPushCursor = true
+        } else {
+            popCursorIfNeeded()
+        }
+        #endif
+    }
+
+    private func popCursorIfNeeded() {
+        #if os(macOS)
+        guard didPushCursor else {
+            return
+        }
+
+        NSCursor.pop()
+        didPushCursor = false
+        #endif
+    }
+}
+
 private struct ComposerIconButton: View {
     let systemName: String
     let size: CGFloat
@@ -587,62 +723,27 @@ private struct ComposerIconButton: View {
     let accessibilityLabel: String
     let action: () -> Void
 
-    @State private var isHovering = false
-
-    private var cornerRadius: CGFloat {
-        6
-    }
-
-    private var isActive: Bool {
-        !isDisabled && (isHovering || isSelected)
-    }
-
     private var foregroundStyle: AnyShapeStyle {
         isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)
-    }
-
-    private var fillOpacity: Double {
-        if isSelected {
-            return isHovering && !isDisabled ? 0.26 : 0.18
-        }
-
-        return isHovering && !isDisabled ? 0.12 : 0
-    }
-
-    private var strokeOpacity: Double {
-        isActive ? 0.22 : 0
     }
 
     var body: some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .frame(width: size, height: size)
                 .foregroundStyle(foregroundStyle)
-                .background {
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .fill(Color.accentColor.opacity(fillOpacity))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .strokeBorder(Color.accentColor.opacity(strokeOpacity), lineWidth: 1)
-                }
-                .shadow(
-                    color: Color.accentColor.opacity(isHovering && !isDisabled ? 0.14 : 0),
-                    radius: isHovering && !isDisabled ? 6 : 0,
-                    x: 0,
-                    y: isHovering && !isDisabled ? 2 : 0
+                .composerControlHoverEffect(
+                    width: size,
+                    height: size,
+                    isSelected: isSelected,
+                    isDisabled: isDisabled,
+                    hoverScale: 1.08
                 )
-                .scaleEffect(isHovering && !isDisabled ? 1.08 : 1)
-                .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
         .help(helpText)
         .accessibilityLabel(accessibilityLabel)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .onHover { isHovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: isHovering)
-        .animation(.easeOut(duration: 0.12), value: isSelected)
     }
 }
 
