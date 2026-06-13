@@ -62,7 +62,8 @@ struct InferenceQueryTests {
                 .user("Hello"),
             ],
             systemPromptMode: .prependPersona,
-            personaPrompt: "Persona prompt"
+            personaPrompt: "Persona prompt",
+            conversationalOutputPrompt: ""
         )
 
         #expect(messages == [
@@ -75,7 +76,8 @@ struct InferenceQueryTests {
         let messages = InferenceService.messagesByApplyingSystemPromptMode(
             [.user("Hello")],
             systemPromptMode: .prependPersona,
-            personaPrompt: "Persona prompt"
+            personaPrompt: "Persona prompt",
+            conversationalOutputPrompt: ""
         )
 
         #expect(messages == [
@@ -93,7 +95,8 @@ struct InferenceQueryTests {
         let messages = InferenceService.messagesByApplyingSystemPromptMode(
             original,
             systemPromptMode: .standalone,
-            personaPrompt: "Persona prompt"
+            personaPrompt: "Persona prompt",
+            conversationalOutputPrompt: "Conversational output prompt"
         )
 
         #expect(messages == original)
@@ -106,11 +109,29 @@ struct InferenceQueryTests {
                 .user("Hello"),
             ],
             systemPromptMode: .prependPersona,
-            personaPrompt: "Persona prompt"
+            personaPrompt: "Persona prompt",
+            conversationalOutputPrompt: ""
         )
 
         #expect(messages == [
             .system("Persona prompt"),
+            .user("Hello"),
+        ])
+    }
+
+    @Test func prependsConversationalOutputPromptToFeatureSystemPrompts() {
+        let messages = InferenceService.messagesByApplyingSystemPromptMode(
+            [
+                .system("Feature prompt"),
+                .user("Hello"),
+            ],
+            systemPromptMode: .prependPersona,
+            personaPrompt: "Persona prompt",
+            conversationalOutputPrompt: "Conversational output prompt"
+        )
+
+        #expect(messages == [
+            .system("Persona prompt\n\nConversational output prompt\n\nFeature prompt"),
             .user("Hello"),
         ])
     }
@@ -129,6 +150,7 @@ struct InferenceQueryTests {
         let prompt = AssistantPersona.personaPrompt(userDefaults: defaults)
 
         #expect(prompt.contains("You are Clawdia"))
+        #expect(prompt.contains("# Personality"))
         #expect(prompt.contains("Be exact, kind, and lightly funny."))
     }
 

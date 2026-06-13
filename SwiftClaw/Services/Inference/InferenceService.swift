@@ -156,11 +156,17 @@ struct InferenceService: Sendable {
             capabilities: resolved.capabilities
         )
 
-        var chatMessages = Self.messagesByApplyingSystemPromptMode(
+        let preparedMessages = Self.messagesByApplyingSystemPromptMode(
             messages,
             systemPromptMode: systemPromptMode
         )
-        .map { $0.chatParam(includingImages: supportsImages) }
+        Self.logFormattedSystemPrompt(
+            in: preparedMessages,
+            providerID: resolved.provider.id,
+            modelID: resolved.modelID
+        )
+
+        var chatMessages = preparedMessages.map { $0.chatParam(includingImages: supportsImages) }
         let toolParams = supportsTools && !tools.isEmpty ? try tools.map { try $0.chatToolParam() } : nil
         let maxRounds = 8
 
@@ -280,12 +286,18 @@ struct InferenceService: Sendable {
         let client = try resolved.provider.makeClient()
         let supportsImages = resolved.capabilities.contains(.vision)
 
+        let preparedMessages = Self.messagesByApplyingSystemPromptMode(
+            messages,
+            systemPromptMode: systemPromptMode
+        )
+        Self.logFormattedSystemPrompt(
+            in: preparedMessages,
+            providerID: resolved.provider.id,
+            modelID: resolved.modelID
+        )
+
         let query = ChatQuery(
-            messages: Self.messagesByApplyingSystemPromptMode(
-                messages,
-                systemPromptMode: systemPromptMode
-            )
-            .map { $0.chatParam(includingImages: supportsImages) },
+            messages: preparedMessages.map { $0.chatParam(includingImages: supportsImages) },
             model: resolved.modelID,
             temperature: temperature
         )
@@ -324,15 +336,18 @@ struct InferenceService: Sendable {
     static func messagesByApplyingSystemPromptMode(
         _ messages: [InferenceMessage],
         systemPromptMode: InferenceSystemPromptMode,
-        personaPrompt: String = AssistantPersona.personaPrompt()
+        personaPrompt: String = AssistantPersona.personaPrompt(),
+        conversationalOutputPrompt: String = AssistantPersona.conversationalOutputPrompt
     ) -> [InferenceMessage] {
         guard systemPromptMode == .prependPersona else {
             return messages
         }
 
         let trimmedPersonaPrompt = personaPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedConversationalOutputPrompt = conversationalOutputPrompt
+            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard !trimmedPersonaPrompt.isEmpty else {
+        guard !trimmedPersonaPrompt.isEmpty || !trimmedConversationalOutputPrompt.isEmpty else {
             return messages
         }
 
@@ -354,10 +369,36 @@ struct InferenceService: Sendable {
             }
         }
 
-        let combinedSystemPrompt = ([trimmedPersonaPrompt] + systemPrompts)
+        let basePrompts = [trimmedPersonaPrompt, trimmedConversationalOutputPrompt]
+            .filter { !$0.isEmpty }
+        let combinedSystemPrompt = (basePrompts + systemPrompts)
             .joined(separator: "\n\n")
 
         return [.system(combinedSystemPrompt)] + nonSystemMessages
+    }
+
+    private static func logFormattedSystemPrompt(
+        in messages: [InferenceMessage],
+        providerID: InferenceProviderID,
+        modelID: String
+    ) {
+        let systemPrompts = messages.compactMap { message -> String? in
+            guard case .system(let content) = message else {
+                return nil
+            }
+
+            return content
+        }
+
+        let formattedPrompt = systemPrompts.isEmpty
+            ? "(none)"
+            : systemPrompts.joined(separator: "\n\n")
+
+        logger.info("""
+            Formatted system prompt sent via \(providerID.rawValue, privacy: .public) \
+            model \(modelID, privacy: .public):
+            \(formattedPrompt, privacy: .public)
+            """)
     }
 
     static func makeChatQuery(

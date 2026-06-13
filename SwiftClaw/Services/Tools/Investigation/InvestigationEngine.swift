@@ -130,6 +130,10 @@ struct InvestigationEngine: Sendable {
             You are the lead investigator planning a deep web investigation. \
             Today's date is \(Date.now.formatted(date: .long, time: .omitted)).
 
+            # Purpose
+            Plan the most useful follow-up research threads from the surface \
+            search results.
+
             Topic under investigation: \(subject)
 
             Surface search results:
@@ -262,6 +266,10 @@ struct InvestigationEngine: Sendable {
             You are a research sub-agent. Today's date is \
             \(Date.now.formatted(date: .long, time: .omitted)).
 
+            # Purpose
+            Answer one focused research question using only the provided search \
+            results.
+
             Question to answer: \(thread.question)
 
             Search results (each begins with its source number in brackets):
@@ -322,6 +330,10 @@ struct InvestigationEngine: Sendable {
         let prompt = """
             You are the lead investigator writing the final report of a deep web \
             investigation. Today's date is \(Date.now.formatted(date: .long, time: .omitted)).
+
+            # Purpose
+            Turn the surface results and follow-up findings into a concise, \
+            sourced investigation report.
 
             Topic: \(subject)
 
@@ -421,7 +433,8 @@ struct InvestigationEngine: Sendable {
         try await withDeadline(deadline) {
             try await InferenceService.shared.complete(
                 messages: messages,
-                model: model
+                model: model,
+                systemPromptMode: .standalone
             )
         }
     }
