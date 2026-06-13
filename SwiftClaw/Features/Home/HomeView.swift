@@ -85,24 +85,17 @@ struct HomeView: View {
             return false
         }
 
-        let systemMessage = ChatMessage(
-            role: .system,
-            content: ChatDefaults.systemPrompt,
-            sortIndex: 0
-        )
         let userMessage = ChatMessage(
             role: .user,
             content: input,
-            sortIndex: 1,
+            sortIndex: 0,
             imageAttachments: finalizedAttachments
         )
 
-        systemMessage.chat = chat
         userMessage.chat = chat
-        chat.messages = [systemMessage, userMessage]
+        chat.messages = [userMessage]
 
         modelContext.insert(chat)
-        modelContext.insert(systemMessage)
         modelContext.insert(userMessage)
 
         do {
@@ -149,7 +142,8 @@ struct HomeView: View {
                     .system(HomeBlurb.systemPrompt),
                     .user("Write one new blurb."),
                 ],
-                model: swiftModel
+                model: swiftModel,
+                systemPromptMode: .standalone
             )
 
             let cleaned = HomeBlurb.cleaned(response)

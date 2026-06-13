@@ -32,7 +32,7 @@ enum InferenceError: LocalizedError {
 }
 
 /// A chat message passed to ``InferenceService``.
-enum InferenceMessage: Sendable {
+enum InferenceMessage: Sendable, Equatable {
     case system(String)
     case user(String, imageAttachments: [ImageAttachmentRecord] = [])
     case assistant(String)
@@ -67,6 +67,11 @@ enum InferenceMessage: Sendable {
             return ChatQuery.ChatCompletionMessageParam.assistant(.init(content: .textContent(content)))
         }
     }
+}
+
+enum InferenceSystemPromptMode: Sendable {
+    case prependPersona
+    case standalone
 }
 
 /// A model selection resolved to its provider and provider-specific model identifier.
@@ -138,6 +143,7 @@ struct InferenceService: Sendable {
         model modelSelection: String,
         temperature: Double? = nil,
         reasoningEffort: ModelReasoningEffort? = nil,
+        systemPromptMode: InferenceSystemPromptMode = .prependPersona,
         tools: [any Tool] = []
     ) async throws -> String {
         let resolved = try resolve(modelSelection)
@@ -150,7 +156,11 @@ struct InferenceService: Sendable {
             capabilities: resolved.capabilities
         )
 
-        var chatMessages = messages.map { $0.chatParam(includingImages: supportsImages) }
+        var chatMessages = Self.messagesByApplyingSystemPromptMode(
+            messages,
+            systemPromptMode: systemPromptMode
+        )
+        .map { $0.chatParam(includingImages: supportsImages) }
         let toolParams = supportsTools && !tools.isEmpty ? try tools.map { try $0.chatToolParam() } : nil
         let maxRounds = 8
 
@@ -263,14 +273,19 @@ struct InferenceService: Sendable {
     func streamCompletion(
         messages: [InferenceMessage],
         model modelSelection: String,
-        temperature: Double? = nil
+        temperature: Double? = nil,
+        systemPromptMode: InferenceSystemPromptMode = .prependPersona
     ) throws -> AsyncThrowingStream<String, Error> {
         let resolved = try resolve(modelSelection)
         let client = try resolved.provider.makeClient()
         let supportsImages = resolved.capabilities.contains(.vision)
 
         let query = ChatQuery(
-            messages: messages.map { $0.chatParam(includingImages: supportsImages) },
+            messages: Self.messagesByApplyingSystemPromptMode(
+                messages,
+                systemPromptMode: systemPromptMode
+            )
+            .map { $0.chatParam(includingImages: supportsImages) },
             model: resolved.modelID,
             temperature: temperature
         )
@@ -304,6 +319,45 @@ struct InferenceService: Sendable {
         capabilities: Set<ModelCapability>
     ) -> ModelReasoningEffort? {
         capabilities.contains(.reasoning) ? reasoningEffort : nil
+    }
+
+    static func messagesByApplyingSystemPromptMode(
+        _ messages: [InferenceMessage],
+        systemPromptMode: InferenceSystemPromptMode,
+        personaPrompt: String = AssistantPersona.personaPrompt()
+    ) -> [InferenceMessage] {
+        guard systemPromptMode == .prependPersona else {
+            return messages
+        }
+
+        let trimmedPersonaPrompt = personaPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedPersonaPrompt.isEmpty else {
+            return messages
+        }
+
+        let legacyPrompt = AssistantPersona.legacyDefaultSystemPrompt
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var systemPrompts: [String] = []
+        var nonSystemMessages: [InferenceMessage] = []
+
+        for message in messages {
+            switch message {
+            case .system(let content):
+                let trimmedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmedContent.isEmpty && trimmedContent != legacyPrompt {
+                    systemPrompts.append(trimmedContent)
+                }
+            case .user, .assistant:
+                nonSystemMessages.append(message)
+            }
+        }
+
+        let combinedSystemPrompt = ([trimmedPersonaPrompt] + systemPrompts)
+            .joined(separator: "\n\n")
+
+        return [.system(combinedSystemPrompt)] + nonSystemMessages
     }
 
     static func makeChatQuery(

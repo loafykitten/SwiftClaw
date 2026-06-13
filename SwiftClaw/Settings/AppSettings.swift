@@ -109,6 +109,11 @@ enum SettingsKeys {
     static let homeModel = "settings.home.model"
     static let personaDisplayName = "settings.persona.displayName"
     static let personaAvatarData = "settings.persona.avatarData"
+    static let assistantDisplayName = "settings.assistant.displayName"
+    static let assistantAvatarData = "settings.assistant.avatarData"
+    static let assistantPersonalityPreset = "settings.assistant.personalityPreset"
+    static let assistantUsesCustomPersonality = "settings.assistant.usesCustomPersonality"
+    static let assistantCustomPersonality = "settings.assistant.customPersonality"
 }
 
 enum SettingsNotifications {

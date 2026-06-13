@@ -154,10 +154,6 @@ enum ChatMessageRole: String, Codable {
 }
 
 enum ChatDefaults {
-    static let systemPrompt = """
-        You are SwiftClaw, a helpful personal AI assistant. Be clear, practical, and concise.
-        """
-
     static func title(for input: String) -> String {
         let singleLine = input
             .split(whereSeparator: \.isNewline)

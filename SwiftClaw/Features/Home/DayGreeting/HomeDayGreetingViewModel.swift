@@ -42,7 +42,8 @@ final class HomeDayGreetingViewModel: ObservableObject {
                     .user(HomeDayGreetingGenerator.userPrompt(for: context, userName: userName)),
                 ],
                 model: swiftModel,
-                temperature: 0.8
+                temperature: 0.8,
+                systemPromptMode: .standalone
             )
 
             let cleaned = HomeDayGreetingGenerator.cleaned(response, userName: userName)

@@ -639,17 +639,48 @@ private struct ChatErrorView: View {
 }
 
 private struct AssistantAvatarView: View {
+    @AppStorage(SettingsKeys.assistantAvatarData) private var avatarData = Data()
+    @AppStorage(SettingsKeys.assistantDisplayName) private var displayName = AssistantPersona.defaultDisplayName
+
+    #if os(macOS)
+    private var image: NSImage? {
+        AssistantPersona.avatarImage(
+            overrideData: avatarData.isEmpty ? nil : avatarData
+        )
+    }
+    #endif
+
+    private var accessibilityName: String {
+        AssistantPersona.sanitizedDisplayName(displayName) ?? AssistantPersona.defaultDisplayName
+    }
+
     var body: some View {
+        ZStack {
+            #if os(macOS)
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                fallback
+            }
+            #else
+            fallback
+            #endif
+        }
+        .frame(width: ChatAvatarMetrics.size, height: ChatAvatarMetrics.size)
+        .clipShape(Circle())
+        .overlay {
+            Circle()
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
+        }
+        .accessibilityLabel(accessibilityName)
+    }
+
+    private var fallback: some View {
         Image("AssistantAvatar")
             .resizable()
             .scaledToFill()
-            .frame(width: ChatAvatarMetrics.size, height: ChatAvatarMetrics.size)
-            .clipShape(Circle())
-            .overlay {
-                Circle()
-                    .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
-            }
-            .accessibilityLabel("Assistant")
     }
 }
 
