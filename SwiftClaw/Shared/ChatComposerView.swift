@@ -276,40 +276,28 @@ struct ChatComposerView: View {
 
             HStack(alignment: .center) {
                 HStack(spacing: 12) {
-                    Button {
+                    ComposerIconButton(
+                        systemName: "paperclip",
+                        size: controlRowHeight,
+                        isDisabled: !canImportImageAttachments,
+                        helpText: selectedModelSupportsVision ? "Attach images" : "Selected model does not support vision",
+                        accessibilityLabel: "Attach images"
+                    ) {
                         chooseImageAttachments()
-                    } label: {
-                        Image(systemName: "paperclip")
-                            .frame(width: controlRowHeight, height: controlRowHeight)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                    .disabled(!canImportImageAttachments)
-                    .help(selectedModelSupportsVision ? "Attach images" : "Selected model does not support vision")
-                    .accessibilityLabel("Attach images")
 
-                    Button {
-                        setInvestigation(!isInvestigationEnabled)
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                            .frame(width: controlRowHeight, height: controlRowHeight)
-                            .background {
-                                if isInvestigationEnabled {
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(Color.accentColor.opacity(0.18))
-                                }
-                            }
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(isInvestigationEnabled ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
-                    .disabled(composerControlsDisabled || !canEnableInvestigation)
-                    .help(
-                        canEnableInvestigation
+                    ComposerIconButton(
+                        systemName: "magnifyingglass",
+                        size: controlRowHeight,
+                        isSelected: isInvestigationEnabled,
+                        isDisabled: composerControlsDisabled || !canEnableInvestigation,
+                        helpText: canEnableInvestigation
                             ? "Investigate this message in depth"
-                            : "Investigation needs Brave Search plus a selected model with Tools, Reasoning, and reasoning turned on"
-                    )
-                    .accessibilityLabel("Investigation mode")
-                    .accessibilityAddTraits(isInvestigationEnabled ? .isSelected : [])
+                            : "Investigation needs Brave Search plus a selected model with Tools, Reasoning, and reasoning turned on",
+                        accessibilityLabel: "Investigation mode"
+                    ) {
+                        setInvestigation(!isInvestigationEnabled)
+                    }
                 }
 
                 Spacer()
@@ -587,6 +575,74 @@ struct ChatComposerView: View {
             // message is submitted.
             setInvestigation(false)
         }
+    }
+}
+
+private struct ComposerIconButton: View {
+    let systemName: String
+    let size: CGFloat
+    var isSelected = false
+    var isDisabled = false
+    let helpText: String
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    private var cornerRadius: CGFloat {
+        6
+    }
+
+    private var isActive: Bool {
+        !isDisabled && (isHovering || isSelected)
+    }
+
+    private var foregroundStyle: AnyShapeStyle {
+        isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)
+    }
+
+    private var fillOpacity: Double {
+        if isSelected {
+            return isHovering && !isDisabled ? 0.26 : 0.18
+        }
+
+        return isHovering && !isDisabled ? 0.12 : 0
+    }
+
+    private var strokeOpacity: Double {
+        isActive ? 0.22 : 0
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .frame(width: size, height: size)
+                .foregroundStyle(foregroundStyle)
+                .background {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(Color.accentColor.opacity(fillOpacity))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .strokeBorder(Color.accentColor.opacity(strokeOpacity), lineWidth: 1)
+                }
+                .shadow(
+                    color: Color.accentColor.opacity(isHovering && !isDisabled ? 0.14 : 0),
+                    radius: isHovering && !isDisabled ? 6 : 0,
+                    x: 0,
+                    y: isHovering && !isDisabled ? 2 : 0
+                )
+                .scaleEffect(isHovering && !isDisabled ? 1.08 : 1)
+                .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .help(helpText)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .onHover { isHovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovering)
+        .animation(.easeOut(duration: 0.12), value: isSelected)
     }
 }
 
