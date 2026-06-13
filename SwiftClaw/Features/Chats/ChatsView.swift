@@ -479,6 +479,12 @@ private struct ChatMessageRow: View {
                 }
                 .frame(maxWidth: ChatBubbleLayout.maxWidth, alignment: isUser ? .trailing : .leading)
                 .padding(isUser ? .trailing : .leading, ChatBubbleLayout.avatarSpacing)
+                .onAppear {
+                    printRawMessage()
+                }
+                .onChange(of: message.content) { _, _ in
+                    printRawMessage()
+                }
 
             if isUser {
                 UserAvatarView()
@@ -486,6 +492,18 @@ private struct ChatMessageRow: View {
                 Spacer(minLength: 0)
             }
         }
+    }
+
+    private func printRawMessage() {
+        #if DEBUG
+        print("""
+
+        --- Raw chat message (\(message.role.rawValue)) ---
+        \(message.content)
+        --- End raw chat message ---
+
+        """)
+        #endif
     }
 }
 

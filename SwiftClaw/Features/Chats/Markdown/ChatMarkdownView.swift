@@ -35,12 +35,78 @@ struct ChatMarkdownView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+        let renderedBlocks = blocks
+
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(renderedBlocks.enumerated()), id: \.offset) { index, block in
                 view(for: block)
+                    .padding(.top, topPadding(for: block, at: index, in: renderedBlocks))
+                    .padding(.bottom, bottomPadding(for: block, at: index, in: renderedBlocks))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func topPadding(
+        for block: ChatMarkdownBlock,
+        at index: Int,
+        in blocks: [ChatMarkdownBlock]
+    ) -> CGFloat {
+        guard index > 0 else {
+            return 0
+        }
+
+        if let level = headingLevel(for: block) {
+            if level <= 2 {
+                return 14
+            }
+
+            if let previousHeadingLevel = headingLevel(for: blocks[index - 1]),
+               previousHeadingLevel <= 2 {
+                return 6
+            }
+
+            return 0
+        }
+
+        if let previousHeadingLevel = headingLevel(for: blocks[index - 1]) {
+            return previousHeadingLevel == 2 || previousHeadingLevel == 3 ? 4 : -4
+        }
+
+        return 8
+    }
+
+    private func bottomPadding(
+        for block: ChatMarkdownBlock,
+        at index: Int,
+        in blocks: [ChatMarkdownBlock]
+    ) -> CGFloat {
+        guard headingLevel(for: block) == nil,
+              blocks.indices.contains(index + 1),
+              headingLevel(for: blocks[index + 1]) == 3,
+              activeHeadingLevel(at: index, in: blocks) == 3 else {
+            return 0
+        }
+
+        return 6
+    }
+
+    private func headingLevel(for block: ChatMarkdownBlock) -> Int? {
+        if case .heading(let level, _) = block {
+            return level
+        }
+
+        return nil
+    }
+
+    private func activeHeadingLevel(at index: Int, in blocks: [ChatMarkdownBlock]) -> Int? {
+        for blockIndex in stride(from: index, through: 0, by: -1) {
+            if let level = headingLevel(for: blocks[blockIndex]) {
+                return level
+            }
+        }
+
+        return nil
     }
 
     @ViewBuilder
