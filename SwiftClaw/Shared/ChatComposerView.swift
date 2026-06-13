@@ -1,4 +1,8 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+import UniformTypeIdentifiers
+#endif
 
 struct ChatComposerSubmission {
     let text: String
@@ -190,13 +194,17 @@ struct ChatComposerView: View {
 
             HStack(alignment: .center) {
                 HStack(spacing: 12) {
-                    Button {} label: {
+                    Button {
+                        chooseImageAttachments()
+                    } label: {
                         Image(systemName: "paperclip")
                             .frame(width: controlRowHeight, height: controlRowHeight)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
-                    .disabled(composerControlsDisabled)
+                    .disabled(composerControlsDisabled || !allowsImageAttachments)
+                    .help("Attach images")
+                    .accessibilityLabel("Attach images")
 
                     Button {
                         setInvestigation(!isInvestigationEnabled)
@@ -340,18 +348,36 @@ struct ChatComposerView: View {
             return false
         }
 
-        do {
-            let newAttachments = try ImageAttachmentStore.shared.importImages(
-                images,
-                existingAttachments: imageAttachments
-            )
-            imageAttachments.append(contentsOf: newAttachments)
-            imageAttachmentError = nil
-        } catch {
-            imageAttachmentError = error.localizedDescription
-        }
+        importImageAttachments(images)
 
         return true
+    }
+
+    private func chooseImageAttachments() {
+        guard allowsImageAttachments, !composerControlsDisabled else {
+            return
+        }
+
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Attach"
+
+        guard panel.runModal() == .OK else {
+            return
+        }
+
+        let images = panel.urls.compactMap(NSImage.init(contentsOf:))
+        guard !images.isEmpty, images.count == panel.urls.count else {
+            imageAttachmentError = ImageAttachmentError.noReadableImage.localizedDescription
+            return
+        }
+
+        importImageAttachments(images)
+        #endif
     }
 
     private func removeImageAttachment(_ attachment: ImageAttachmentRecord) {
@@ -364,6 +390,19 @@ struct ChatComposerView: View {
         imageAttachments = []
         imageAttachmentError = nil
         previewSelection = nil
+    }
+
+    private func importImageAttachments(_ images: [NSImage]) {
+        do {
+            let newAttachments = try ImageAttachmentStore.shared.importImages(
+                images,
+                existingAttachments: imageAttachments
+            )
+            imageAttachments.append(contentsOf: newAttachments)
+            imageAttachmentError = nil
+        } catch {
+            imageAttachmentError = error.localizedDescription
+        }
     }
 
     private func submitMessage() {
