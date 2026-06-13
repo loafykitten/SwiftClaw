@@ -264,16 +264,12 @@ struct ChatComposerView: View {
                     .onKeyPress { keyPress in
                         handleKeyPress(keyPress)
                     }
-                    .overlay {
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .onDrop(
-                                of: ImageDropImporter.supportedContentTypes,
-                                isTargeted: $isImageDropTargeted,
-                                perform: handleImageDrop
-                            )
-                    }
             }
+            .onDrop(
+                of: ImageDropImporter.supportedContentTypes,
+                isTargeted: $isImageDropTargeted,
+                perform: handleImageDrop
+            )
 
             Divider()
                 .padding(.top, 4)

@@ -3,7 +3,7 @@ import Testing
 @testable import SwiftClaw
 
 struct SettingsStorageTests {
-    @Test func migratesOldStringListsToProviderModels() throws {
+    @Test func migratesOldStringListsToVisionCapableProviderModels() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
@@ -16,6 +16,7 @@ struct SettingsStorageTests {
 
         #expect(models.map(\.name) == ["model-a", "model-b"])
         #expect(models.allSatisfy { $0.capabilities == ModelCapability.defaultCapabilities })
+        #expect(models.allSatisfy { $0.capabilities.contains(.vision) })
     }
 
     @Test func azureDeploymentsDecodeMissingCapabilitiesAsDefault() throws {

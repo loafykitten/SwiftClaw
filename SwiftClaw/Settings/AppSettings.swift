@@ -176,7 +176,7 @@ enum ModelCapability: String, CaseIterable, Codable, Hashable, Identifiable {
         }
     }
 
-    static let defaultCapabilities: Set<ModelCapability> = [.json]
+    static let defaultCapabilities: Set<ModelCapability> = [.vision, .json]
 }
 
 struct ProviderModel: Identifiable, Codable, Hashable {
