@@ -30,6 +30,7 @@ struct ChatComposerView: View {
     @State private var messageText = ""
     @State private var imageAttachments: [ImageAttachmentRecord] = []
     @State private var imageAttachmentError: String?
+    @State private var isImageDropTargeted = false
     @State private var previewSelection: ImageAttachmentPreviewSelection?
     @State private var availableModels = SettingsStorage.loadAvailableModels()
     @State private var isInvestigationEnabled = false
@@ -84,6 +85,10 @@ struct ChatComposerView: View {
 
     private var composerControlsDisabled: Bool {
         availableModels.isEmpty || isBusy || effectiveModel == nil
+    }
+
+    private var canImportImageAttachments: Bool {
+        allowsImageAttachments && !composerControlsDisabled
     }
 
     private var canSubmitMessage: Bool {
@@ -187,6 +192,15 @@ struct ChatComposerView: View {
                     .onKeyPress { keyPress in
                         handleKeyPress(keyPress)
                     }
+                    .overlay {
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .onDrop(
+                                of: ImageDropImporter.supportedContentTypes,
+                                isTargeted: $isImageDropTargeted,
+                                perform: handleImageDrop
+                            )
+                    }
             }
 
             Divider()
@@ -270,9 +284,20 @@ struct ChatComposerView: View {
         .padding(.horizontal, 16)
         .padding(.top, 16)
         .glassEffect(in: .rect(cornerRadius: 16.0))
+        .contentShape(Rectangle())
+        .onDrop(
+            of: ImageDropImporter.supportedContentTypes,
+            isTargeted: $isImageDropTargeted,
+            perform: handleImageDrop
+        )
+        .overlay {
+            if isImageDropTargeted, canImportImageAttachments {
+                imageDropTargetOverlay
+            }
+        }
         .background {
             ImagePasteKeyMonitor(
-                isEnabled: allowsImageAttachments && isMessageFieldFocused && !composerControlsDisabled,
+                isEnabled: canImportImageAttachments && isMessageFieldFocused,
                 onPasteImage: pasteImagesFromClipboard
             )
             .frame(width: 0, height: 0)
@@ -299,6 +324,27 @@ struct ChatComposerView: View {
 
             refreshModels()
         }
+    }
+
+    private var imageDropTargetOverlay: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.accentColor.opacity(0.08))
+
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(
+                    Color.accentColor.opacity(0.72),
+                    style: StrokeStyle(lineWidth: 2, dash: [7, 5])
+                )
+
+            Image(systemName: "photo.badge.plus")
+                .font(.system(size: 30, weight: .semibold))
+                .foregroundStyle(.tint)
+                .padding(14)
+                .background(.regularMaterial, in: Circle())
+                .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 4)
+        }
+        .allowsHitTesting(false)
     }
 
     private func refreshModels() {
@@ -339,7 +385,7 @@ struct ChatComposerView: View {
     }
 
     private func pasteImagesFromClipboard() -> Bool {
-        guard allowsImageAttachments, !composerControlsDisabled else {
+        guard canImportImageAttachments else {
             return false
         }
 
@@ -353,8 +399,26 @@ struct ChatComposerView: View {
         return true
     }
 
+    private func handleImageDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard canImportImageAttachments else {
+            return false
+        }
+
+        Task {
+            let images = await ImageDropImporter.images(from: providers)
+            guard !images.isEmpty else {
+                imageAttachmentError = ImageAttachmentError.noReadableImage.localizedDescription
+                return
+            }
+
+            importImageAttachments(images)
+        }
+
+        return true
+    }
+
     private func chooseImageAttachments() {
-        guard allowsImageAttachments, !composerControlsDisabled else {
+        guard canImportImageAttachments else {
             return
         }
 

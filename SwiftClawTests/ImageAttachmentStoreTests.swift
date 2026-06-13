@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 @testable import SwiftClaw
 
 @MainActor
@@ -131,6 +132,35 @@ struct ImageAttachmentStoreTests {
         )
 
         _ = InferenceMessage.user("hello", imageAttachments: [missing]).chatParam
+    }
+
+    @Test func importsDroppedImageData() async throws {
+        let provider = NSItemProvider()
+        let data = try #require(Self.image(width: 32, height: 24).tiffRepresentation)
+        provider.registerDataRepresentation(
+            forTypeIdentifier: UTType.tiff.identifier,
+            visibility: .all
+        ) { completion in
+            completion(data, nil)
+            return nil
+        }
+
+        let images = await ImageDropImporter.images(from: [provider])
+
+        #expect(images.count == 1)
+    }
+
+    @Test func importsDroppedImageFileURLs() async throws {
+        let fixture = try StoreFixture()
+        defer { fixture.cleanup() }
+        let url = fixture.rootDirectory.appendingPathComponent("drop.tiff")
+        let data = try #require(Self.image(width: 32, height: 24).tiffRepresentation)
+        try data.write(to: url)
+        let provider = NSItemProvider(object: url as NSURL)
+
+        let images = await ImageDropImporter.images(from: [provider])
+
+        #expect(images.count == 1)
     }
 
     private static func image(width: Int, height: Int) -> NSImage {
