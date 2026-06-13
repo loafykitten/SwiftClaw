@@ -26,7 +26,9 @@ struct ToolRegistry: Sendable {
     /// per-message user toggle (like Investigation).
     func availableTools(includingExplicitlyEnabled: Bool) -> [any Tool] {
         tools.filter { tool in
-            tool.isConfigured && (includingExplicitlyEnabled || !tool.requiresExplicitEnable)
+            tool.isConfigured
+                && tool.isEnabled
+                && (includingExplicitlyEnabled || !tool.requiresExplicitEnable)
         }
     }
 

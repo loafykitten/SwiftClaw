@@ -101,6 +101,25 @@ struct SettingsStorageTests {
             ) == ModelCapability.defaultCapabilities
         )
     }
+
+    @Test func toolEnableSettingsDefaultToOn() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        #expect(SettingsStorage.isWebSearchEnabled(userDefaults: fixture.defaults))
+        #expect(SettingsStorage.isInvestigationEnabled(userDefaults: fixture.defaults))
+    }
+
+    @Test func disabledWebSearchDisablesInvestigationEffectively() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(false, forKey: SettingsKeys.webSearchEnabled)
+        fixture.defaults.set(true, forKey: SettingsKeys.investigationEnabled)
+
+        #expect(!SettingsStorage.isWebSearchEnabled(userDefaults: fixture.defaults))
+        #expect(!SettingsStorage.isInvestigationEnabled(userDefaults: fixture.defaults))
+    }
 }
 
 private struct UserDefaultsFixture {

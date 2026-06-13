@@ -41,6 +41,10 @@ struct InvestigateTool: Tool {
         return !braveKey.isEmpty && !clawModel.isEmpty && !swiftModel.isEmpty
     }
 
+    var isEnabled: Bool {
+        SettingsStorage.isInvestigationEnabled()
+    }
+
     func execute(arguments: [String: JSONValue]) async throws -> String {
         guard let topic = arguments["topic"]?.stringValue?
             .trimmingCharacters(in: .whitespacesAndNewlines),

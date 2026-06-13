@@ -29,6 +29,10 @@ struct ChatComposerView: View {
     @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
     @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
+    @AppStorage(SettingsKeys.webSearchEnabled)
+    private var webSearchEnabled = SettingsStorage.defaultWebSearchEnabled
+    @AppStorage(SettingsKeys.investigationEnabled)
+    private var investigationToolEnabled = SettingsStorage.defaultInvestigationEnabled
 
     @State private var messageText = ""
     @State private var imageAttachments: [ImageAttachmentRecord] = []
@@ -130,10 +134,15 @@ struct ChatComposerView: View {
     }
 
     private var canEnableInvestigation: Bool {
-        isInvestigationAvailable
+        isInvestigationToolEnabled
+            && isInvestigationAvailable
             && selectedModelSupportsTools
             && selectedModelSupportsReasoning
             && selectedReasoningEffort.isReasoningEnabled
+    }
+
+    private var isInvestigationToolEnabled: Bool {
+        webSearchEnabled && investigationToolEnabled
     }
 
     private var quickModelOptions: [HomeModelOption] {
@@ -286,17 +295,19 @@ struct ChatComposerView: View {
                         chooseImageAttachments()
                     }
 
-                    ComposerIconButton(
-                        systemName: "magnifyingglass",
-                        size: controlRowHeight,
-                        isSelected: isInvestigationEnabled,
-                        isDisabled: composerControlsDisabled || !canEnableInvestigation,
-                        helpText: canEnableInvestigation
-                            ? "Investigate this message in depth"
-                            : "Investigation needs Brave Search plus a selected model with Tools, Reasoning, and reasoning turned on",
-                        accessibilityLabel: "Investigation mode"
-                    ) {
-                        setInvestigation(!isInvestigationEnabled)
+                    if isInvestigationToolEnabled {
+                        ComposerIconButton(
+                            systemName: "magnifyingglass",
+                            size: controlRowHeight,
+                            isSelected: isInvestigationEnabled,
+                            isDisabled: composerControlsDisabled || !canEnableInvestigation,
+                            helpText: canEnableInvestigation
+                                ? "Investigate this message in depth"
+                                : "Investigation needs Brave Search plus a selected model with Tools, Reasoning, and reasoning turned on",
+                            accessibilityLabel: "Investigation mode"
+                        ) {
+                            setInvestigation(!isInvestigationEnabled)
+                        }
                     }
                 }
 
@@ -380,6 +391,12 @@ struct ChatComposerView: View {
             }
         }
         .onChange(of: effectiveModel) { _, _ in
+            syncCapabilityState()
+        }
+        .onChange(of: webSearchEnabled) { _, _ in
+            syncCapabilityState()
+        }
+        .onChange(of: investigationToolEnabled) { _, _ in
             syncCapabilityState()
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in

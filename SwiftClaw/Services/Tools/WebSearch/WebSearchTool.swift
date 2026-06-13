@@ -32,6 +32,10 @@ struct WebSearchTool: Tool {
         !(Keychain.string(forKey: SettingsKeys.braveSearchAPIKey) ?? "").isEmpty
     }
 
+    var isEnabled: Bool {
+        SettingsStorage.isWebSearchEnabled()
+    }
+
     func execute(arguments: [String: JSONValue]) async throws -> String {
         guard let query = arguments["query"]?.stringValue,
               !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {

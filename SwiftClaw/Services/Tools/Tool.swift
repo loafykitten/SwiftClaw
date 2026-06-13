@@ -130,6 +130,9 @@ protocol Tool: Sendable {
     /// Whether the tool has everything it needs (API keys, etc.) to run.
     var isConfigured: Bool { get }
 
+    /// Whether the user currently allows this tool to be offered.
+    var isEnabled: Bool { get }
+
     /// Whether the tool is only offered when the user explicitly enables it
     /// for a message (e.g. via a composer toggle), rather than on every request.
     var requiresExplicitEnable: Bool { get }
@@ -138,6 +141,8 @@ protocol Tool: Sendable {
 }
 
 extension Tool {
+    var isEnabled: Bool { true }
+
     var requiresExplicitEnable: Bool { false }
 }
 

@@ -3,6 +3,11 @@ import SwiftUI
 struct ToolsView: View {
     @State private var tools: [ToolListing] = []
 
+    @AppStorage(SettingsKeys.webSearchEnabled)
+    private var isWebSearchEnabled = SettingsStorage.defaultWebSearchEnabled
+    @AppStorage(SettingsKeys.investigationEnabled)
+    private var isInvestigationEnabled = SettingsStorage.defaultInvestigationEnabled
+
     @AppStorage(SettingsKeys.investigationMaxSubAgents)
     private var investigationMaxSubAgents = SettingsStorage.defaultInvestigationMaxSubAgents
 
@@ -30,20 +35,26 @@ struct ToolsView: View {
 
                             Spacer()
 
-                            Text(listing.isConfigured ? "Ready" : "Needs setup")
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(
-                                    (listing.isConfigured ? Color.green : Color.orange).opacity(0.15),
-                                    in: Capsule()
-                                )
-                                .foregroundStyle(listing.isConfigured ? .green : .orange)
+                            HStack(spacing: 12) {
+                                Text(listing.isConfigured ? "Ready" : "Needs setup")
+                                    .font(.caption)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(
+                                        (listing.isConfigured ? Color.green : Color.orange).opacity(0.15),
+                                        in: Capsule()
+                                    )
+                                    .foregroundStyle(listing.isConfigured ? .green : .orange)
+
+                                toolToggle(for: listing)
+                            }
                         }
 
                         if listing.id == "investigate" {
                             investigationConfiguration
                                 .padding(.leading, 40)
+                                .disabled(!isInvestigationEffectivelyEnabled)
+                                .opacity(isInvestigationEffectivelyEnabled ? 1 : 0.55)
                         }
                     }
                     .padding(.vertical, 4)
@@ -56,6 +67,51 @@ struct ToolsView: View {
     private var subAgentSliderRange: ClosedRange<Double> {
         let range = SettingsStorage.investigationMaxSubAgentsRange
         return Double(range.lowerBound)...Double(range.upperBound)
+    }
+
+    private var isInvestigationEffectivelyEnabled: Bool {
+        isWebSearchEnabled && isInvestigationEnabled
+    }
+
+    private var webSearchBinding: Binding<Bool> {
+        Binding {
+            isWebSearchEnabled
+        } set: { enabled in
+            isWebSearchEnabled = enabled
+
+            if !enabled {
+                isInvestigationEnabled = false
+            }
+        }
+    }
+
+    private var investigationBinding: Binding<Bool> {
+        Binding {
+            isInvestigationEffectivelyEnabled
+        } set: { enabled in
+            isInvestigationEnabled = isWebSearchEnabled && enabled
+        }
+    }
+
+    @ViewBuilder
+    private func toolToggle(for listing: ToolListing) -> some View {
+        switch listing.id {
+        case "web_search":
+            Toggle("Web Search", isOn: webSearchBinding)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .help(isWebSearchEnabled ? "Turn Web Search off" : "Turn Web Search on")
+                .accessibilityLabel("Web Search")
+        case "investigate":
+            Toggle("Investigation", isOn: investigationBinding)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(!isWebSearchEnabled)
+                .help(isWebSearchEnabled ? "Turn Investigation on or off" : "Web Search is off")
+                .accessibilityLabel("Investigation")
+        default:
+            EmptyView()
+        }
     }
 
     private var investigationConfiguration: some View {

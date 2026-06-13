@@ -101,6 +101,8 @@ enum SettingsKeys {
     static let openRouterAPIKey = "settings.openRouter.apiKey"
     static let braveSearchAPIKey = "settings.braveSearch.apiKey"
     static let braveSearchRequestsPerSecond = "settings.braveSearch.requestsPerSecond"
+    static let webSearchEnabled = "settings.tools.webSearch.enabled"
+    static let investigationEnabled = "settings.tools.investigation.enabled"
     static let investigationMaxSubAgents = "settings.tools.investigation.maxSubAgents"
     static let openRouterModels = "settings.openRouter.models"
     static let swiftModel = "settings.behaviors.swiftModel"
@@ -332,6 +334,25 @@ enum SettingsStorage {
 
     static let defaultBraveSearchRequestsPerSecond = 1.0
     static let braveSearchRequestsPerSecondRange: ClosedRange<Double> = 0.5...20
+    static let defaultWebSearchEnabled = true
+    static let defaultInvestigationEnabled = true
+
+    static func isWebSearchEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        toolEnabled(
+            forKey: SettingsKeys.webSearchEnabled,
+            defaultValue: defaultWebSearchEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
+    static func isInvestigationEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        isWebSearchEnabled(userDefaults: userDefaults)
+            && toolEnabled(
+                forKey: SettingsKeys.investigationEnabled,
+                defaultValue: defaultInvestigationEnabled,
+                userDefaults: userDefaults
+            )
+    }
 
     static func loadBraveSearchRequestsPerSecond() -> Double {
         let stored = UserDefaults.standard.double(forKey: SettingsKeys.braveSearchRequestsPerSecond)
@@ -360,6 +381,18 @@ enum SettingsStorage {
             max(stored, investigationMaxSubAgentsRange.lowerBound),
             investigationMaxSubAgentsRange.upperBound
         )
+    }
+
+    private static func toolEnabled(
+        forKey key: String,
+        defaultValue: Bool,
+        userDefaults: UserDefaults
+    ) -> Bool {
+        guard userDefaults.object(forKey: key) != nil else {
+            return defaultValue
+        }
+
+        return userDefaults.bool(forKey: key)
     }
 }
 
