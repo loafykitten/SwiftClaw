@@ -455,9 +455,9 @@ private struct ChatMessageRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        HStack(alignment: .bottom, spacing: 0) {
             if isUser {
-                Spacer(minLength: 80)
+                Spacer(minLength: 0)
             } else {
                 AssistantAvatarView()
             }
@@ -478,11 +478,12 @@ private struct ChatMessageRow: View {
                         .fill(isUser ? accent : Color.secondary.opacity(0.12))
                 }
                 .frame(maxWidth: ChatBubbleLayout.maxWidth, alignment: isUser ? .trailing : .leading)
+                .padding(isUser ? .trailing : .leading, ChatBubbleLayout.avatarSpacing)
 
             if isUser {
                 UserAvatarView()
             } else {
-                Spacer(minLength: 80)
+                Spacer(minLength: 0)
             }
         }
     }
@@ -496,7 +497,7 @@ private struct GeneratingMessageRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 10) {
+        HStack(alignment: .bottom, spacing: 0) {
             AssistantAvatarView()
 
             HStack(spacing: 8) {
@@ -514,8 +515,9 @@ private struct GeneratingMessageRow: View {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.secondary.opacity(0.12))
             }
+            .padding(.leading, ChatBubbleLayout.avatarSpacing)
 
-            Spacer(minLength: 80)
+            Spacer(minLength: 0)
         }
     }
 }
@@ -544,7 +546,7 @@ private struct ChatErrorView: View {
     let message: String
 
     var body: some View {
-        HStack {
+        HStack(spacing: 0) {
             AssistantAvatarView()
 
             Text(message)
@@ -556,8 +558,9 @@ private struct ChatErrorView: View {
                     RoundedRectangle(cornerRadius: 8)
                         .fill(Color.red.opacity(0.12))
                 }
+                .padding(.leading, ChatBubbleLayout.avatarSpacing)
 
-            Spacer(minLength: 80)
+            Spacer(minLength: 0)
         }
     }
 }
