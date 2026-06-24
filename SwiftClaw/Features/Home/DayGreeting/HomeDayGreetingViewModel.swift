@@ -22,7 +22,7 @@ final class HomeDayGreetingViewModel: ObservableObject {
     }
 
     private func generateGreeting(swiftModel: String) async {
-        guard !HomeDayGreetingEnvironment.isRunningInPreview else {
+        guard !ProcessInfo.processInfo.isRunningInPreview else {
             return
         }
 
@@ -56,11 +56,5 @@ final class HomeDayGreetingViewModel: ObservableObject {
             HomeDayGreetingGenerator.logger.error("Greeting generation failed: \(String(describing: error), privacy: .public)")
             greeting = HomeDayGreetingGenerator.fallbackGreeting(for: context, userName: userName)
         }
-    }
-}
-
-private enum HomeDayGreetingEnvironment {
-    static var isRunningInPreview: Bool {
-        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
     }
 }

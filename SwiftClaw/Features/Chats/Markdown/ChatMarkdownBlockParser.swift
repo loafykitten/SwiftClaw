@@ -6,7 +6,7 @@ enum ChatMarkdownBlock {
     case quote(String)
 }
 
-enum ChatMarkdownParser {
+enum ChatMarkdownBlockParser {
     static func blocks(from content: String) -> [ChatMarkdownBlock] {
         var blocks: [ChatMarkdownBlock] = []
         var paragraphLines: [String] = []

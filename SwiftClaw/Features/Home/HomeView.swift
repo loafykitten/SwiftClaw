@@ -127,7 +127,7 @@ struct HomeView: View {
     private func generateBlurb() async {
         // Previews must not hit the Keychain or the network; the 60s request
         // timeout blows past the preview engine's 5s update budget.
-        guard !HomeBlurb.isRunningInPreview else {
+        guard !ProcessInfo.processInfo.isRunningInPreview else {
             return
         }
 
@@ -165,15 +165,11 @@ private enum HomeBlurb {
 
     static let previewFallback = "There's no place like 127.0.0.1"
 
-    static var isRunningInPreview: Bool {
-        ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
-    }
-
     /// Blank at runtime (a space reserves the line height) so users never see
     /// the blurb swap; previews show the static fallback since generation is
     /// disabled there.
     static var initial: String {
-        isRunningInPreview ? previewFallback : " "
+        ProcessInfo.processInfo.isRunningInPreview ? previewFallback : " "
     }
 
     static let systemPrompt = """

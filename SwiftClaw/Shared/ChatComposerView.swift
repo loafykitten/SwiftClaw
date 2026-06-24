@@ -78,11 +78,11 @@ struct ChatComposerView: View {
             return "(N/A)"
         }
 
-        if activeModelSelection == HomeModelSelection.swiftModel, isSwiftModelAvailable {
+        if activeModelSelection == ComposerModelSelection.swiftModel, isSwiftModelAvailable {
             return "Swift Model"
         }
 
-        if activeModelSelection == HomeModelSelection.clawModel, isClawModelAvailable {
+        if activeModelSelection == ComposerModelSelection.clawModel, isClawModelAvailable {
             return "Claw Model"
         }
 
@@ -90,11 +90,11 @@ struct ChatComposerView: View {
     }
 
     private var effectiveModel: String? {
-        if activeModelSelection == HomeModelSelection.swiftModel {
+        if activeModelSelection == ComposerModelSelection.swiftModel {
             return isSwiftModelAvailable ? swiftModel : nil
         }
 
-        if activeModelSelection == HomeModelSelection.clawModel {
+        if activeModelSelection == ComposerModelSelection.clawModel {
             return isClawModelAvailable ? clawModel : nil
         }
 
@@ -145,22 +145,22 @@ struct ChatComposerView: View {
         webSearchEnabled && investigationToolEnabled
     }
 
-    private var quickModelOptions: [HomeModelOption] {
-        var options: [HomeModelOption] = []
+    private var quickModelOptions: [ComposerModelOption] {
+        var options: [ComposerModelOption] = []
 
         if isSwiftModelAvailable {
-            options.append(HomeModelOption(title: "Swift Model", selection: HomeModelSelection.swiftModel))
+            options.append(ComposerModelOption(title: "Swift Model", selection: ComposerModelSelection.swiftModel))
         }
 
         if isClawModelAvailable {
-            options.append(HomeModelOption(title: "Claw Model", selection: HomeModelSelection.clawModel))
+            options.append(ComposerModelOption(title: "Claw Model", selection: ComposerModelSelection.clawModel))
         }
 
         return options
     }
 
     private var isQuickModelSelection: Bool {
-        activeModelSelection == HomeModelSelection.swiftModel || activeModelSelection == HomeModelSelection.clawModel
+        activeModelSelection == ComposerModelSelection.swiftModel || activeModelSelection == ComposerModelSelection.clawModel
     }
 
     private var modelSelectionMenu: some View {
@@ -759,12 +759,14 @@ private struct ComposerIconButton: View {
     }
 }
 
-enum HomeModelSelection {
+/// Sentinel selections for the composer's quick-pick model presets, persisted
+/// in place of a concrete model name.
+enum ComposerModelSelection {
     static let swiftModel = "settings.home.modelPreset.swift"
     static let clawModel = "settings.home.modelPreset.claw"
 }
 
-private struct HomeModelOption: Identifiable {
+private struct ComposerModelOption: Identifiable {
     let title: String
     let selection: String
 

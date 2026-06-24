@@ -735,21 +735,11 @@ private enum ChatAvatarMetrics {
 
 private struct EmptyChatsView: View {
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 44))
-                .foregroundStyle(.secondary)
-
-            Text("No chats yet")
-                .font(.title3)
-                .fontWeight(.semibold)
-
-            Text("Start one from Home.")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        FeaturePlaceholderView(
+            systemImage: "bubble.left.and.bubble.right",
+            title: "No chats yet",
+            message: "Start one from Home."
+        )
     }
 }
 

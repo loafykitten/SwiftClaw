@@ -26,12 +26,12 @@ struct ChatMarkdownView: View {
     }
 
     private var blocks: [ChatMarkdownBlock] {
-        ChatMarkdownParser.blocks(from: content)
+        ChatMarkdownBlockParser.blocks(from: content)
     }
 
     /// Source numbers mapped to URLs from the final Sources section.
     private var citations: [Int: URL] {
-        ChatMarkdownParser.citationLinks(from: content)
+        ChatMarkdownBlockParser.citationLinks(from: content)
     }
 
     var body: some View {

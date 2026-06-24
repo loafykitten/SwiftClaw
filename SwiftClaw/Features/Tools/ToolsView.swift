@@ -143,19 +143,11 @@ struct ToolsView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "wrench.and.screwdriver")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-            Text("Tools")
-                .font(.title2)
-                .fontWeight(.semibold)
-            Text("No tools configured")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        FeaturePlaceholderView(
+            systemImage: "wrench.and.screwdriver",
+            title: "Tools",
+            message: "No tools configured"
+        )
     }
 
     private func refresh() {
