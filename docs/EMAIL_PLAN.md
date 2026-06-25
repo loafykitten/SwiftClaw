@@ -64,6 +64,13 @@ Current local verification: `swift test` and
   `lastReviewedAt` only after a successful inference pass) + `EmailReviewNotifyTool`.
 - Review selection includes opened/read mail as long as it is not archived or
   deleted. Mixed threads only send active messages to the model.
+- The review system prompt prepends the configured assistant persona
+  (`AssistantPersona.personaPrompt()`) so the user-facing summary message and
+  per-item reasons sound in the user's chosen voice, and gives the model
+  explicit triage guidance — be selective, weigh the user's own notes, pick the
+  sharpest action (reply/flag/review/delete), and omit no-action mail. It runs
+  in `.standalone` inference mode (the persona is baked into the prompt string
+  rather than prepended by `InferenceService`).
 - Review prompts include date context; review-card rows show subject, sender,
   date, summary, and action. The summary chat message does not append a
   separate date list.

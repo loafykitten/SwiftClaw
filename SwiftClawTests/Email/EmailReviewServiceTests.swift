@@ -284,6 +284,46 @@ struct EmailReviewServiceTests {
     }
 
     @Test
+    func reviewSystemPromptCarriesConfiguredPersona() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let accountID = UUID()
+        let message = Self.message(
+            uid: 1,
+            messageID: "<persona@example.com>",
+            subject: "Needs attention",
+            date: .now
+        )
+        repository.upsertMessages([message], mailbox: "INBOX", accountID: accountID)
+        repository.resolveThreads()
+
+        let defaults: [String: Any] = [
+            SettingsKeys.clawModel: "test-claw-model",
+            SettingsKeys.assistantDisplayName: "Mittens",
+            SettingsKeys.assistantUsesCustomPersonality: true,
+            SettingsKeys.assistantCustomPersonality: "Speak like a terse pirate captain."
+        ]
+        defaults.forEach { UserDefaults.standard.set($0.value, forKey: $0.key) }
+        defer { defaults.keys.forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+
+        let service = EmailReviewService(modelContainer: container)
+        let capture = PromptCapture()
+        service.completeProvider = { messages, _, _, _ in
+            await capture.record(messages: messages)
+            return ""
+        }
+
+        #expect(await service.runOnce() == true)
+
+        let systemPrompt = try #require(await capture.systemPrompt)
+        #expect(systemPrompt.contains("Mittens"))
+        #expect(systemPrompt.contains("Speak like a terse pirate captain."))
+        // The triage instructions still ride alongside the persona.
+        #expect(systemPrompt.contains("notify_user_about_emails"))
+    }
+
+    @Test
     func runOnceSkipsWhenModelNotConfiguredWithoutStamping() async throws {
         // The model-not-configured guard must also short-circuit BEFORE
         // stamping — otherwise disabling the model after seeding threads
@@ -317,11 +357,17 @@ struct EmailReviewServiceTests {
 
     private actor PromptCapture {
         private(set) var userPrompt: String? = nil
+        private(set) var systemPrompt: String? = nil
 
         func record(messages: [InferenceMessage]) {
             for message in messages {
-                if case .user(let content, _) = message {
+                switch message {
+                case .user(let content, _):
                     userPrompt = content
+                case .system(let content):
+                    systemPrompt = content
+                default:
+                    break
                 }
             }
         }

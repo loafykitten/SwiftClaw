@@ -103,7 +103,7 @@ final class EmailReviewService {
         }
 
         let descriptors = threads.map { Self.descriptor(for: $0) }
-        let systemPrompt = Self.systemPrompt(for: descriptors)
+        let systemPrompt = Self.systemPrompt()
         let userPrompt = Self.userPrompt(for: descriptors)
 
         let tool = EmailReviewNotifyTool(modelContainer: modelContainer) { [weak self] chatID in
@@ -142,48 +142,48 @@ final class EmailReviewService {
 
     // MARK: - Prompt construction
 
-    private static func systemPrompt(for threads: [EmailReviewThreadDescriptor]) -> String {
-        let schema = """
-        {
-          "reviewType": "email",
-          "items": [
-            {
-              "id": "<uuid>",
-              "itemID": "<email UUID — pass back as email_guid>",
-              "actionToken": "review" | "flag" | "reply" | "delete",
-              "actionLabel": "Review" | "Flag" | "Reply" | "Delete",
-              "summary": "<one-line reason>",
-              "subject": "<optional>",
-              "sender": "<optional>",
-              "date": "<optional>"
-            }
-          ]
-        }
-        """
-
+    private static func systemPrompt(
+        persona: String = AssistantPersona.personaPrompt()
+    ) -> String {
         return """
-        You are reviewing the user's inbox. For each thread below, decide what (if anything) the user should do: \
-        review, flag, reply, delete, or nothing. If no action is needed for an item, omit it. If no items need \
-        attention, output nothing and do not call any tool. Otherwise, call `notify_user_about_emails` with the \
-        items requiring action plus a friendly summary message for the user.
+        \(persona)
 
-        The JSON value to pass as the `email_actions` tool argument:
+        You are triaging the user's email inbox on their behalf. Your job is to decide which threads \
+        genuinely need the user to do something, and to tell them about those in your own voice.
+
+        Be selective. Most inbox mail needs no action; surfacing everything trains the user to ignore you. \
+        Only raise a thread when doing nothing would cost the user something real — a missed reply, a \
+        deadline, a commitment to follow up on. When you are unsure an item matters, leave it out.
+
+        For each thread, read the latest message in the context of the whole thread: who is writing, whether \
+        it is unread, whether the user is being asked something directly, and — importantly — any notes the \
+        user has already written on it. Those notes are the user's own annotations; weight them heavily. \
+        Then pick one action:
+        - `reply` — the user clearly owes a response (a direct question or request awaiting their answer).
+        - `flag` — needs follow-up later but not an immediate reply (a deadline, a commitment, something to revisit).
+        - `review` — needs the user's eyes or judgement, but the right move isn't a simple reply or flag \
+        (a long or ambiguous thread). Use this only when an item genuinely needs attention and none of the \
+        sharper actions fit — not as a catch-all.
+        - `delete` — obvious spam or low-value bulk mail (newsletters, promotions) the user would not miss.
+        Anything that needs no action: omit it entirely. (`archive` is intentionally unavailable here — the \
+        user can archive from a card's menu.)
+
+        If at least one thread needs action, call `notify_user_about_emails`:
         {
           "email_actions": [
-            { "email_guid": "<UUID>", "action": "review"|"flag"|"reply"|"delete", "summary": "<short reason>" }
-          ]
+            { "email_guid": "<exact messageID UUID from the data below>", "action": "reply"|"flag"|"review"|"delete", "summary": "<one specific line on why this needs the user>" }
+          ],
+          "message": "<a short, friendly note to the user — one or two sentences setting up the cards>"
         }
 
-        The `email_guid` value MUST be the exact UUID passed in the thread/messages below. The action token must \
-        be one of: review, flag, reply, delete. Use `review` for items where context is needed (long thread, \
-        unanswered question), `flag` for items to follow up on, `reply` when the user clearly owes a response, \
-        and `delete` only for obvious spam/newsletters. Default to "review" when unsure. (Note: `archive` is \
-        intentionally NOT offered to the model — the user can still choose it from a review card's context menu.)
-        Include the email date in an item's `summary` when timing matters, but do not add a separate Dates \
-        section or date list to the user-facing message.
+        - `email_guid` MUST be copied exactly from a message's `messageID` in the data below (usually the \
+        latest message in the thread). Never invent or alter a UUID. `subject`, `sender`, and `date` are \
+        filled in automatically — do not provide them.
+        - Keep each `summary` concrete and specific to that email — what it's about and why it needs the user, \
+        not a generic phrase. Mention timing when a date actually matters, but do not add a separate dates list.
+        - Write both each `summary` and the `message` in your own voice, per the personality above.
 
-        ReviewCardPayload schema (for your context only):
-        \(schema)
+        If nothing needs action, output nothing and do not call any tool.
         """
     }
 
