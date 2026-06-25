@@ -91,17 +91,18 @@ final class EmailReviewService {
 
         let context = ModelContext(modelContainer)
         let repository = EmailRepository(modelContext: context)
-        let threads = repository.fetchNonArchivedThreadsForReview(
-            limit: SettingsStorage.loadEmailReviewMaxThreads(),
-            force: force
-        )
-        guard !threads.isEmpty else {
-            // Distinguish "inbox has mail but everything was triaged in a
-            // prior pass" (the H3 suppression path — expected, not an error)
-            // from "inbox genuinely has nothing to review" so the log line
-            // doesn't read like the prior pass produced nothing. Under
-            // `force` this branch only fires when the inbox is genuinely
-            // empty.
+
+        // Scheduled passes (`force == false`) keep the cheap "nothing to do"
+        // short-circuit the inlined pre-fetch used to give for free: don't burn
+        // an inference call when every thread has already been triaged since the
+        // last new mail. The forced/conversational path always proceeds — the
+        // model + `fetch_inbox_emails` filters drive selection (including
+        // archived/trashed steering the eligibility gate wouldn't see).
+        if !force, !repository.hasThreadsEligibleForReview() {
+            // Distinguish "inbox has mail but everything was triaged in a prior
+            // pass" (the suppression path — expected, not an error) from "inbox
+            // genuinely has nothing to review" so the log doesn't read like the
+            // prior pass produced nothing.
             let allThreadCount = repository.fetchNonArchivedThreadCount()
             if allThreadCount > 0 {
                 Self.logger.info("""
@@ -124,18 +125,10 @@ final class EmailReviewService {
             return false
         }
 
-        // Logged so a thin review pass is diagnosable: this is the count
-        // handed to the model. Compare against the tool's "created review chat
-        // with N items" line to tell "few threads sent" (suppression) apart
-        // from "many sent, model surfaced few" (prompt selectivity).
-        Self.logger.info("""
-            review: sending \(threads.count, privacy: .public) thread(s) to the model \
-            (force: \(force, privacy: .public))
-            """)
+        Self.logger.info("review: starting pass (force: \(force, privacy: .public))")
 
-        let descriptors = threads.map { Self.descriptor(for: $0) }
         let systemPrompt = Self.systemPrompt(isContinuation: targetChatID != nil)
-        let userPrompt = Self.userPrompt(for: descriptors)
+        let userPrompt = Self.userPrompt()
 
         // When appending to an existing review chat, replay that chat's history
         // so the model's summary reads as a continuation rather than a fresh
@@ -146,7 +139,18 @@ final class EmailReviewService {
         }
         messages.append(.user(userPrompt))
 
-        let tool = EmailReviewNotifyTool(
+        // The model selects which threads to review via `fetch_inbox_emails`;
+        // we stamp exactly what it pulled. Suppression is on for scheduled
+        // passes and off when forced (so a steered conversational refresh can
+        // reach the whole inbox).
+        let collector = FetchedThreadCollector()
+        let fetchTool = EmailReviewFetchTool(
+            modelContainer: modelContainer,
+            applySuppression: !force,
+            defaultLimit: SettingsStorage.loadEmailReviewMaxThreads(),
+            onThreadsFetched: { [collector] ids in collector.add(ids) }
+        )
+        let notifyTool = EmailReviewNotifyTool(
             modelContainer: modelContainer,
             targetChatID: targetChatID,
             suppressInlineSummary: suppressInlineSummary,
@@ -159,7 +163,7 @@ final class EmailReviewService {
                 self?.lastSummaryMessage = message
             }
         )
-        let registry = ToolRegistry(tools: [tool])
+        let registry = ToolRegistry(tools: [fetchTool, notifyTool])
 
         do {
             _ = try await completeProvider(
@@ -179,14 +183,25 @@ final class EmailReviewService {
             return false
         }
 
-        // Stamp ONLY the threads we actually sent (and only after a
-        // successful pass). A successful pass that produces no tool call
-        // still stamps — that's the legitimate "nothing to do" suppression.
-        // Batched into a single `save()` (one per pass rather than one per
-        // thread).
-        repository.markThreadsReviewed(threads, at: Date())
+        // Stamp ONLY the threads the model actually fetched (and only after a
+        // successful pass), advancing each thread's resurface-decay counter. A
+        // successful pass that fetched threads but surfaced none still stamps —
+        // the legitimate "looked, nothing to do" suppression. If the model
+        // fetched nothing, there's nothing to stamp. Batched into one `save()`.
+        let fetchedThreads = repository.fetchThreads(withIDs: Array(collector.ids))
+        repository.markThreadsReviewed(fetchedThreads, at: Date())
         lastStatusMessage = "Review complete"
         return true
+    }
+
+    /// Accumulates the thread IDs the `fetch_inbox_emails` tool returns across
+    /// the pass (the model may fetch more than once), so `runOnce` can stamp the
+    /// union as reviewed. A reference type so the tool's callback mutates the
+    /// same instance `runOnce` reads back.
+    @MainActor
+    private final class FetchedThreadCollector {
+        private(set) var ids: Set<UUID> = []
+        func add(_ newIDs: [UUID]) { ids.formUnion(newIDs) }
     }
 
     /// Prior messages of the target review chat, as inference history. Skips
@@ -235,6 +250,18 @@ final class EmailReviewService {
         You are triaging the user's email inbox on their behalf. Your job is to decide which threads \
         genuinely need the user to do something, and to tell them about those in your own voice.
 
+        Work in two steps. FIRST call `fetch_inbox_emails` to pull the threads to look at — you choose \
+        how much of the inbox to see. Its filters are all optional and the defaults are right for a \
+        routine pass: omit `max_age_days` to let old read backlog resurface, or set it when the user \
+        asks for a narrower timeframe like "this week"; `limit` \
+        (a cap on threads, though unread, flagged, and notated threads always come back even beyond \
+        it); and include flags for flagged/notated/read/unread/archived/trashed (defaults include \
+        flagged + notated + read + unread and exclude archived + trashed). Let the user's steering set \
+        these — e.g. "what's flagged?" → only flagged, "anything in my trash?" → include trashed, \
+        "just the unread ones" → exclude read. THEN review what comes back and decide which threads \
+        need the user. You may call `fetch_inbox_emails` again with different filters if a first pull \
+        clearly missed what the user is after.
+
         Lean toward surfacing. The user is working toward an inbox where every email is eventually either \
         deleted or archived, and they would much rather see a borderline thread than miss one that mattered. \
         Surface any thread that plausibly needs their attention — an unanswered question or request, a \
@@ -278,66 +305,23 @@ final class EmailReviewService {
           "message": "<a short, friendly note to the user — one or two sentences setting up the cards>"
         }
 
-        - `email_guid` MUST be copied exactly from a message's `messageID` in the data below (usually the \
-        latest message in the thread). Never invent or alter a UUID. `subject`, `sender`, and `date` are \
-        filled in automatically — do not provide them.
+        - `email_guid` MUST be copied exactly from a message's `messageID` in the fetched thread data \
+        (usually the latest message in the thread). Never invent or alter a UUID. `subject`, `sender`, \
+        and `date` are filled in automatically — do not provide them.
         - Keep each `summary` concrete and specific to that email — what it's about and why it needs the user, \
         not a generic phrase. Mention timing when a date actually matters, but do not add a separate dates list.
         - Write both each `summary` and the `message` in your own voice, per the personality above.
 
-        If nothing needs action, output nothing and do not call any tool.\(continuationNote)
+        If, after fetching and reviewing, nothing needs action, output nothing and do not call \
+        `notify_user_about_emails`.\(continuationNote)
         """
     }
 
-    private static func userPrompt(for threads: [EmailReviewThreadDescriptor]) -> String {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = (try? encoder.encode(threads)) ?? Data()
-        let json = String(data: data, encoding: .utf8) ?? "[]"
-        return """
-        Review the following inbox threads and decide which (if any) need the user's attention. \
-        For each thread, focus on the latest message. The list below has already been filtered to \
-        threads worth a look — ones never reviewed, ones with new activity since the last review, \
-        and older threads still sitting unactioned in the inbox that are being re-surfaced so they \
-        can finally be archived or cleared.
-
-        Threads (JSON):
-        \(json)
+    private static func userPrompt() -> String {
         """
-    }
-
-    private static func descriptor(for thread: EmailThread) -> EmailReviewThreadDescriptor {
-        let reviewableMessages = thread.reviewableMessages
-        let latest = thread.latestReviewableMessage
-        let messages = reviewableMessages.map { message in
-            EmailReviewMessageDescriptor(
-                messageID: message.id,
-                subject: message.subject,
-                fromAddress: message.fromAddress,
-                date: EmailReviewDateFormatter.string(from: message.date),
-                snippet: message.snippet,
-                isRead: message.isRead,
-                isFlagged: message.isFlagged,
-                notes: message.sortedNoteDescriptors
-            )
-        }
-        return EmailReviewThreadDescriptor(
-            threadID: thread.id,
-            subject: latest?.subject ?? "",
-            latestMessageDate: latest.map { EmailReviewDateFormatter.string(from: $0.date) } ?? "",
-            participantSummary: thread.reviewParticipantSummary,
-            snippet: latest?.snippet ?? "",
-            unreadCount: thread.reviewUnreadCount,
-            isFlagged: thread.isReviewFlagged,
-            messages: messages
-        )
-    }
-}
-
-private extension Email {
-    var sortedNoteDescriptors: [EmailReviewNoteDescriptor] {
-        notes
-            .sorted { $0.createdAt < $1.createdAt }
-            .map { EmailReviewNoteDescriptor(author: $0.author.rawValue, content: $0.content) }
+        Review my inbox. Start by calling `fetch_inbox_emails` to pull the threads worth a look \
+        (use the defaults unless I've steered you otherwise), then tell me about anything that needs me. \
+        For each thread, focus on the latest message.
+        """
     }
 }

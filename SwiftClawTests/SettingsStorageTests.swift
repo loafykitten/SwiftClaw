@@ -120,6 +120,28 @@ struct SettingsStorageTests {
         #expect(!SettingsStorage.isWebSearchEnabled(userDefaults: fixture.defaults))
         #expect(!SettingsStorage.isInvestigationEnabled(userDefaults: fixture.defaults))
     }
+
+    @Test func emailReviewMaxThreadsDefaultsToFifteen() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        #expect(SettingsStorage.loadEmailReviewMaxThreads(userDefaults: fixture.defaults) == 15)
+    }
+
+    @Test func emailReviewMaxThreadsMigratesLegacyDefaultToFifteenOnce() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(40, forKey: SettingsKeys.emailReviewMaxThreads)
+        SettingsStorage.migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: fixture.defaults)
+
+        #expect(fixture.defaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == 15)
+
+        fixture.defaults.set(40, forKey: SettingsKeys.emailReviewMaxThreads)
+        SettingsStorage.migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: fixture.defaults)
+
+        #expect(fixture.defaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == 40)
+    }
 }
 
 private struct UserDefaultsFixture {

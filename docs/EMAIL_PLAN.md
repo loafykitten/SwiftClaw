@@ -3,8 +3,13 @@
 The email feature is code-complete for the current macOS MVP. The only active
 remaining work is live end-to-end verification against a real mail account.
 
-Current local verification, June 25, 2026:
-- `swift test` passes: 119 tests.
+Current local verification, June 25, 2026 (re-confirmed by code review of the
+model-driven fetch work):
+- `xcodebuild test -scheme SwiftClaw -destination 'platform=macOS'` passes: all
+  22 suites green (the `fetch_inbox_emails` work adds `EmailReviewFetchTests`).
+  (The `SwiftClawTests` unit-test target and a shared test
+  scheme are wired into the project; the test folder is attached as a
+  synchronized group, so new test files are picked up automatically.)
 - `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build` passes.
 
 ## Shipped Scope
@@ -24,17 +29,34 @@ Current local verification, June 25, 2026:
 - Sent reply echo rows reconcile to the real Sent UID by Message-ID.
 
 **Review and chat**
-- `EmailReviewService` with a separate review interval and a per-pass email
-  cap (default 40, configurable in Email settings via "Emails per Review").
-- Review selection (`fetchNonArchivedThreadsForReview`): a thread is eligible
-  when never reviewed, has new mail since its last review, or was last reviewed
-  more than `reviewResurfaceInterval` (7 days) ago — so old read mail keeps
-  resurfacing for clearing instead of being suppressed forever. Flagged or
-  notated threads always bypass suppression (the user's "this still matters"
-  markers). The cap is applied after filtering so older eligible mail isn't
-  hidden behind recently-reviewed newest mail.
-- Review suppression via `EmailThread.lastReviewedAt`, stamped only after a
-  successful inference pass.
+- `EmailReviewService` runs on a separate review interval. The model drives
+  inbox selection: each pass exposes a system-only `fetch_inbox_emails` tool the
+  model calls first to pull the slice of inbox it wants, then reviews the result
+  and calls `notify_user_about_emails`. The scheduled, manual ("Review Now"),
+  and conversational-refresh paths all use this two-step flow.
+- `fetch_inbox_emails` (backed by `EmailRepository.fetchThreadsForReview`) takes
+  optional filters: `max_age_days` (omitted by default, so old read backlog can
+  resurface; set it to focus on a recent window), `limit` (default 15,
+  configurable in Email settings via "Emails per Review"), and include flags for
+  flagged/notated/read/unread/archived/trashed (defaults include flagged,
+  notated, read, unread; exclude archived, trashed). Unread, flagged, and notated
+  threads override the limit — they're never dropped by the cap; flagged/notated
+  also bypass any explicit age window. The model infers filters from user
+  steering (e.g. "this week" sets `max_age_days`, "what's flagged" narrows to
+  flagged only).
+- Review suppression via `EmailThread.lastReviewedAt` + `reviewedCount`: a thread
+  is eligible when never reviewed, has new mail since its last review, or was last
+  reviewed longer ago than its decayed resurface window. The window is
+  `min(1 + reviewedCount, 7)` days — a thread loses urgency the more often it's
+  shown without action but never escapes (it returns at least weekly), and fresh
+  mail resets the counter. Flagged or notated threads always bypass suppression
+  (the user's "this still matters" markers). Scheduled passes apply suppression;
+  forced/conversational passes turn it off so the model can query the whole
+  inbox. Stamping advances `reviewedCount` and happens only after a successful
+  pass, on exactly the threads the model fetched.
+- The scheduled loop skips the inference call entirely when nothing is eligible
+  (`hasThreadsEligibleForReview`), preserving the "don't call the model when
+  there's nothing to do" optimization the old inlined pre-fetch gave for free.
 - Review prompt leans toward resurfacing and treats age as a valid reason to
   surface, and `delete` may be suggested for any low-value mail (spam, promos,
   notifications, old read mail) — every delete is a user-confirmed suggestion.
@@ -85,14 +107,39 @@ Current local verification, June 25, 2026:
 
 ## Remaining Work
 
-The conversational review follow-up is built and hardened (single-message
-refresh, honest empty-result handling, lifelong review-chat identity, stale
-resurfacing, flagged/notated always-included, configurable per-pass cap) and
-passes locally. The next concrete step is the live pass below, then
-memory-backed review context once the note/flag loop has real-world use.
+The model-driven `fetch_inbox_emails` selection, the `reviewedCount` resurface
+decay, and the matching regression tests are code-complete and pass locally
+(all 22 suites green). Default autonomous fetches no longer hard-drop old read
+mail, explicit `max_age_days` still narrows when requested, and the default
+limit matches settings. The two post-review cleanups are done: the dead
+`EmailThread.reviewUnreadCount` is removed, and the
+`fetchNonArchivedThreadsForReview` doc comment now states it's a test-only
+convenience (a code-review confirmed it has no remaining production caller, as
+does `reviewResurfaceInterval`). The next concrete step is the live pass below,
+including the real-store migration check for `EmailThread.reviewedCount` and the
+review-max-threads default migration (40 → 15), then memory-backed review
+context once the note/flag loop has real-world use.
+
+Optional (non-blocking) tidy noticed during review, do only if it ever gets in
+the way: the `fetch_inbox_emails` defaults are spelled out in three places —
+the tool `description`, the per-parameter descriptions, and the review system
+prompt's two-step instructions. The overlap is partly deliberate (the model
+reads tool text and prompt separately), but the system prompt could lean on the
+tool description instead of restating every default if it drifts out of sync.
+
+One behavior to watch during the live pass (not a code change yet — confirm it
+against a real inbox before deciding): unread/flagged/notated threads override
+the fetch limit entirely, so a first review over an account with a large unread
+backlog returns every unread thread in one prompt. This is intentional
+("never miss one that mattered") and self-corrects as the inbox is cleared, but
+if the very first live pass produces an unwieldy prompt, the fix is a soft cap
+on the unread override (e.g. newest N unread) rather than the current unbounded
+return.
 
 **Live end-to-end verification - on Ember's side**
 - Test Connection succeeds; account persists; passwords land in Keychain.
+- Existing local email store opens successfully after the additive
+  `EmailThread.reviewedCount` migration.
 - First sync pulls INBOX; threads cluster sensibly.
 - Incremental sync fetches only new mail.
 - UIDVALIDITY change triggers a full re-fetch.
@@ -102,7 +149,15 @@ memory-backed review context once the note/flag loop has real-world use.
 - Delete Permanently expunges the Trash copy and removes the local row.
 - Reply sends, threads on the recipient side, APPENDs to Sent, and the local
   synthetic row reconciles to the real Sent UID.
-- A review pass creates a review chat; card actions dispatch correctly.
+- A review pass calls `fetch_inbox_emails` then `notify_user_about_emails`
+  (check `mail.review` / `mail.review.fetch` logs) and creates a review chat;
+  card actions dispatch correctly.
+- A scheduled/default review over an inbox whose remaining mail is older than a
+  week still fetches stale read mail for clearing instead of returning nothing.
+- Conversational steering reshapes the fetch — e.g. "this week" sets an age
+  window, "what's flagged" narrows to flagged — and a second scheduled pass with
+  no new mail doesn't re-surface a just-reviewed thread until its decayed window
+  elapses (while flagged/notated threads still return).
 - Replying in a review chat can add notes and set/clear flags on referenced
   emails.
 

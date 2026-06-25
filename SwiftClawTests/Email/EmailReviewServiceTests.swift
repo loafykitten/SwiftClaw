@@ -79,9 +79,10 @@ struct EmailReviewServiceTests {
         defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
 
         let service = EmailReviewService(modelContainer: container)
-        // A successful pass that produces no tool call (the model decided
-        // nothing needed attention). Returns an empty assistant reply.
-        service.completeProvider = { _, _, _, _ in "" }
+        // A successful pass where the model fetched the inbox (so the threads
+        // are recorded for stamping) but surfaced nothing — the legitimate
+        // "looked, nothing to do" case.
+        service.completeProvider = Self.fetchingProvider()
 
         let didSucceed = await service.runOnce()
         #expect(didSucceed == true)
@@ -112,9 +113,10 @@ struct EmailReviewServiceTests {
         defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
 
         let service = EmailReviewService(modelContainer: container)
-        service.completeProvider = { _, _, _, _ in "" }
+        // First pass fetches (recording the thread) + stamps, so the
+        // default-arg path now skips it.
+        service.completeProvider = Self.fetchingProvider()
 
-        // First pass: succeeds + stamps, so the default-arg path now skips.
         _ = await service.runOnce()
         #expect(repository.fetchNonArchivedThreadsForReview().isEmpty)
 
@@ -141,9 +143,11 @@ struct EmailReviewServiceTests {
 
     @Test
     func reviewBatchCapsAtMaxThreadsPerPass() async throws {
-        // C2 regression: seed more unreviewed threads than the per-pass cap.
-        // The service must only send + stamp `maxThreadsPerPass` of them;
-        // the remainder stays eligible for the next pass.
+        // C2 regression (now enforced by the `fetch_inbox_emails` default
+        // limit): seed more unreviewed READ threads than the per-pass cap. The
+        // fetch tool must return + the service stamp only `maxThreadsPerPass`
+        // of them; the remainder stays eligible for the next pass. (Read, not
+        // unread — unread intentionally overrides the cap.)
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
         let repository = EmailRepository(modelContext: context)
@@ -151,18 +155,16 @@ struct EmailReviewServiceTests {
         let total = SettingsStorage.defaultEmailReviewMaxThreads + 5
         let accountID = UUID()
         for index in 1...total {
-            // Distinct PAST dates so the cap (which takes the N most-recent
-            // threads) picks a deterministic subset, AND so a stamp at
-            // `Date.now` (after seeding) is strictly newer than every
-            // seeded `latestMessage.date` — otherwise the suppression filter
-            // (`lastReviewedAt < latestMessageDate`) would still consider a
-            // stamped thread eligible.
+            // Distinct past dates so the cap picks a deterministic newest
+            // subset, and a stamp at `Date.now` is strictly newer than every
+            // seeded date.
             let date = Date().addingTimeInterval(TimeInterval(-index))
             let message = Self.message(
                 uid: index,
                 messageID: "<c2-\(index)@example.com>",
                 subject: "Thread \(index)",
-                date: date
+                date: date,
+                isRead: true
             )
             repository.upsertMessages([message], mailbox: "INBOX", accountID: accountID)
             repository.resolveThreads()
@@ -175,40 +177,30 @@ struct EmailReviewServiceTests {
         defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
 
         let service = EmailReviewService(modelContainer: container)
-        let capture = PromptCapture()
-        service.completeProvider = { messages, _, _, _ in
-            await capture.record(messages: messages)
-            return ""
-        }
+        let capture = FetchResultCapture()
+        service.completeProvider = Self.fetchingProvider(capture: capture)
 
         _ = await service.runOnce()
 
-        // C2: the user prompt the LLM received must encode exactly
-        // `maxThreadsPerPass` thread descriptors (the JSON encoder uses
-        // `[.prettyPrinted, .sortedKeys]`, so each descriptor contributes one
-        // `"threadID":` occurrence).
-        let prompt = await capture.userPrompt
-        let nonNilPrompt = try #require(prompt)
-        // Encoder uses `[.prettyPrinted, .sortedKeys]`; either `"threadID":`
-        // or `"threadID" :` depending on encoder spacing. Match the quoted
-        // key up to the colon to be spacing-agnostic.
-        let descriptorCount = nonNilPrompt.components(separatedBy: "\"threadID\"").count - 1
+        // The fetch tool's JSON result must encode exactly `maxThreadsPerPass`
+        // thread descriptors (the encoder uses `[.prettyPrinted, .sortedKeys]`,
+        // so each descriptor contributes one `"threadID"` occurrence).
+        let result = try #require(await capture.result)
+        let descriptorCount = result.components(separatedBy: "\"threadID\"").count - 1
         #expect(descriptorCount == SettingsStorage.defaultEmailReviewMaxThreads)
 
-        // The threads that weren't sent must stay eligible for the next pass
-        // — C1's stamp-only-what-was-sent means unsent threads aren't
-        // suppressed. They roll forward to the next interval. Use the
-        // seeding `repository` so the post-check sees the stamps (the
-        // auto-merge from sibling-context saves lands in the seeding
-        // context's graph, mirroring `successfulNoActionPassStillSuppressesThreads`).
+        // The threads that weren't fetched must stay eligible for the next pass
+        // — stamp-only-what-was-fetched means unfetched threads aren't
+        // suppressed. They roll forward to the next interval.
         let stillEligible = repository.fetchNonArchivedThreadsForReview()
         #expect(stillEligible.count == total - SettingsStorage.defaultEmailReviewMaxThreads)
     }
 
     @Test
     func fetchNonArchivedThreadsForReviewRespectsLimit() async throws {
-        // Repository-level contract for C2: `limit` caps the returned count.
-        // (Used by the service to cap the batch handed to the LLM.)
+        // Repository-level contract: `limit` caps the returned count of plain
+        // (read) threads. Unread threads override the cap, so this uses read
+        // mail to exercise the limit itself.
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
         let repository = EmailRepository(modelContext: context)
@@ -218,7 +210,9 @@ struct EmailReviewServiceTests {
             let message = EmailRepositoryTests.simpleMessage(
                 uid: index,
                 messageID: "<lim-\(index)@example.com>",
-                subject: "Capped \(index)"
+                subject: "Capped \(index)",
+                isRead: true,
+                date: Date().addingTimeInterval(TimeInterval(-index))
             )
             repository.upsertMessages([message], mailbox: "INBOX", accountID: accountID)
             repository.resolveThreads()
@@ -269,20 +263,20 @@ struct EmailReviewServiceTests {
         defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
 
         let service = EmailReviewService(modelContainer: container)
-        let capture = PromptCapture()
-        service.completeProvider = { messages, _, _, _ in
-            await capture.record(messages: messages)
-            return ""
-        }
+        let capture = FetchResultCapture()
+        service.completeProvider = Self.fetchingProvider(capture: capture)
 
         let didRun = await service.runOnce()
         #expect(didRun == true)
 
-        let prompt = try #require(await capture.userPrompt)
-        #expect(prompt.contains("active@example.com"))
-        #expect(prompt.contains("Active body still needs attention"))
-        #expect(!prompt.contains("archived@example.com"))
-        #expect(!prompt.contains("Archived body should stay out"))
+        // The fetched thread JSON describes only the active message; the
+        // archived one is omitted (`EmailReviewThreadDescriptor.make` uses the
+        // reviewable set).
+        let result = try #require(await capture.result)
+        #expect(result.contains("active@example.com"))
+        #expect(result.contains("Active body still needs attention"))
+        #expect(!result.contains("archived@example.com"))
+        #expect(!result.contains("Archived body should stay out"))
     }
 
     @Test
@@ -450,6 +444,33 @@ struct EmailReviewServiceTests {
 
         func record() {
             count += 1
+        }
+    }
+
+    private actor FetchResultCapture {
+        private(set) var result: String?
+
+        func record(_ value: String) {
+            result = value
+        }
+    }
+
+    /// Builds a `completeProvider` that simulates the agentic loop's first
+    /// round: the model calls `fetch_inbox_emails` (with `arguments`) before
+    /// replying. The real `InferenceService` executes tool calls itself, but
+    /// the injected seam replaces it, so a test that needs the fetch tool's
+    /// side effects (thread-ID collection → stamping) must drive it here.
+    /// Optionally records the tool's JSON result for assertions.
+    private static func fetchingProvider(
+        arguments: [String: JSONValue] = [:],
+        capture: FetchResultCapture? = nil
+    ) -> EmailReviewInferenceComplete {
+        { _, _, _, tools in
+            if let fetchTool = tools.first(where: { $0.name == "fetch_inbox_emails" }) {
+                let result = (try? await fetchTool.execute(arguments: arguments)) ?? ""
+                await capture?.record(result)
+            }
+            return ""
         }
     }
 

@@ -11,6 +11,50 @@ struct EmailReviewThreadDescriptor: Codable, Sendable {
     let unreadCount: Int
     let isFlagged: Bool
     let messages: [EmailReviewMessageDescriptor]
+
+    /// Builds the prompt snapshot for a thread. Shared by the scheduled/manual
+    /// review pass and the `fetch_inbox_emails` tool so both serialize threads
+    /// identically. Describes the thread's reviewable (inbox) messages, falling
+    /// back to all messages when the reviewable set is empty — the case when a
+    /// fully archived or trashed thread is surfaced via an include flag.
+    @MainActor
+    static func make(for thread: EmailThread) -> EmailReviewThreadDescriptor {
+        let reviewable = thread.reviewableMessages
+        let source = reviewable.isEmpty ? thread.sortedMessages : reviewable
+        let latest = source.last
+        let messages = source.map { message in
+            EmailReviewMessageDescriptor(
+                messageID: message.id,
+                subject: message.subject,
+                fromAddress: message.fromAddress,
+                date: EmailReviewDateFormatter.string(from: message.date),
+                snippet: message.snippet,
+                isRead: message.isRead,
+                isFlagged: message.isFlagged,
+                notes: message.sortedNoteDescriptors
+            )
+        }
+        return EmailReviewThreadDescriptor(
+            threadID: thread.id,
+            subject: latest?.subject ?? "",
+            latestMessageDate: latest.map { EmailReviewDateFormatter.string(from: $0.date) } ?? "",
+            participantSummary: reviewable.isEmpty
+                ? thread.participantSummary
+                : thread.reviewParticipantSummary,
+            snippet: latest?.snippet ?? "",
+            unreadCount: source.filter { !$0.isRead }.count,
+            isFlagged: source.contains { $0.isFlagged },
+            messages: messages
+        )
+    }
+}
+
+extension Email {
+    var sortedNoteDescriptors: [EmailReviewNoteDescriptor] {
+        notes
+            .sorted { $0.createdAt < $1.createdAt }
+            .map { EmailReviewNoteDescriptor(author: $0.author.rawValue, content: $0.content) }
+    }
 }
 
 struct EmailReviewMessageDescriptor: Codable, Sendable {

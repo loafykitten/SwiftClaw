@@ -16,13 +16,19 @@ final class EmailThread {
     /// to decide whether a thread is current (no new mail since last review).
     var lastReviewedAt: Date?
 
+    /// How many review passes have included this thread without new activity.
+    /// `EmailRepository.resurfaceInterval(reviewedCount:)` owns the decay
+    /// formula. Defaulted so existing stores migrate without a schema bump.
+    var reviewedCount: Int = 0
+
     init(
         id: UUID = UUID(),
         subjectNormalized: String,
         messages: [Email] = [],
         firstDate: Date = .now,
         lastDate: Date = .now,
-        lastReviewedAt: Date? = nil
+        lastReviewedAt: Date? = nil,
+        reviewedCount: Int = 0
     ) {
         self.id = id
         self.subjectNormalized = subjectNormalized
@@ -30,6 +36,7 @@ final class EmailThread {
         self.firstDate = firstDate
         self.lastDate = lastDate
         self.lastReviewedAt = lastReviewedAt
+        self.reviewedCount = reviewedCount
     }
 
     var sortedMessages: [Email] {
@@ -58,10 +65,6 @@ final class EmailThread {
     /// it to the model every pass rather than suppressing it.
     var hasReviewNote: Bool {
         reviewableMessages.contains { !$0.notes.isEmpty }
-    }
-
-    var reviewUnreadCount: Int {
-        unreadCount(in: reviewableMessages)
     }
 
     var reviewParticipantSummary: String {

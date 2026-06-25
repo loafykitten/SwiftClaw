@@ -130,6 +130,7 @@ enum SettingsKeys {
     static let emailPollIntervalSeconds = "settings.email.pollIntervalSeconds"
     static let emailReviewIntervalSeconds = "settings.email.reviewIntervalSeconds"
     static let emailReviewMaxThreads = "settings.email.reviewMaxThreads"
+    static let emailReviewMaxThreadsDefaultMigrated = "settings.email.reviewMaxThreads.defaultMigrated"
     static let emailAutoNavigateToReviewChat = "settings.email.autoNavigateToReviewChat"
     static let emailMailboxSyncStates = "settings.email.mailboxSyncStates"
 }
@@ -395,7 +396,8 @@ enum SettingsStorage {
     static let emailPollIntervalSecondsRange: ClosedRange<Int> = 60...3600
     static let defaultEmailReviewIntervalSeconds = 1800
     static let emailReviewIntervalSecondsRange: ClosedRange<Int> = 300...14400
-    static let defaultEmailReviewMaxThreads = 40
+    private static let legacyDefaultEmailReviewMaxThreads = 40
+    static let defaultEmailReviewMaxThreads = 15
     static let emailReviewMaxThreadsRange: ClosedRange<Int> = 5...100
     static let defaultEmailAutoNavigateToReviewChat = false
 
@@ -438,6 +440,21 @@ enum SettingsStorage {
             max(stored, emailReviewMaxThreadsRange.lowerBound),
             emailReviewMaxThreadsRange.upperBound
         )
+    }
+
+    static func migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: UserDefaults = .standard) {
+        guard !userDefaults.bool(forKey: SettingsKeys.emailReviewMaxThreadsDefaultMigrated) else {
+            return
+        }
+        defer { userDefaults.set(true, forKey: SettingsKeys.emailReviewMaxThreadsDefaultMigrated) }
+
+        guard userDefaults.object(forKey: SettingsKeys.emailReviewMaxThreads) != nil else {
+            return
+        }
+        guard userDefaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == legacyDefaultEmailReviewMaxThreads else {
+            return
+        }
+        userDefaults.set(defaultEmailReviewMaxThreads, forKey: SettingsKeys.emailReviewMaxThreads)
     }
 
     static func loadInvestigationMaxSubAgents() -> Int {

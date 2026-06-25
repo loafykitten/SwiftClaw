@@ -479,7 +479,8 @@ struct EmailRepositoryTests {
         // (newest N threads) BEFORE the suppression filter. Once those newest
         // threads were reviewed, every older eligible thread stayed hidden
         // behind them. The cap must apply AFTER filtering so older eligible
-        // mail still surfaces.
+        // mail still surfaces. (Read threads — unread threads intentionally
+        // override the cap, so the limit only trims plain-read mail.)
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
         let repository = EmailRepository(modelContext: context)
@@ -490,6 +491,7 @@ struct EmailRepositoryTests {
                 uid: index,
                 messageID: "<cap-\(index)@example.com>",
                 subject: "Thread \(index)",
+                isRead: true,
                 date: Date().addingTimeInterval(TimeInterval(-index * 60))
             )
             repository.upsertMessages([message], mailbox: "INBOX", accountID: Self.accountID)
