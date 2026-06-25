@@ -149,6 +149,62 @@ struct MailSyncWorkerDeletionReconciliationTests {
         #expect(byUID[3]?.isDeleted == false, "new-UID row stays active")
     }
 
+    @Test func trashSyncPromotesMovedLocalRowToServerUID() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let mock = MockMailClient()
+        let accountID = UUID()
+        let account = Self.completeAccount(id: accountID, trashMailbox: "Trash")
+        await mock.setUIDValidity(7)
+        await mock.setMailbox("INBOX", messages: [])
+
+        let messageID = "<trash-promote@example.com>"
+        _ = repository.upsertMessages(
+            [Self.simpleMessage(uid: 1, messageID: messageID, subject: "Trash promote")],
+            mailbox: "INBOX",
+            accountID: accountID
+        )
+        let local = try #require(try context.fetch(FetchDescriptor<Email>()).first)
+        repository.delete(messageID: local.id, movedToMailbox: "Trash")
+
+        await mock.setMailbox(
+            "Trash",
+            messages: [Self.simpleMessage(uid: 77, messageID: messageID, subject: "Trash promote")]
+        )
+
+        let worker = Self.makeWorker(mock: mock, account: account, container: container)
+        _ = await worker.syncOnce()
+
+        let verifyContext = ModelContext(container)
+        let refreshed = (try? verifyContext.fetch(FetchDescriptor<Email>())) ?? []
+        #expect(refreshed.count == 1, "Trash sync promotes the local row instead of inserting a duplicate")
+        #expect(refreshed.first?.uid == 77)
+        #expect(refreshed.first?.mailbox == "Trash")
+        #expect(refreshed.first?.isDeleted == true)
+    }
+
+    @Test func trashSyncMarksServerTrashRowsDeletedLocally() async throws {
+        let container = try Self.inMemoryContainer()
+        let mock = MockMailClient()
+        let accountID = UUID()
+        let account = Self.completeAccount(id: accountID, trashMailbox: "Trash")
+        await mock.setUIDValidity(7)
+        await mock.setMailbox("INBOX", messages: [])
+        await mock.setMailbox(
+            "Trash",
+            messages: [Self.simpleMessage(uid: 8, messageID: "<server-trash@example.com>", subject: "Server trash")]
+        )
+
+        let worker = Self.makeWorker(mock: mock, account: account, container: container)
+        _ = await worker.syncOnce()
+
+        let context = ModelContext(container)
+        let trashed = try #require(try context.fetch(FetchDescriptor<Email>()).first)
+        #expect(trashed.mailbox == "Trash")
+        #expect(trashed.isDeleted == true)
+    }
+
     @Test func reconcileDeletionsPreservesNotesViaSoftDelete() async throws {
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
@@ -157,7 +213,7 @@ struct MailSyncWorkerDeletionReconciliationTests {
         // Seed one local INBOX row with a user-authored note. The cascade
         // delete rule on `EmailNote.email` means a HARD delete would destroy
         // the note; the soft-delete path must keep both the row + note.
-        var fetched = Self.simpleMessage(uid: 1, messageID: "<n@example.com>", subject: "With note")
+        let fetched = Self.simpleMessage(uid: 1, messageID: "<n@example.com>", subject: "With note")
         let note = EmailNote(email: nil, author: .user, content: "remember to follow up")
         _ = repository.upsertMessages([fetched], mailbox: "INBOX", accountID: Self.noteAccountID)
         let storedEmail = (try? context.fetch(FetchDescriptor<Email>()))?.first
@@ -223,7 +279,7 @@ struct MailSyncWorkerDeletionReconciliationTests {
 
     private static let noteAccountID = UUID()
 
-    private static func completeAccount(id: UUID) -> StoredEmailAccount {
+    private static func completeAccount(id: UUID, trashMailbox: String? = nil) -> StoredEmailAccount {
         StoredEmailAccount(
             id: id,
             displayName: "Test",
@@ -231,7 +287,8 @@ struct MailSyncWorkerDeletionReconciliationTests {
             imapUsername: "me@example.com",
             smtpHost: "smtp.example.com",
             smtpUsername: "me@example.com",
-            fromAddress: "me@example.com"
+            fromAddress: "me@example.com",
+            trashMailbox: trashMailbox
         )
     }
 

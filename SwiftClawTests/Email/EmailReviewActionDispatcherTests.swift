@@ -44,7 +44,9 @@ struct EmailReviewActionDispatcherTests {
         #expect(replyRefreshed?.isFlagged == true)
         #expect(replyRefreshed?.isRead == true)
         #expect(try Self.refresh(archiveEmail.id, in: container)?.isArchived == true)
-        #expect(try Self.refresh(deleteEmail.id, in: container)?.isDeleted == true)
+        let deleteRefreshed = try Self.refresh(deleteEmail.id, in: container)
+        #expect(deleteRefreshed?.isDeleted == true)
+        #expect(deleteRefreshed?.mailbox == "Trash")
 
         // Server-side calls landed on the mock. `review`/`flag`/`reply` set
         // flags (3 calls); `.archive` + `.delete` go through `move` (C3 makes

@@ -27,11 +27,7 @@ final class EmailReviewActionDispatcher: ReviewActionDispatcher {
     /// that case).
     @MainActor
     private static func defaultMailClientFactory(accountID: UUID) -> MailClient? {
-        guard let account = EmailAccountStore.shared.account(for: accountID),
-              account.isComplete else {
-            return nil
-        }
-        return SwiftMailClient(account: account)
+        EmailMailClientResolver.mailClient(forAccountID: accountID)
     }
 
     func perform(action: ReviewActionToken, itemID: UUID) async {

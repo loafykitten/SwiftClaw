@@ -11,7 +11,7 @@ import os
 /// account in turn, tagging upserted messages with the account's UUID.
 ///
 /// Multi-mailbox: per account the worker iterates a list of mailbox names
-/// to sync (INBOX + the account's resolved Sent folder). Per-mailbox state
+/// to sync (INBOX + resolved Sent/Trash folders). Per-mailbox state
 /// lives in `MailboxSyncStateStore` (keyed by `(accountID, mailbox)`), so
 /// the per-mailbox high-water + UIDVALIDITY tracking needs no change.
 /// Sent-mailbox sync finally reconciles the locally-synthetic rows
@@ -76,15 +76,15 @@ actor MailSyncWorker {
         var totalRemoved = 0
         for account in accounts {
             let client = clientFactory(account)
-            // Sync INBOX + the account's resolved Sent folder. INBOX is
-            // always attempted; Sent is skipped when the account can't
+            // Sync INBOX + the account's resolved Sent/Trash folders. INBOX
+            // is always attempted; Sent/Trash are skipped when the account can't
             // resolve one (a brand-new install + the user hasn't taken a
             // delete/archive/send action yet to cache the special-use name).
             let mailboxes = await Self.mailboxesToSync(for: account, client: client)
             for mailbox in mailboxes {
                 do {
                     let inserted = try await syncMailbox(
-                        name: mailbox,
+                        mailbox,
                         account: account,
                         client: client
                     )
@@ -92,7 +92,7 @@ actor MailSyncWorker {
                     // Reconcile per mailbox.
                     totalRemoved += await reconcile(
                         client: client,
-                        mailbox: mailbox,
+                        mailbox: mailbox.name,
                         accountID: account.id
                     )
                 } catch {
@@ -103,7 +103,7 @@ actor MailSyncWorker {
                     // *names* and counts/booleans are non-sensitive enough
                     // for `.public`.
                     Self.logger.error("""
-                        syncOnce failed for \(mailbox, privacy: .public) on \
+                        syncOnce failed for \(mailbox.name, privacy: .public) on \
                         \(account.effectiveDisplayName): \
                         \(String(describing: error))
                         """)
@@ -120,27 +120,39 @@ actor MailSyncWorker {
         return totalInserted
     }
 
-    /// Returns INBOX (always) plus the account's resolved Sent folder when
-    /// available. Best-effort: if the special-use lookup throws the worker
-    /// still syncs INBOX alone; the next sync retries Sent resolution.
+    /// Returns INBOX (always) plus the account's resolved Sent/Trash folders
+    /// when available. Best-effort: if the special-use lookup throws the
+    /// worker still syncs INBOX alone; the next sync retries resolution.
     private static func mailboxesToSync(
         for account: StoredEmailAccount,
         client: MailClient
-    ) async -> [String] {
-        var boxes = ["INBOX"]
-        // Use the cached resolvedSentMailbox when present; otherwise trigger
-        // a one-shot special-use resolve. The lookup also refreshes Archive/
-        // Trash names used elsewhere by `MailClient.archive`/`delete`.
-        if let sent = account.sentMailbox {
-            boxes.append(sent)
-        } else {
-            try? await client.resolveSpecialUseMailboxes()
-            if let refreshed = await MainActor.run(body: {
-                EmailAccountStore.shared.account(for: account.id)?.sentMailbox
-                    ?? account.resolvedSentMailbox
-            }) {
-                boxes.append(refreshed)
+    ) async -> [SyncedMailbox] {
+        var boxes = [SyncedMailbox(name: "INBOX", isDeletedMailbox: false)]
+
+        func append(_ name: String?, isDeletedMailbox: Bool) {
+            guard let name, !name.isEmpty else { return }
+            if !boxes.contains(where: { $0.name == name }) {
+                boxes.append(SyncedMailbox(name: name, isDeletedMailbox: isDeletedMailbox))
             }
+        }
+
+        append(account.sentMailbox, isDeletedMailbox: false)
+        append(account.trashMailbox, isDeletedMailbox: true)
+
+        // Use cached special-use names when present; otherwise trigger a
+        // one-shot resolve. The lookup also refreshes Archive names used by
+        // `MailClient.archive`.
+        if account.sentMailbox == nil || account.trashMailbox == nil {
+            do {
+                try await client.resolveSpecialUseMailboxes()
+            } catch {
+                return boxes
+            }
+            let refreshed = await MainActor.run {
+                EmailAccountStore.shared.account(for: account.id)
+            }
+            append(refreshed?.sentMailbox ?? account.resolvedSentMailbox, isDeletedMailbox: false)
+            append(refreshed?.trashMailbox ?? account.resolvedTrashMailbox, isDeletedMailbox: true)
         }
         return boxes
     }
@@ -148,10 +160,11 @@ actor MailSyncWorker {
     /// Fetches + upserts one mailbox for one account. Returns the count of
     /// newly-inserted messages for this mailbox only.
     private func syncMailbox(
-        name mailbox: String,
+        _ syncedMailbox: SyncedMailbox,
         account: StoredEmailAccount,
         client: MailClient
     ) async throws -> Int {
+        let mailbox = syncedMailbox.name
         let stored = await syncStateProvider(account.id, mailbox)
         let didHavePriorState = (stored?.uidValidity ?? 0) > 0
         let sinceUID: UInt32? = didHavePriorState ? stored?.lastSeenUID : nil
@@ -183,14 +196,29 @@ actor MailSyncWorker {
         )
         await syncStateUpdater(newState, account.id, mailbox)
 
-        return await upsert(fetched: result.messages, mailbox: mailbox, accountID: account.id)
+        return await upsert(
+            fetched: result.messages,
+            mailbox: mailbox,
+            accountID: account.id,
+            isDeletedMailbox: syncedMailbox.isDeletedMailbox
+        )
     }
 
-    private func upsert(fetched: [FetchedMessage], mailbox: String, accountID: UUID) async -> Int {
+    private func upsert(
+        fetched: [FetchedMessage],
+        mailbox: String,
+        accountID: UUID,
+        isDeletedMailbox: Bool
+    ) async -> Int {
         await MainActor.run {
             let context = ModelContext(modelContainer)
             let repository = EmailRepository(modelContext: context)
-            let inserted = repository.upsertMessages(fetched, mailbox: mailbox, accountID: accountID)
+            let inserted = repository.upsertMessages(
+                fetched,
+                mailbox: mailbox,
+                accountID: accountID,
+                isDeletedMailbox: isDeletedMailbox
+            )
             // Only re-cluster when messages were actually inserted. The
             // incremental path commonly returns `[]` (no new mail), and
             // re-running `resolveThreads()` on an unchanged inbox would
@@ -254,4 +282,9 @@ actor MailSyncWorker {
             return 0
         }
     }
+}
+
+private struct SyncedMailbox: Sendable {
+    let name: String
+    let isDeletedMailbox: Bool
 }

@@ -521,8 +521,7 @@ private struct EmailThreadRow: View {
         } message: { _ in
             // "Delete" moves to the Trash mailbox (recoverable) rather than
             // expunging from the server. The irreversible expunge path is
-            // reserved for a future "Delete Permanently" affordance in the
-            // Trash mailbox.
+            // reserved for the Trash mailbox's "Delete Permanently" action.
             Text("The email will be moved to the Trash mailbox on the server.")
         }
         .confirmationDialog(
@@ -570,14 +569,6 @@ private struct EmailThreadRow: View {
         }
     }
 
-    private func mailClient(for email: Email) -> SwiftMailClient? {
-        guard let account = EmailAccountStore.shared.account(for: email.accountID),
-               account.isComplete else {
-            return nil
-        }
-        return SwiftMailClient(account: account)
-    }
-
     private func repository() -> EmailRepository {
         EmailRepository(modelContext: modelContext)
     }
@@ -593,7 +584,7 @@ private struct EmailThreadRow: View {
             await EmailServerAction.setFlags(
                 email: email,
                 repository: repository(),
-                mailClient: mailClient(for: email),
+                mailClient: EmailMailClientResolver.mailClient(for: email),
                 isRead: true,
                 isFlagged: nil
             )
@@ -605,7 +596,7 @@ private struct EmailThreadRow: View {
             await EmailServerAction.archive(
                 email: email,
                 repository: repository(),
-                mailClient: mailClient(for: email)
+                mailClient: EmailMailClientResolver.mailClient(for: email)
             )
         }
     }
@@ -615,7 +606,7 @@ private struct EmailThreadRow: View {
             await EmailServerAction.delete(
                 email: email,
                 repository: repository(),
-                mailClient: mailClient(for: email)
+                mailClient: EmailMailClientResolver.mailClient(for: email)
             )
         }
     }
@@ -631,7 +622,7 @@ private struct EmailThreadRow: View {
         // because the server call failed would be worse than leaving the
         // server copy to be re-synced). If the account has been removed the
         // server-side call is skipped; the local hard-delete still runs.
-        let mailClient = mailClient(for: email)
+        let mailClient = EmailMailClientResolver.mailClient(for: email)
         let mailbox = email.mailbox
         let uid = email.uid
         if let mailClient {
@@ -654,7 +645,7 @@ private struct EmailThreadRow: View {
             await EmailServerAction.toggleFlag(
                 email: email,
                 repository: repository(),
-                mailClient: mailClient(for: email)
+                mailClient: EmailMailClientResolver.mailClient(for: email)
             )
         }
     }
@@ -1124,7 +1115,7 @@ struct EmailHTMLView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         func webView(_ webView: WKWebView,
                       decidePolicyFor navigationAction: WKNavigationAction,
-                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+                      decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
             if navigationAction.navigationType == .linkActivated,
                let url = navigationAction.request.url {
                 NSWorkspace.shared.open(url)

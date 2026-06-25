@@ -38,10 +38,25 @@ enum EmailServerAction {
     /// expunge — the Trash-mailbox "Delete Permanently" affordance owns that
     /// path via `MailClient.deletePermanently`.
     static func delete(email: Email, repository: EmailRepository, mailClient: MailClient?) async {
-        repository.delete(messageID: email.id)
+        let sourceMailbox = email.mailbox
+        let uid = email.uid
+        let fallbackTrashMailbox = EmailAccountStore.shared
+            .account(for: email.accountID)?
+            .resolvedTrashMailbox ?? "Trash"
+        repository.delete(messageID: email.id, movedToMailbox: fallbackTrashMailbox)
         guard let mailClient else { return }
         do {
-            try await mailClient.delete(uid: email.uid, in: email.mailbox)
+            try await mailClient.delete(uid: uid, in: sourceMailbox)
+            // The server move resolves + caches the account's real Trash
+            // folder. If that name differs from the optimistic fallback, repoint
+            // the local row so Trash sync promotes it (matched by Message-ID,
+            // scoped to the mailbox name) instead of inserting a duplicate.
+            if let resolvedTrashMailbox = EmailAccountStore.shared
+                .account(for: email.accountID)?
+                .resolvedTrashMailbox,
+               resolvedTrashMailbox != fallbackTrashMailbox {
+                repository.delete(messageID: email.id, movedToMailbox: resolvedTrashMailbox)
+            }
         } catch {
             MailSyncMonitor.shared.setStatus(
                 "Couldn't move to Trash on the server: \(error.localizedDescription)",

@@ -27,7 +27,12 @@ final class EmailRepository {
     /// Inserts new messages and updates flags/bodies for already-known messages.
     /// Returns the count of newly inserted messages.
     @discardableResult
-    func upsertMessages(_ fetched: [FetchedMessage], mailbox: String, accountID: UUID) -> Int {
+    func upsertMessages(
+        _ fetched: [FetchedMessage],
+        mailbox: String,
+        accountID: UUID,
+        isDeletedMailbox: Bool = false
+    ) -> Int {
         guard !fetched.isEmpty else { return 0 }
         var inserted = 0
         let existing = fetchExistingMailboxIndex(uids: fetched.map(\.uid), mailbox: mailbox, accountID: accountID)
@@ -65,7 +70,12 @@ final class EmailRepository {
                 synthetic.isLocallySynthetic = false
                 reconcileFlags(existing: synthetic, fetched: message)
             } else {
-                insert(message: message, mailbox: mailbox, accountID: accountID)
+                insert(
+                    message: message,
+                    mailbox: mailbox,
+                    accountID: accountID,
+                    isDeletedMailbox: isDeletedMailbox
+                )
                 inserted += 1
             }
         }
@@ -87,9 +97,12 @@ final class EmailRepository {
         save()
     }
 
-    func delete(messageID: UUID) {
+    func delete(messageID: UUID, movedToMailbox mailbox: String? = nil) {
         guard let email = fetchEmail(by: messageID) else { return }
         email.isDeleted = true
+        if let mailbox, !mailbox.isEmpty {
+            email.mailbox = mailbox
+        }
         save()
     }
 
@@ -371,13 +384,12 @@ final class EmailRepository {
 
     /// Locally records a just-sent reply so it shows up immediately in the
     /// thread detail (and threads via `In-Reply-To`/`References`) without
-    /// waiting for a Sent-folder sync that the MVP worker doesn't perform
-    /// (`MailSyncWorker` only syncs INBOX).
+    /// waiting for the next Sent-folder sync.
     ///
     /// The row gets a *local-only* uid synthesized as `max(existing uid in
     /// this mailbox+account) + 1` (clamped below `Int.max - 1`). That's
-    /// collision-free among locally-sent messages (the only rows that live in
-    /// the Sent mailbox today) and stays out of the real IMAP UID range. The
+    /// collision-free among locally-sent messages and stays out of the real
+    /// IMAP UID range. The
     /// `isLocallySynthetic` flag marks the row as client-seeded.
     ///
     /// When a real Sent-folder sync lands the matching message (deduped by
@@ -456,8 +468,8 @@ final class EmailRepository {
     /// Preserves SwiftClaw-owned metadata by **soft-deleting only** — the
     /// `Email` row, its `EmailNote`s, `EmailThread` linkage, `lastReviewedAt`
     /// stamp, and local-only `isArchived`/`isFlagged` overrides stay intact
-    /// on the moved-to-Trash row. A future "Delete Permanently" affordance
-    /// in the Trash mailbox can hard-delete if DB growth matters; the
+    /// on the moved-to-Trash row. The explicit "Delete Permanently"
+    /// affordance in the Trash mailbox owns hard-delete; the
     /// `EmailNote` cascade rule means a hard-delete here would destroy
     /// user-authored notes, which is exactly why we don't.
     ///
@@ -468,11 +480,10 @@ final class EmailRepository {
     /// this same sync pass is already upserted before this runs, so it's
     /// present in `serverUIDs` and stays active.
     ///
-    /// Scope: per `(mailbox, accountID)`. The MVP worker reconciles INBOX
-    /// only; multi-mailbox sync should call this per synced mailbox, taking
-    /// care to skip the locally-synthetic Sent UIDs that `upsertSentMessage`
-    /// produces (those won't be in the server set by design — the MVP stops
-    /// before reconciling Sent).
+    /// Scope: per `(mailbox, accountID)`. Multi-mailbox sync calls this per
+    /// synced mailbox, taking care to skip the locally-synthetic Sent UIDs
+    /// that `upsertSentMessage` produces (those won't be in the server set
+    /// until the provider's Sent APPEND has landed).
     @discardableResult
     func reconcileDeletions(
         serverUIDs: Set<UInt32>,
@@ -605,7 +616,12 @@ final class EmailRepository {
         )
     }
 
-    private func insert(message: FetchedMessage, mailbox: String, accountID: UUID) {
+    private func insert(
+        message: FetchedMessage,
+        mailbox: String,
+        accountID: UUID,
+        isDeletedMailbox: Bool
+    ) {
         let email = Email(
             messageID: message.messageID,
             subject: message.subject,
@@ -621,7 +637,7 @@ final class EmailRepository {
             isRead: message.isRead,
             isFlagged: message.isFlagged,
             isArchived: false,
-            isDeleted: false,
+            isDeleted: isDeletedMailbox,
             inReplyTo: message.inReplyTo,
             referencesRaw: message.references,
             accountID: accountID,

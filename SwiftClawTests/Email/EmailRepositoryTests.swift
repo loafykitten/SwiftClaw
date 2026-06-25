@@ -348,9 +348,9 @@ struct EmailRepositoryTests {
 
     @Test func upsertSentMessageThreadsReplyIntoIncomingThread() async throws {
         // 2.1 (review): a sent reply must show up locally so the user
-        // actually sees what they just sent. The MVP sync worker only
-        // fetches INBOX, so ingesting into the Sent mailbox locally is the
-        // only path that surfaces the reply without a Sent-folder sync.
+        // actually sees what they just sent. Sent sync later promotes the
+        // synthetic row to the real server UID; this local ingest keeps the
+        // UI immediate.
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
         let repository = EmailRepository(modelContext: context)
