@@ -52,12 +52,20 @@ enum ChatCompletionService {
         let canInvestigate = allowInvestigation
             && canUseTools
             && effectiveReasoningEffort?.isReasoningEnabled == true
+        // A chat *is* an inbox-review chat for its whole life — keyed off the
+        // title stamped at creation, not off whether the card still has live
+        // emails. Otherwise once the user cleans up the card (all items
+        // actioned) or the emails are gone, the chat would silently lose its
+        // email context + tools and the assistant would deny having any email
+        // access at all.
+        let isEmailReviewChat = chat.title.hasPrefix(EmailReviewNotifyTool.reviewChatTitlePrefix)
         let reviewCardPayloads = chat.sortedMessages.compactMap(\.reviewCard)
-        let emailReviewContext = EmailReviewFollowUpContextBuilder.makeContext(
-            for: reviewCardPayloads,
-            in: modelContext
-        )
-        let isEmailReviewChat = emailReviewContext != nil
+        let emailReviewContext: String? = isEmailReviewChat
+            ? EmailReviewFollowUpContextBuilder.makeContext(
+                for: reviewCardPayloads,
+                in: modelContext
+              )
+            : nil
 
         var messages = chat.sortedMessages.compactMap {
             $0.inferenceMessage(includingImages: canUseImages)
@@ -75,8 +83,13 @@ enum ChatCompletionService {
                 renumbering entries.
                 """))
         }
-        if let emailReviewContext {
-            messages.append(.system(emailReviewContext))
+        if isEmailReviewChat {
+            // Always ground the assistant in this chat's email capabilities —
+            // even when no specific emails are attached (card cleared/empty),
+            // so it never claims it lacks email access.
+            messages.append(.system(
+                emailReviewContext ?? EmailReviewFollowUpContextBuilder.capabilityOnlyContext()
+            ))
         }
 
         var tools: [any Tool] = []

@@ -300,24 +300,48 @@ final class EmailRepository {
 
     // MARK: - Review selection
 
+    /// How long after a thread was last reviewed it becomes eligible again even
+    /// without new mail. Old read mail that's still sitting in the inbox keeps
+    /// getting re-offered for triage (archive/delete) instead of being
+    /// suppressed forever — the model decides each pass whether a resurfaced
+    /// thread is actually worth showing. 7 days by default; the user can steer
+    /// a different window conversationally and the prompt widens its own focus
+    /// toward older mail when little recent stands out.
+    static let reviewResurfaceInterval: TimeInterval = 7 * 24 * 60 * 60
+
     /// Threads eligible for an inbox-review pass: non-archived threads with at
-    /// least one non-deleted message, ordered by last activity. Excludes
-    /// threads already reviewed *since their most recent message arrived* —
-    /// suppression is tracked via `EmailThread.lastReviewedAt`
-    /// (`EmailReviewService.runOnce` stamps every fetched thread, actioned or
-    /// not, so silent "no-action" threads aren't re-sent to the LLM until new
-    /// mail lands).
+    /// least one non-deleted message, ordered by last activity. A thread is
+    /// eligible when it has never been reviewed, has new mail since its last
+    /// review, OR was last reviewed more than `reviewResurfaceInterval` ago
+    /// (stale resurfacing — so old read mail still in the inbox keeps coming
+    /// back for triage instead of being suppressed forever). Flagged or notated
+    /// threads bypass suppression entirely and are ALWAYS included — the user's
+    /// own "this still matters" markers, which the model re-judges each pass for
+    /// whether it's time to surface. Suppression is otherwise tracked via
+    /// `EmailThread.lastReviewedAt` (`EmailReviewService.runOnce` stamps every
+    /// fetched thread, actioned or not).
     /// `limit` caps the number of threads returned per pass so a first-run
     /// with hundreds of unreviewed threads doesn't overflow the context
-    /// window. Sorted newest-first so the most recent activity gets triaged
-    /// when the unreviewed set is large.
+    /// window. The cap is applied AFTER filtering so older eligible threads
+    /// aren't hidden behind recently-reviewed newest mail. Sorted newest-first
+    /// so the most recent activity gets triaged when the eligible set is large.
     /// `force` skips the `lastReviewedAt` suppression filter — used by the
     /// manual "Review Now" button so a user can re-triage an inbox where
     /// every thread was already reviewed in a prior pass. The scheduled loop
     /// keeps `force: false` so the H3 "no re-send until new mail" contract
     /// holds.
-    func fetchNonArchivedThreadsForReview(limit: Int? = nil, force: Bool = false) -> [EmailThread] {
-        var descriptor = FetchDescriptor<EmailThread>(
+    func fetchNonArchivedThreadsForReview(
+        limit: Int? = nil,
+        force: Bool = false,
+        now: Date = .now
+    ) -> [EmailThread] {
+        // Fetch the full eligible set sorted newest-first; the `limit` is
+        // applied AFTER filtering (below). Applying it as `fetchLimit` capped
+        // the query to the newest N threads *before* the suppression filter
+        // ran — so once those newest threads were reviewed, every older
+        // eligible thread stayed hidden behind them and old read mail never
+        // resurfaced.
+        let descriptor = FetchDescriptor<EmailThread>(
             predicate: #Predicate { thread in
                 thread.messages.contains { message in
                     !message.isArchived && !message.isDeleted
@@ -325,17 +349,41 @@ final class EmailRepository {
             },
             sortBy: [SortDescriptor(\.lastDate, order: .reverse)]
         )
-        if let limit { descriptor.fetchLimit = limit }
         let threads = (try? modelContext.fetch(descriptor)) ?? []
-        guard !force else { return threads }
-        return threads.filter { thread in
-            let latestMessageDate = thread.latestReviewableMessage?.date ?? .distantPast
-            // No prior review → include. Prior review older than the latest
-            // message → new mail since review → include. Otherwise skip —
-            // the previous pass already triaged this thread and nothing has
-            // changed.
-            return thread.lastReviewedAt.map { $0 < latestMessageDate } ?? true
+
+        let selected: [EmailThread]
+        if force {
+            selected = threads
+        } else {
+            let resurfaceCutoff = now.addingTimeInterval(-Self.reviewResurfaceInterval)
+            selected = threads.filter { thread in
+                // Flagged or notated threads always go to the model, bypassing
+                // suppression entirely — these are the user's explicit "this
+                // still matters" markers (e.g. an email flagged + notated to
+                // revisit in two months). The model re-evaluates each pass
+                // whether it's finally time to surface it; we never drop it
+                // from the pass just because it was already reviewed.
+                if thread.isReviewFlagged || thread.hasReviewNote {
+                    return true
+                }
+                guard let lastReviewedAt = thread.lastReviewedAt else {
+                    return true // never reviewed
+                }
+                let latestMessageDate = thread.latestReviewableMessage?.date ?? .distantPast
+                if lastReviewedAt < latestMessageDate {
+                    return true // new mail since last review
+                }
+                // Stale: reviewed long enough ago that it's worth re-surfacing.
+                // The user is clearing toward an empty inbox, so a thread that
+                // has just been sitting unactioned should come back around so
+                // it can finally be archived or deleted — rather than being
+                // suppressed forever the way "no new mail" alone would do.
+                return lastReviewedAt < resurfaceCutoff
+            }
         }
+
+        if let limit { return Array(selected.prefix(limit)) }
+        return selected
     }
 
     /// Stamps a batch of threads as reviewed at the given timestamp, then

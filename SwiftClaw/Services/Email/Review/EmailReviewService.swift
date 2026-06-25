@@ -28,6 +28,13 @@ final class EmailReviewService {
 
     private(set) var lastStatusMessage: String?
 
+    /// The friendly `message` the model wrote for the most recent pass, if it
+    /// surfaced any emails. The conversational refresh path reads this to let
+    /// the chat assistant relay the summary itself (the inline post is
+    /// suppressed there to avoid a duplicate). Nil when the pass surfaced
+    /// nothing or hasn't run.
+    private(set) var lastSummaryMessage: String?
+
     /// Testable inference seam. Defaults to the real
     /// `InferenceService.shared.complete(...)` call; tests inject a
     /// throwing/succeeding variant to assert the stamp-after-success contract
@@ -47,8 +54,8 @@ final class EmailReviewService {
 
     /// Maximum number of threads handed to the LLM in a single pass. Caps
     /// first-run token blowup and pairs with the stamp-after-success contract
-    /// so only the threads actually sent are suppressed.
-    static let maxThreadsPerPass = 40
+    /// so only the threads actually sent are suppressed. User-configurable in
+    /// Email settings (`SettingsStorage.loadEmailReviewMaxThreads`).
 
     /// Runs one review pass. Returns `true` when the inference call
     /// succeeded (whether or not the model created a review chat); `false`
@@ -60,9 +67,18 @@ final class EmailReviewService {
     /// manual "Review Now" button can re-triage an inbox where every thread
     /// was already reviewed in a prior pass. The scheduled loop keeps
     /// `force: false` so the H3 "no re-send until new mail" contract holds.
+    /// `suppressInlineSummary` (conversational refresh only) posts just the
+    /// updated card and skips the inline summary `ChatMessage`, surfacing the
+    /// model's summary via `lastSummaryMessage` so the chat assistant can
+    /// deliver it as the single closing reply.
     @discardableResult
-    func runOnce(force: Bool = false, targetChatID: UUID? = nil) async -> Bool {
+    func runOnce(
+        force: Bool = false,
+        targetChatID: UUID? = nil,
+        suppressInlineSummary: Bool = false
+    ) async -> Bool {
         lastStatusMessage = nil
+        lastSummaryMessage = nil
         // Order matters: run every guard that can short-circuit *before*
         // stamping triage suppression, otherwise a failed pass permanently
         // suppresses the threads it was supposed to review. Stamping only on
@@ -76,7 +92,7 @@ final class EmailReviewService {
         let context = ModelContext(modelContainer)
         let repository = EmailRepository(modelContext: context)
         let threads = repository.fetchNonArchivedThreadsForReview(
-            limit: Self.maxThreadsPerPass,
+            limit: SettingsStorage.loadEmailReviewMaxThreads(),
             force: force
         )
         guard !threads.isEmpty else {
@@ -132,12 +148,17 @@ final class EmailReviewService {
 
         let tool = EmailReviewNotifyTool(
             modelContainer: modelContainer,
-            targetChatID: targetChatID
-        ) { [weak self] chatID in
-            if targetChatID == nil {
-                self?.onReviewCreated?(chatID)
+            targetChatID: targetChatID,
+            suppressInlineSummary: suppressInlineSummary,
+            onReviewCreated: { [weak self] chatID in
+                if targetChatID == nil {
+                    self?.onReviewCreated?(chatID)
+                }
+            },
+            onSummaryProduced: { [weak self] message in
+                self?.lastSummaryMessage = message
             }
-        }
+        )
         let registry = ToolRegistry(tools: [tool])
 
         do {
@@ -220,18 +241,32 @@ final class EmailReviewService {
         deadline or upcoming event, something to follow up on, or a thread that is flagged or has notes and \
         may need another look. When in doubt, include it.
 
+        Age counts too. A read thread that has simply been sitting unactioned in the inbox is itself worth \
+        surfacing — to review/archive, or, when it's low-value, to clear out with `delete`. Some of the \
+        threads below may be older mail being re-surfaced for exactly this reason. Favor mail that has gone \
+        roughly a week or more without action; if little of that stands out, look further back (around a \
+        month) for old low-value mail worth clearing. If the user has named a timeframe or which mail to go \
+        after, follow that first.
+
         For each thread, read the latest message in the context of the whole thread: who is writing, whether \
         it is unread, whether the user is being asked something directly, whether it is already flagged, and \
         — importantly — any notes the user has written on it. A flagged or notated thread is a strong signal \
-        it still matters; weight the user's notes heavily. Then pick one action:
+        it still matters; weight the user's notes heavily. Flagged and notated threads are handed to you on \
+        every pass on purpose — use the note's intent and timing to judge whether NOW is the moment to put it \
+        back in front of the user. If a note points to a later time that hasn't arrived yet (e.g. "follow up \
+        in two months" and it's only been a few weeks), omit it for now rather than surfacing it every pass; \
+        when that time has come, surface it. Then pick one action:
         - `reply` — the user clearly owes a response (a direct question or request awaiting their answer).
         - `flag` — should be followed up on later (a deadline, an upcoming event, a commitment), or is \
         already flagged and may still need attention.
         - `review` — needs the user's eyes or judgement. This is also your default: when a thread plausibly \
         matters but no sharper action clearly fits, surface it as `review` rather than dropping it.
-        - `delete` — only clearly worthless mail the user would never miss (obvious spam, junk, low-value \
-        bulk promotions). Do NOT delete mail that is merely finished or already read — deciding what to keep \
-        and archive is the user's call, not yours.
+        - `delete` — low-value mail the user is unlikely to miss: spam, junk, bulk promotions, automated \
+        notifications, receipts and other transactional noise, and old read mail that has clearly served its \
+        purpose. Every `delete` is only a suggestion the user confirms on the card, so lean toward offering \
+        it for anything genuinely low-value rather than letting it pile up. Still don't suggest deleting mail \
+        that looks personal, unresolved, or worth keeping — when a thread might actually matter, surface it \
+        as `review` instead and let the user decide.
         Omit a thread only when it clearly needs nothing and isn't even worth a glance. (`archive` is \
         intentionally unavailable here — the user archives from a card's menu.)
 
@@ -261,9 +296,10 @@ final class EmailReviewService {
         let json = String(data: data, encoding: .utf8) ?? "[]"
         return """
         Review the following inbox threads and decide which (if any) need the user's attention. \
-        For each thread, focus on the latest message. The list below has already been filtered \
-        to threads not yet reviewed since their most recent message arrived — so every thread \
-        you see is genuinely unreviewed.
+        For each thread, focus on the latest message. The list below has already been filtered to \
+        threads worth a look — ones never reviewed, ones with new activity since the last review, \
+        and older threads still sitting unactioned in the inbox that are being re-surfaced so they \
+        can finally be archived or cleared.
 
         Threads (JSON):
         \(json)

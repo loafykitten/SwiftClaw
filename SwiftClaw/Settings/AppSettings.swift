@@ -129,6 +129,7 @@ enum SettingsKeys {
     static let emailFromAddress = "settings.email.fromAddress"
     static let emailPollIntervalSeconds = "settings.email.pollIntervalSeconds"
     static let emailReviewIntervalSeconds = "settings.email.reviewIntervalSeconds"
+    static let emailReviewMaxThreads = "settings.email.reviewMaxThreads"
     static let emailAutoNavigateToReviewChat = "settings.email.autoNavigateToReviewChat"
     static let emailMailboxSyncStates = "settings.email.mailboxSyncStates"
 }
@@ -394,6 +395,8 @@ enum SettingsStorage {
     static let emailPollIntervalSecondsRange: ClosedRange<Int> = 60...3600
     static let defaultEmailReviewIntervalSeconds = 1800
     static let emailReviewIntervalSecondsRange: ClosedRange<Int> = 300...14400
+    static let defaultEmailReviewMaxThreads = 40
+    static let emailReviewMaxThreadsRange: ClosedRange<Int> = 5...100
     static let defaultEmailAutoNavigateToReviewChat = false
 
     static func isEmailEnabled(userDefaults: UserDefaults = .standard) -> Bool {
@@ -423,6 +426,17 @@ enum SettingsStorage {
         return min(
             max(stored, emailReviewIntervalSecondsRange.lowerBound),
             emailReviewIntervalSecondsRange.upperBound
+        )
+    }
+
+    static func loadEmailReviewMaxThreads(userDefaults: UserDefaults = .standard) -> Int {
+        let stored = userDefaults.integer(forKey: SettingsKeys.emailReviewMaxThreads)
+        guard stored > 0 else {
+            return defaultEmailReviewMaxThreads
+        }
+        return min(
+            max(stored, emailReviewMaxThreadsRange.lowerBound),
+            emailReviewMaxThreadsRange.upperBound
         )
     }
 

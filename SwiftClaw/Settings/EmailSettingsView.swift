@@ -6,6 +6,8 @@ struct EmailSettingsView: View {
     private var pollIntervalSeconds = SettingsStorage.defaultEmailPollIntervalSeconds
     @AppStorage(SettingsKeys.emailReviewIntervalSeconds)
     private var reviewIntervalSeconds = SettingsStorage.defaultEmailReviewIntervalSeconds
+    @AppStorage(SettingsKeys.emailReviewMaxThreads)
+    private var reviewMaxThreads = SettingsStorage.defaultEmailReviewMaxThreads
     @AppStorage(SettingsKeys.emailAutoNavigateToReviewChat)
     private var autoNavigateToReviewChat = SettingsStorage.defaultEmailAutoNavigateToReviewChat
 
@@ -36,6 +38,19 @@ struct EmailSettingsView: View {
     private var reviewRangeMinutes: ClosedRange<Double> {
         let lower = Double(SettingsStorage.emailReviewIntervalSecondsRange.lowerBound) / 60.0
         let upper = Double(SettingsStorage.emailReviewIntervalSecondsRange.upperBound) / 60.0
+        return lower...upper
+    }
+
+    private var reviewMaxThreadsBinding: Binding<Double> {
+        Binding(
+            get: { Double(reviewMaxThreads) },
+            set: { reviewMaxThreads = Int($0.rounded()) }
+        )
+    }
+
+    private var reviewMaxThreadsRange: ClosedRange<Double> {
+        let lower = Double(SettingsStorage.emailReviewMaxThreadsRange.lowerBound)
+        let upper = Double(SettingsStorage.emailReviewMaxThreadsRange.upperBound)
         return lower...upper
     }
 
@@ -125,6 +140,22 @@ struct EmailSettingsView: View {
                     step: 5
                 )
                 Text("How often the assistant reviews the inbox and creates a review chat when needed.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+                HStack {
+                    Text("Emails per Review")
+                    Spacer()
+                    Text("\(reviewMaxThreads)")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Slider(
+                    value: reviewMaxThreadsBinding,
+                    in: reviewMaxThreadsRange,
+                    step: 5
+                )
+                Text("Most emails the inbox review looks at in one pass. Lower keeps each review cheaper and faster.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
 

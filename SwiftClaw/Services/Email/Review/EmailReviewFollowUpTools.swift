@@ -24,13 +24,36 @@ enum EmailReviewFollowUpContextBuilder {
         guard !emailBlocks.isEmpty else { return nil }
 
         return """
-        This chat is an email review follow-up. The referenced emails are below.
+        This chat is an email review follow-up. You ARE connected to the user's inbox in this chat
+        through your email tools — never say you lack email access or can't see their email.
         \(EmailReviewDateContext.currentString())
-        Use the email_guid exactly when calling email tools. You can add AI notes,
-        set/unset flags, or re-run the inbox analysis when the user asks; otherwise
-        just answer normally.
+        Use the email_guid exactly when calling email tools. You can add AI notes, set/unset flags,
+        or re-run the inbox analysis (refresh_email_review) when the user asks for more to review;
+        otherwise just answer normally. Report results truthfully — never claim a card or new emails
+        appeared unless the tool says so; if a refresh finds nothing, say so and ask what to focus on.
+        The referenced emails are below.
 
         \(emailBlocks.joined(separator: "\n\n---\n\n"))
+        """
+    }
+
+    /// Grounding for a review chat that currently has no resolvable emails —
+    /// the user actioned/cleaned every card item, or the emails were removed.
+    /// Without this the chat would lose all email context once the card empties
+    /// and the assistant would wrongly claim it has no email access.
+    static func capabilityOnlyContext() -> String {
+        """
+        This chat is an email review follow-up. You ARE connected to the user's inbox in this chat
+        through your email tools — never say you lack email access or can't see their email.
+        \(EmailReviewDateContext.currentString())
+        There are no specific emails attached right now (the review card was cleared). When the user
+        asks for more emails to review, or to re-check or refresh the inbox, call refresh_email_review
+        to run a fresh analysis — it posts an updated review card ONLY if something needs attention.
+        Always report results truthfully: never say a card was posted or that new emails turned up unless
+        your tool result actually says so. If a refresh surfaces nothing, say so plainly. It's fine not to
+        know what they want reviewed — ask for specifics (a sender, a timeframe, or whether to dig into
+        older/already-read mail) rather than implying something happened that didn't. Don't promise to keep
+        reviewing in the background; you review when they ask. Otherwise just answer normally.
         """
     }
 
@@ -195,18 +218,34 @@ final class EmailReviewRefreshTool: Tool {
     }
 
     func execute(arguments: [String: JSONValue]) async throws -> String {
-        let status = await EmailWorkflowManager.shared.reviewNow(appendingTo: chatID)
-        guard status == "Review complete" else {
-            // Nothing to review / no model / failure — let the model relay it.
-            return status ?? "Ran an updated email analysis for this chat."
+        // Conversational path: the review pass posts only the updated card (the
+        // inline summary is suppressed). `summary` is non-nil ONLY when the pass
+        // actually surfaced emails and posted a card.
+        let outcome = await EmailWorkflowManager.shared.conversationalReview(appendingTo: chatID)
+
+        if let summary = outcome.summary {
+            // A fresh card WAS posted — relay the model's summary as the single
+            // reply (no "posted above", no second recap).
+            return """
+            An updated review card has been posted to this chat. Relay the following to the user as your \
+            reply, in your own warm voice — this is the only message they'll see about the refresh, so \
+            don't add a separate recap or point them elsewhere:
+
+            \(summary)
+            """
         }
-        // The review pass has already posted its own continuation summary (and
-        // any updated card) directly to this chat, so the model should not
-        // restate it — just acknowledge briefly.
+
+        // No emails were surfaced, so NO new card exists. Be honest — never tell
+        // the user a card or new emails appeared when they didn't. It's fine not
+        // to know what to include: say plainly that nothing new stood out and
+        // offer next steps or ask for direction.
         return """
-        The inbox has been re-analyzed and any updated review card and summary have been posted \
-        directly to this chat. Do not restate the analysis — just briefly acknowledge that it's \
-        done, or ask if they'd like anything else.
+        This pass surfaced nothing new, so NO review card was posted (status: \(outcome.status)). \
+        Do NOT tell the user a card appeared, that the inbox was re-scanned with results, or that new \
+        emails are ready — none of that is true and it breaks their trust. Instead, honestly tell them \
+        nothing new stood out right now. It's completely fine not to know what they want reviewed: offer \
+        to dig through older or already-read mail if they'd like, or ask what to focus on — a specific \
+        sender, a timeframe, or old mail to clear. Keep it brief and warm.
         """
     }
 }

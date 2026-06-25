@@ -13,7 +13,7 @@ import SwiftData
 /// an injectable test seam so these can run without the network.
 ///
 /// C2: the service caps the batch handed to the LLM at
-/// `EmailReviewService.maxThreadsPerPass` so a fresh install with hundreds
+/// `SettingsStorage.defaultEmailReviewMaxThreads` so a fresh install with hundreds
 /// of unreviewed threads doesn't blow up the context window — and pairs with
 /// C1's stamp-only-what-was-sent so older unreviewed threads roll into the
 /// next pass instead of being suppressed without ever being seen.
@@ -148,7 +148,7 @@ struct EmailReviewServiceTests {
         let context = ModelContext(container)
         let repository = EmailRepository(modelContext: context)
 
-        let total = EmailReviewService.maxThreadsPerPass + 5
+        let total = SettingsStorage.defaultEmailReviewMaxThreads + 5
         let accountID = UUID()
         for index in 1...total {
             // Distinct PAST dates so the cap (which takes the N most-recent
@@ -193,7 +193,7 @@ struct EmailReviewServiceTests {
         // or `"threadID" :` depending on encoder spacing. Match the quoted
         // key up to the colon to be spacing-agnostic.
         let descriptorCount = nonNilPrompt.components(separatedBy: "\"threadID\"").count - 1
-        #expect(descriptorCount == EmailReviewService.maxThreadsPerPass)
+        #expect(descriptorCount == SettingsStorage.defaultEmailReviewMaxThreads)
 
         // The threads that weren't sent must stay eligible for the next pass
         // — C1's stamp-only-what-was-sent means unsent threads aren't
@@ -202,7 +202,7 @@ struct EmailReviewServiceTests {
         // auto-merge from sibling-context saves lands in the seeding
         // context's graph, mirroring `successfulNoActionPassStillSuppressesThreads`).
         let stillEligible = repository.fetchNonArchivedThreadsForReview()
-        #expect(stillEligible.count == total - EmailReviewService.maxThreadsPerPass)
+        #expect(stillEligible.count == total - SettingsStorage.defaultEmailReviewMaxThreads)
     }
 
     @Test

@@ -4,7 +4,7 @@ The email feature is code-complete for the current macOS MVP. The only active
 remaining work is live end-to-end verification against a real mail account.
 
 Current local verification, June 25, 2026:
-- `swift test` passes: 116 tests.
+- `swift test` passes: 119 tests.
 - `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build` passes.
 
 ## Shipped Scope
@@ -24,10 +24,20 @@ Current local verification, June 25, 2026:
 - Sent reply echo rows reconcile to the real Sent UID by Message-ID.
 
 **Review and chat**
-- `EmailReviewService` with a separate review interval and a 40-thread pass
-  cap.
+- `EmailReviewService` with a separate review interval and a per-pass email
+  cap (default 40, configurable in Email settings via "Emails per Review").
+- Review selection (`fetchNonArchivedThreadsForReview`): a thread is eligible
+  when never reviewed, has new mail since its last review, or was last reviewed
+  more than `reviewResurfaceInterval` (7 days) ago — so old read mail keeps
+  resurfacing for clearing instead of being suppressed forever. Flagged or
+  notated threads always bypass suppression (the user's "this still matters"
+  markers). The cap is applied after filtering so older eligible mail isn't
+  hidden behind recently-reviewed newest mail.
 - Review suppression via `EmailThread.lastReviewedAt`, stamped only after a
   successful inference pass.
+- Review prompt leans toward resurfacing and treats age as a valid reason to
+  surface, and `delete` may be suggested for any low-value mail (spam, promos,
+  notifications, old read mail) — every delete is a user-confirmed suggestion.
 - Review prompts and review-chat follow-up context include the user's current
   local date/time and time zone.
 - `EmailReviewNotifyTool` creates review chats with email review cards.
@@ -43,8 +53,15 @@ Current local verification, June 25, 2026:
   appending the fresh card. Runs on the main context so the UI updates in place.
 - When appending to an existing review chat, the pass replays that chat's
   history and switches the prompt to a continuation, so the summary picks up the
-  conversation instead of greeting cold. The `refresh_email_review` tool result
-  also tells the chat model not to restate the summary the pass already posted.
+  conversation instead of greeting cold.
+- Conversational refresh posts a single closing message: the pass suppresses its
+  inline summary and the chat assistant relays it as one reply (no duplicate
+  "card posted above" follow-up). When a pass surfaces nothing, the tool result
+  tells the assistant to say so honestly and ask for direction — never to claim
+  a card or new emails appeared when they didn't.
+- A chat is treated as a review chat for its whole life (keyed off its title),
+  so the email tools and context stay attached even after the card is cleared;
+  the assistant never falsely claims it lacks email access.
 - In continuation mode the prompt also tells the model the user's latest message
   may steer the run (e.g. "treat anything from Suzy as deletable") and to honor
   it for that pass only — overriding the default `delete` caution when asked.
@@ -68,11 +85,11 @@ Current local verification, June 25, 2026:
 
 ## Remaining Work
 
-The conversational review follow-up (in-place "updated analysis" appends,
-scoped `add_email_note`/`set_email_flag` tools, injected review context, and
-the review-card swipe action) is built and passes locally. The next concrete
-step is the live pass below, then memory-backed review context once the
-note/flag loop has real-world use.
+The conversational review follow-up is built and hardened (single-message
+refresh, honest empty-result handling, lifelong review-chat identity, stale
+resurfacing, flagged/notated always-included, configurable per-pass cap) and
+passes locally. The next concrete step is the live pass below, then
+memory-backed review context once the note/flag loop has real-world use.
 
 **Live end-to-end verification - on Ember's side**
 - Test Connection succeeds; account persists; passwords land in Keychain.

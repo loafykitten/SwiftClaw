@@ -79,12 +79,17 @@ struct EmailReviewFollowUpToolsTests {
     }
 
     @Test
-    func refreshToolReturnsStatusWithoutThrowing() async throws {
+    func refreshToolStaysHonestWhenNothingSurfaced() async throws {
         // The workflow manager isn't started in tests (no review service), so
-        // the tool should fall back to its confirmation string rather than throw.
+        // the refresh surfaces nothing and posts no card. The tool result must
+        // steer the assistant AWAY from claiming a card/new emails appeared and
+        // toward honestly reporting the empty result — never fabricate one.
         let tool = EmailReviewRefreshTool(chatID: UUID())
         let result = try await tool.execute(arguments: [:])
         #expect(!result.isEmpty)
+        #expect(result.contains("NO review card was posted"))
+        #expect(result.localizedCaseInsensitiveContains("nothing"))
+        #expect(result.localizedCaseInsensitiveContains("Do NOT tell the user a card appeared"))
     }
 
     private static func inMemoryContainer() throws -> ModelContainer {

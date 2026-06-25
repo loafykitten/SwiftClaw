@@ -52,6 +52,14 @@ final class EmailThread {
         hasFlaggedMessage(in: reviewableMessages)
     }
 
+    /// True if any non-archived/deleted message in the thread carries a note.
+    /// A notated thread is an explicit "this still matters" signal from the
+    /// user (e.g. "revisit in two months"), so review selection keeps sending
+    /// it to the model every pass rather than suppressing it.
+    var hasReviewNote: Bool {
+        reviewableMessages.contains { !$0.notes.isEmpty }
+    }
+
     var reviewUnreadCount: Int {
         unreadCount(in: reviewableMessages)
     }

@@ -397,6 +397,118 @@ struct EmailRepositoryTests {
         #expect(thirdFetch.count == 1)
     }
 
+    @Test func staleReviewedThreadResurfacesAfterResurfaceInterval() async throws {
+        // A read thread the user never actioned must come back for triage once
+        // it's gone stale — old read mail shouldn't be suppressed forever just
+        // because no new mail landed. (The user is clearing toward an empty
+        // inbox: every thread should eventually be archived or deleted.)
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+
+        let readDate = Date().addingTimeInterval(-3_600)
+        let message = Self.simpleMessage(
+            uid: 1,
+            messageID: "<stale-read@example.com>",
+            subject: "Old read mail",
+            isRead: true,
+            date: readDate
+        )
+        repository.upsertMessages([message], mailbox: "INBOX", accountID: Self.accountID)
+        repository.resolveThreads()
+
+        let firstFetch = repository.fetchNonArchivedThreadsForReview()
+        #expect(firstFetch.count == 1)
+
+        // Reviewed now → suppressed on the very next pass (no new mail, not yet
+        // stale): the resurface window hasn't elapsed.
+        let reviewTime = Date()
+        repository.markThreadsReviewed(firstFetch, at: reviewTime)
+        #expect(repository.fetchNonArchivedThreadsForReview(now: reviewTime).isEmpty)
+
+        // Past the resurface interval the same unactioned thread comes back.
+        let later = reviewTime.addingTimeInterval(EmailRepository.reviewResurfaceInterval + 60)
+        #expect(repository.fetchNonArchivedThreadsForReview(now: later).count == 1)
+    }
+
+    @Test func flaggedOrNotatedThreadsBypassSuppression() async throws {
+        // The user's explicit "this still matters" markers must reach the model
+        // on EVERY pass — a thread flagged + notated to revisit months later
+        // should never be suppressed, so the model can judge when it's time.
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+
+        let flagged = Self.simpleMessage(
+            uid: 1,
+            messageID: "<flagged@example.com>",
+            subject: "Flagged for later",
+            isRead: true
+        )
+        let notated = Self.simpleMessage(
+            uid: 2,
+            messageID: "<notated@example.com>",
+            subject: "Notated for later",
+            isRead: true
+        )
+        repository.upsertMessages([flagged, notated], mailbox: "INBOX", accountID: Self.accountID)
+        repository.resolveThreads()
+
+        let flaggedEmail = try #require(
+            try context.fetch(FetchDescriptor<Email>()).first { $0.uid == 1 }
+        )
+        _ = repository.setFlag(messageID: flaggedEmail.id, isFlagged: true)
+        let notatedEmail = try #require(
+            try context.fetch(FetchDescriptor<Email>()).first { $0.uid == 2 }
+        )
+        _ = repository.addNote(emailID: notatedEmail.id, author: .user, content: "Revisit in two months")
+
+        // Review + stamp both threads now. Despite being just-reviewed with no
+        // new mail and not yet stale, they must still come back next pass.
+        let reviewTime = Date()
+        let firstFetch = repository.fetchNonArchivedThreadsForReview()
+        #expect(firstFetch.count == 2)
+        repository.markThreadsReviewed(firstFetch, at: reviewTime)
+
+        let nextFetch = repository.fetchNonArchivedThreadsForReview(now: reviewTime)
+        #expect(nextFetch.count == 2)
+    }
+
+    @Test func reviewCapDoesNotHideOlderEligibleThreadsBehindNewestMail() async throws {
+        // Regression: the per-pass cap used to be applied as a DB `fetchLimit`
+        // (newest N threads) BEFORE the suppression filter. Once those newest
+        // threads were reviewed, every older eligible thread stayed hidden
+        // behind them. The cap must apply AFTER filtering so older eligible
+        // mail still surfaces.
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+
+        // Two newest threads, plus one older thread.
+        for index in 1...3 {
+            let message = Self.simpleMessage(
+                uid: index,
+                messageID: "<cap-\(index)@example.com>",
+                subject: "Thread \(index)",
+                date: Date().addingTimeInterval(TimeInterval(-index * 60))
+            )
+            repository.upsertMessages([message], mailbox: "INBOX", accountID: Self.accountID)
+            repository.resolveThreads()
+        }
+
+        // Review only the two newest threads (cap of 2).
+        let reviewTime = Date()
+        let newestTwo = repository.fetchNonArchivedThreadsForReview(limit: 2)
+        #expect(newestTwo.count == 2)
+        repository.markThreadsReviewed(newestTwo, at: reviewTime)
+
+        // The next pass must still surface the older, never-reviewed thread —
+        // not return empty because the newest two filled the fetch window.
+        let next = repository.fetchNonArchivedThreadsForReview(limit: 2, now: reviewTime)
+        #expect(next.count == 1)
+        #expect(next.first?.latestReviewableMessage?.subject == "Thread 3")
+    }
+
     // MARK: - Sent-message local ingestion
 
     @Test func upsertSentMessageThreadsReplyIntoIncomingThread() async throws {

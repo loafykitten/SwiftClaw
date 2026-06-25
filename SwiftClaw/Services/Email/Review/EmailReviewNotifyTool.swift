@@ -31,9 +31,23 @@ final class EmailReviewNotifyTool: Tool {
     var isEnabled: Bool { true }
     var requiresExplicitEnable: Bool { false }
 
+    /// Prefix shared by every review chat's title. Also the canonical signal
+    /// that a `Chat` *is* an inbox-review chat (used by the conversational
+    /// follow-up to keep offering email tools even after the card is cleared),
+    /// so it lives here next to the one place that stamps it.
+    static let reviewChatTitlePrefix = "Inbox review —"
+
     private let modelContainer: ModelContainer
     private let targetChatID: UUID?
+    /// When true, post only the updated card and skip the inline summary
+    /// `ChatMessage`. Set by the conversational refresh path so the chat
+    /// assistant delivers the single closing summary instead of the review
+    /// pass posting one *and* the assistant adding a redundant acknowledgment.
+    private let suppressInlineSummary: Bool
     private let onReviewCreated: (@MainActor (UUID) -> Void)?
+    /// Surfaces the model's `message` back to the caller so a conversational
+    /// refresh can relay it as the assistant's reply.
+    private let onSummaryProduced: (@MainActor (String) -> Void)?
 
     /// Idempotency guard against the agentic loop calling this tool more
     /// than once per `EmailReviewService.runOnce()` pass: the first call
@@ -46,11 +60,15 @@ final class EmailReviewNotifyTool: Tool {
     init(
         modelContainer: ModelContainer,
         targetChatID: UUID? = nil,
-        onReviewCreated: (@MainActor (UUID) -> Void)? = nil
+        suppressInlineSummary: Bool = false,
+        onReviewCreated: (@MainActor (UUID) -> Void)? = nil,
+        onSummaryProduced: (@MainActor (String) -> Void)? = nil
     ) {
         self.modelContainer = modelContainer
         self.targetChatID = targetChatID
+        self.suppressInlineSummary = suppressInlineSummary
         self.onReviewCreated = onReviewCreated
+        self.onSummaryProduced = onSummaryProduced
     }
 
     func execute(arguments: [String: JSONValue]) async throws -> String {
@@ -91,7 +109,7 @@ final class EmailReviewNotifyTool: Tool {
             return (action, uuid)
         }
 
-        let title = "Inbox review — \(EmailReviewDateFormatter.string(from: .now))"
+        let title = "\(Self.reviewChatTitlePrefix) \(EmailReviewDateFormatter.string(from: .now))"
         let createdChatID: UUID? = await MainActor.run {
             // Idempotency guard: a single review pass must produce at most one
             // review chat. `InferenceService.complete(...)` runs up to 8
@@ -159,6 +177,11 @@ final class EmailReviewNotifyTool: Tool {
         if createdChatID == nil {
             return "Already created a review chat for this pass — additional `notify_user_about_emails` call ignored."
         }
+
+        // Surface the model's summary so a conversational refresh can relay it
+        // as the assistant's single closing message (it was suppressed inline).
+        await MainActor.run { self.onSummaryProduced?(message) }
+
         let itemCount = actionsWithGUIDs.count
         if targetChatID != nil {
             return "Updated review chat with \(itemCount) item\(itemCount == 1 ? "" : "s")."
@@ -250,13 +273,19 @@ final class EmailReviewNotifyTool: Tool {
         cardMessage.chat = chat
         context.insert(cardMessage)
 
-        let summaryMessage = ChatMessage(
-            role: .assistant,
-            content: message,
-            sortIndex: nextIndex + 1
-        )
-        summaryMessage.chat = chat
-        context.insert(summaryMessage)
+        // The conversational refresh path suppresses this inline summary so the
+        // chat assistant delivers the single closing message — without it the
+        // chat would show the review pass's summary *and* the assistant's
+        // acknowledgment back to back, repeating itself.
+        if !suppressInlineSummary {
+            let summaryMessage = ChatMessage(
+                role: .assistant,
+                content: message,
+                sortIndex: nextIndex + 1
+            )
+            summaryMessage.chat = chat
+            context.insert(summaryMessage)
+        }
 
         chat.updatedAt = .now
 

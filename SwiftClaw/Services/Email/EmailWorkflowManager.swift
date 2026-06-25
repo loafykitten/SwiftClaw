@@ -104,6 +104,28 @@ final class EmailWorkflowManager {
         await runReviewOnce(force: true, targetChatID: chatID)
     }
 
+    /// Outcome of a conversational refresh (the `refresh_email_review` tool).
+    /// `summary` is non-nil ONLY when the pass actually surfaced emails and
+    /// posted a card — it's the model's own summary, for the assistant to
+    /// relay. `status` always describes what happened so the assistant can be
+    /// honest when nothing was surfaced (never claim a card appeared when it
+    /// didn't).
+    struct ConversationalReviewOutcome {
+        let summary: String?
+        let status: String
+    }
+
+    /// Runs a refresh triggered from inside the review chat. The inline summary
+    /// is suppressed so the chat assistant delivers the single closing reply.
+    func conversationalReview(appendingTo chatID: UUID) async -> ConversationalReviewOutcome {
+        let status = await runReviewOnce(force: true, targetChatID: chatID, conversational: true)
+            ?? "Review did not run"
+        return ConversationalReviewOutcome(
+            summary: reviewService?.lastSummaryMessage,
+            status: status
+        )
+    }
+
     private func startReviewLoop(modelContainer: ModelContainer) {
         reviewTask = Task { [weak self] in
             guard let self else { return }
@@ -132,7 +154,11 @@ final class EmailWorkflowManager {
     /// instead rely on `runOnce()`'s return value to set the manual-path
     /// "Review complete" status only when the pass actually ran.
     @discardableResult
-    private func runReviewOnce(force: Bool = false, targetChatID: UUID? = nil) async -> String? {
+    private func runReviewOnce(
+        force: Bool = false,
+        targetChatID: UUID? = nil,
+        conversational: Bool = false
+    ) async -> String? {
         guard let reviewService else { return nil }
         // Guard against overlapping runs (scheduled path only). The manual
         // button forces past this so the user gets immediate feedback.
@@ -150,7 +176,11 @@ final class EmailWorkflowManager {
         }
         guard !ProcessInfo.processInfo.isRunningInPreview else { return nil }
         lastReviewRun = .now
-        let didRun = await reviewService.runOnce(force: force, targetChatID: targetChatID)
+        let didRun = await reviewService.runOnce(
+            force: force,
+            targetChatID: targetChatID,
+            suppressInlineSummary: conversational
+        )
         let status = reviewService.lastStatusMessage
             ?? (didRun ? "Review complete" : "Review did not run")
         if force {
