@@ -75,6 +75,7 @@ final class ChatMessage {
     var roleRawValue: String
     var content: String
     var imageAttachmentsData: Data?
+    var reviewCardData: Data?
     var createdAt: Date
     var sortIndex: Int
     var chat: Chat?
@@ -85,12 +86,14 @@ final class ChatMessage {
         content: String,
         createdAt: Date = .now,
         sortIndex: Int,
-        imageAttachments: [ImageAttachmentRecord] = []
+        imageAttachments: [ImageAttachmentRecord] = [],
+        reviewCard: ReviewCardPayload? = nil
     ) {
         self.id = id
         self.roleRawValue = role.rawValue
         self.content = content
         self.imageAttachmentsData = Self.encodeImageAttachments(imageAttachments)
+        self.reviewCardData = Self.encodeReviewCard(reviewCard)
         self.createdAt = createdAt
         self.sortIndex = sortIndex
     }
@@ -126,6 +129,24 @@ final class ChatMessage {
         }
     }
 
+    var reviewCard: ReviewCardPayload? {
+        get {
+            guard let reviewCardData,
+                  !reviewCardData.isEmpty,
+                  let payload = try? JSONDecoder().decode(
+                    ReviewCardPayload.self,
+                    from: reviewCardData
+                  ) else {
+                return nil
+            }
+
+            return payload
+        }
+        set {
+            reviewCardData = Self.encodeReviewCard(newValue)
+        }
+    }
+
     func inferenceMessage(includingImages: Bool) -> InferenceMessage? {
         switch role {
         case .system:
@@ -140,6 +161,15 @@ final class ChatMessage {
     private static func encodeImageAttachments(_ attachments: [ImageAttachmentRecord]) -> Data? {
         guard !attachments.isEmpty,
               let data = try? JSONEncoder().encode(attachments) else {
+            return nil
+        }
+
+        return data
+    }
+
+    private static func encodeReviewCard(_ payload: ReviewCardPayload?) -> Data? {
+        guard let payload,
+              let data = try? JSONEncoder().encode(payload) else {
             return nil
         }
 

@@ -116,6 +116,21 @@ enum SettingsKeys {
     static let assistantPersonalityPreset = "settings.assistant.personalityPreset"
     static let assistantUsesCustomPersonality = "settings.assistant.usesCustomPersonality"
     static let assistantCustomPersonality = "settings.assistant.customPersonality"
+    static let emailEnabled = "settings.email.enabled"
+    static let emailAccounts = "settings.email.accounts"
+    static let emailImapHost = "settings.email.imapHost"
+    static let emailImapPort = "settings.email.imapPort"
+    static let emailImapUsername = "settings.email.imapUsername"
+    static let emailImapPassword = "settings.email.imapPassword"
+    static let emailSmtpHost = "settings.email.smtpHost"
+    static let emailSmtpPort = "settings.email.smtpPort"
+    static let emailSmtpUsername = "settings.email.smtpUsername"
+    static let emailSmtpPassword = "settings.email.smtpPassword"
+    static let emailFromAddress = "settings.email.fromAddress"
+    static let emailPollIntervalSeconds = "settings.email.pollIntervalSeconds"
+    static let emailReviewIntervalSeconds = "settings.email.reviewIntervalSeconds"
+    static let emailAutoNavigateToReviewChat = "settings.email.autoNavigateToReviewChat"
+    static let emailMailboxSyncStates = "settings.email.mailboxSyncStates"
 }
 
 enum SettingsNotifications {
@@ -371,6 +386,45 @@ enum SettingsStorage {
 
     static let defaultInvestigationMaxSubAgents = 3
     static let investigationMaxSubAgentsRange: ClosedRange<Int> = 1...5
+
+    static let defaultEmailEnabled = false
+    static let defaultEmailImapPort = 993
+    static let defaultEmailSmtpPort = 587
+    static let defaultEmailPollIntervalSeconds = 300
+    static let emailPollIntervalSecondsRange: ClosedRange<Int> = 60...3600
+    static let defaultEmailReviewIntervalSeconds = 1800
+    static let emailReviewIntervalSecondsRange: ClosedRange<Int> = 300...14400
+    static let defaultEmailAutoNavigateToReviewChat = false
+
+    static func isEmailEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        toolEnabled(
+            forKey: SettingsKeys.emailEnabled,
+            defaultValue: defaultEmailEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
+    static func loadEmailPollInterval(userDefaults: UserDefaults = .standard) -> Int {
+        let stored = userDefaults.integer(forKey: SettingsKeys.emailPollIntervalSeconds)
+        guard stored > 0 else {
+            return defaultEmailPollIntervalSeconds
+        }
+        return min(
+            max(stored, emailPollIntervalSecondsRange.lowerBound),
+            emailPollIntervalSecondsRange.upperBound
+        )
+    }
+
+    static func loadEmailReviewInterval(userDefaults: UserDefaults = .standard) -> Int {
+        let stored = userDefaults.integer(forKey: SettingsKeys.emailReviewIntervalSeconds)
+        guard stored > 0 else {
+            return defaultEmailReviewIntervalSeconds
+        }
+        return min(
+            max(stored, emailReviewIntervalSecondsRange.lowerBound),
+            emailReviewIntervalSecondsRange.upperBound
+        )
+    }
 
     static func loadInvestigationMaxSubAgents() -> Int {
         let stored = UserDefaults.standard.integer(forKey: SettingsKeys.investigationMaxSubAgents)

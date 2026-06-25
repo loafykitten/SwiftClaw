@@ -11,53 +11,31 @@ struct ToolsView: View {
     @AppStorage(SettingsKeys.investigationMaxSubAgents)
     private var investigationMaxSubAgents = SettingsStorage.defaultInvestigationMaxSubAgents
 
+    @AppStorage(SettingsKeys.emailEnabled)
+    private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
+
     var body: some View {
         Group {
-            if tools.isEmpty {
+            if tools.isEmpty && !isEmailEnabled {
                 emptyState
             } else {
-                List(tools) { listing in
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 12) {
-                            Image(systemName: listing.systemImage)
-                                .font(.title3)
-                                .frame(width: 28)
-                                .foregroundStyle(.secondary)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(listing.displayName)
-                                    .font(.headline)
-                                Text(listing.description)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                            }
-
-                            Spacer()
-
-                            HStack(spacing: 12) {
-                                Text(listing.isConfigured ? "Ready" : "Needs setup")
-                                    .font(.caption)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 3)
-                                    .background(
-                                        (listing.isConfigured ? Color.green : Color.orange).opacity(0.15),
-                                        in: Capsule()
-                                    )
-                                    .foregroundStyle(listing.isConfigured ? .green : .orange)
-
-                                toolToggle(for: listing)
-                            }
+                List {
+                    Section {
+                        ForEach(tools) { listing in
+                            toolRow(for: listing)
                         }
-
-                        if listing.id == "investigate" {
-                            investigationConfiguration
-                                .padding(.leading, 40)
-                                .disabled(!isInvestigationEffectivelyEnabled)
-                                .opacity(isInvestigationEffectivelyEnabled ? 1 : 0.55)
-                        }
+                    } header: {
+                        Text("Assistant Tools")
                     }
-                    .padding(.vertical, 4)
+
+                    Section {
+                        emailToggleRow
+                    } header: {
+                        Text("Features")
+                    } footer: {
+                        Text("Features can be enabled or disabled; enabled features appear in the sidebar.")
+                            .font(.caption)
+                    }
                 }
             }
         }
@@ -112,6 +90,78 @@ struct ToolsView: View {
         default:
             EmptyView()
         }
+    }
+
+    @ViewBuilder
+    private func toolRow(for listing: ToolListing) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Image(systemName: listing.systemImage)
+                    .font(.title3)
+                    .frame(width: 28)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(listing.displayName)
+                        .font(.headline)
+                    Text(listing.description)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+
+                Spacer()
+
+                HStack(spacing: 12) {
+                    Text(listing.isConfigured ? "Ready" : "Needs setup")
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            (listing.isConfigured ? Color.green : Color.orange).opacity(0.15),
+                            in: Capsule()
+                        )
+                        .foregroundStyle(listing.isConfigured ? .green : .orange)
+
+                    toolToggle(for: listing)
+                }
+            }
+
+            if listing.id == "investigate" {
+                investigationConfiguration
+                    .padding(.leading, 40)
+                    .disabled(!isInvestigationEffectivelyEnabled)
+                    .opacity(isInvestigationEffectivelyEnabled ? 1 : 0.55)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var emailToggleRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "envelope")
+                .font(.title3)
+                .frame(width: 28)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Email")
+                    .font(.headline)
+                Text("IMAP/SMTP inbox sync and AI inbox review.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            Toggle("Email", isOn: $isEmailEnabled)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .help(isEmailEnabled ? "Turn Email off" : "Turn Email on")
+                .accessibilityLabel("Email")
+        }
+        .padding(.vertical, 4)
     }
 
     private var investigationConfiguration: some View {

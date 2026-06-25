@@ -72,6 +72,7 @@ struct ToolParameter: Sendable, Hashable {
         case number
         case integer
         case boolean
+        case array
     }
 
     let name: String

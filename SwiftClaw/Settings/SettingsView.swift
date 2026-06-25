@@ -10,6 +10,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case personality = "Personality"
     case providers = "Providers"
     case behaviors = "Behaviors"
+    case email = "Email"
 
     var id: String { rawValue }
 
@@ -20,6 +21,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         case .personality: "wand.and.sparkles"
         case .providers: "server.rack"
         case .behaviors: "slider.horizontal.3"
+        case .email: "envelope"
         }
     }
 }
@@ -69,6 +71,8 @@ struct SettingsView: View {
             ProviderSettingsView()
         case .behaviors:
             BehaviorSettingsView()
+        case .email:
+            EmailSettingsView()
         case nil:
             Text("Select a settings section")
                 .foregroundStyle(.secondary)
@@ -952,7 +956,7 @@ private struct ProviderSettingsView: View {
 
 // MARK: - API key field with reveal toggle
 
-private struct APIKeyField: View {
+struct APIKeyField: View {
     let title: String
     @Binding var text: String
     @State private var isRevealed = false

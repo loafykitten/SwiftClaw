@@ -23,6 +23,10 @@ struct SwiftClawApp: App {
             Item.self,
             Chat.self,
             ChatMessage.self,
+            Email.self,
+            EmailThread.self,
+            EmailNote.self,
+            EmailAttachment.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -36,6 +40,8 @@ struct SwiftClawApp: App {
     init() {
         Keychain.migrateAPIKeysFromUserDefaults()
         AccentColor.migrateStoredLightnessIfNeeded()
+        EmailAccountStore.shared.migrateLegacyIfNeeded()
+        EmailWorkflowManager.shared.start(modelContainer: sharedModelContainer)
     }
 
     var body: some Scene {

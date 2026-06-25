@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		3731CD0D2FDBE3D90052AE22 /* OpenAI in Frameworks */ = {isa = PBXBuildFile; productRef = 3731CD0C2FDBE3D90052AE22 /* OpenAI */; };
+		3731CD0E2FDBE3D90052AE22 /* SwiftMail in Frameworks */ = {isa = PBXBuildFile; productRef = 3731CD0F2FDBE3D90052AE22 /* SwiftMail */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			isa = PBXFrameworksBuildPhase;
 			files = (
 				3731CD0D2FDBE3D90052AE22 /* OpenAI in Frameworks */,
+				3731CD0E2FDBE3D90052AE22 /* SwiftMail in Frameworks */,
 			);
 		};
 /* End PBXFrameworksBuildPhase section */
@@ -69,6 +71,7 @@
 			name = SwiftClaw;
 			packageProductDependencies = (
 				3731CD0C2FDBE3D90052AE22 /* OpenAI */,
+				3731CD0F2FDBE3D90052AE22 /* SwiftMail */,
 			);
 			productName = SwiftClaw;
 			productReference = 3731CCFA2FDBDB110052AE22 /* SwiftClaw.app */;
@@ -100,6 +103,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				3731CD0B2FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "OpenAI" */,
+				3731CD102FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "SwiftMail" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3731CCFB2FDBDB110052AE22 /* Products */;
@@ -350,6 +354,14 @@
 				kind = branch;
 			};
 		};
+		3731CD102FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "SwiftMail" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Cocoanetics/SwiftMail";
+			requirement = {
+				kind = revision;
+				revision = 3bfb4a3a2a9677c6090221f622c537870ee78960;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -357,6 +369,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 3731CD0B2FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "OpenAI" */;
 			productName = OpenAI;
+		};
+		3731CD0F2FDBE3D90052AE22 /* SwiftMail */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3731CD102FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "SwiftMail" */;
+			productName = SwiftMail;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

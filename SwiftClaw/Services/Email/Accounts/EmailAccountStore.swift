@@ -1,0 +1,268 @@
+import Foundation
+
+/// Persisted IMAP+SMTP account configuration. Stored as JSON in
+/// `UserDefaults` (`SettingsKeys.emailAccounts`); passwords are kept in the
+/// Keychain under per-account keys derived from the account's UUID (see
+/// `EmailAccountKeychainKeys`).
+///
+/// One `StoredEmailAccount` maps 1:1 to a `SwiftMailClient` instance at sync
+/// time. Adding an account is additive; deleting one also removes its
+/// Keychain passwords.
+///
+/// `archiveMailbox` / `trashMailbox` / `sentMailbox` cache the per-account
+/// special-use folder names resolved via IMAP `LIST (SPECIAL-USE)` on first
+/// use. They're additive Codable fields and stay `nil` until the
+/// first `SwiftMailClient.resolveSpecialUseMailboxes()` call lands them —
+/// calls that pre-date resolution fall back to a per-provider default table.
+struct StoredEmailAccount: Codable, Identifiable, Sendable, Hashable {
+    var id: UUID
+    var displayName: String
+    var imapHost: String
+    var imapPort: Int
+    var imapUsername: String
+    var smtpHost: String
+    var smtpPort: Int
+    var smtpUsername: String
+    var fromAddress: String
+    /// Server-side Archive folder name (resolved via IMAP SPECIAL-USE). Gmail
+    /// uses `[Gmail]/All Mail`; Outlook uses `Archive`; others vary. `nil`
+    /// until resolved — callers fall back to `"Archive"`.
+    var archiveMailbox: String?
+    /// Server-side Trash folder name. `nil` until resolved — callers fall back
+    /// to `"Trash"`.
+    var trashMailbox: String?
+    /// Server-side Sent folder name. Used by the reply composer's APPEND path
+    /// so sent mail shows up locally + on other clients. `nil` until resolved.
+    var sentMailbox: String?
+
+    init(
+        id: UUID = UUID(),
+        displayName: String = "",
+        imapHost: String = "",
+        imapPort: Int = SettingsStorage.defaultEmailImapPort,
+        imapUsername: String = "",
+        smtpHost: String = "",
+        smtpPort: Int = SettingsStorage.defaultEmailSmtpPort,
+        smtpUsername: String = "",
+        fromAddress: String = "",
+        archiveMailbox: String? = nil,
+        trashMailbox: String? = nil,
+        sentMailbox: String? = nil
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.imapHost = imapHost
+        self.imapPort = imapPort
+        self.imapUsername = imapUsername
+        self.smtpHost = smtpHost
+        self.smtpPort = smtpPort
+        self.smtpUsername = smtpUsername
+        self.fromAddress = fromAddress
+        self.archiveMailbox = archiveMailbox
+        self.trashMailbox = trashMailbox
+        self.sentMailbox = sentMailbox
+    }
+
+    /// Same as `imapUsername` for most providers. Used as the display label
+    /// when `displayName` is empty.
+    var effectiveDisplayName: String {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? (imapUsername.isEmpty ? fromAddress : imapUsername) : trimmed
+    }
+
+    /// Resolved Archive mailbox, or `"Archive"` as a sensible default before
+    /// `resolveSpecialUseMailboxes()` has run. (Gmail/others get corrected to
+    /// the real folder on first resolution; the default just keeps the local
+    /// flag flip + a best-effort server move from blocking the UI.)
+    var resolvedArchiveMailbox: String { archiveMailbox ?? "Archive" }
+    /// Resolved Trash mailbox, or `"Trash"` as a sensible default.
+    var resolvedTrashMailbox: String { trashMailbox ?? "Trash" }
+    /// Resolved Sent mailbox, or `nil` — the Sent APPEND path is best-effort
+    /// and skipped entirely when there's no resolved Sent folder.
+    var resolvedSentMailbox: String? { sentMailbox }
+
+    /// True when all hosts/usernames/from address are present. Passwords
+    /// aren't checked here — they live in the Keychain and a missing password
+    /// surfaces as a sync-time auth error.
+    var isComplete: Bool {
+        !imapHost.isEmpty
+            && !imapUsername.isEmpty
+            && !smtpHost.isEmpty
+            && !smtpUsername.isEmpty
+            && !fromAddress.isEmpty
+    }
+}
+
+/// Per-account Keychain key helpers. Passwords are keyed by account UUID so
+/// deleting an account can scrub its credentials cleanly.
+enum EmailAccountKeychainKeys {
+    static func imapPassword(for accountID: UUID) -> String {
+        "settings.email.account.\(accountID.uuidString).imapPassword"
+    }
+
+    static func smtpPassword(for accountID: UUID) -> String {
+        "settings.email.account.\(accountID.uuidString).smtpPassword"
+    }
+}
+
+/// Single source of truth for the user's configured email accounts.
+/// Observable so SwiftUI views re-render when accounts are added/removed.
+/// Persisted as JSON to `UserDefaults`; passwords go through `Keychain`
+/// using per-account keys.
+///
+/// On first launch after upgrade, `migrateLegacyIfNeeded()` reads the old
+/// flat `SettingsKeys.emailImapHost` etc. and creates a single account entry,
+/// copying passwords from the legacy keys to the new per-account keys.
+@MainActor
+@Observable
+final class EmailAccountStore {
+    static let shared = EmailAccountStore()
+
+    private let userDefaults: UserDefaults
+    private(set) var accounts: [StoredEmailAccount]
+
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+        if let data = userDefaults.data(forKey: SettingsKeys.emailAccounts),
+           let decoded = try? JSONDecoder().decode([StoredEmailAccount].self, from: data) {
+            self.accounts = decoded
+        } else {
+            self.accounts = []
+        }
+    }
+
+    /// Returns a `Sendable` async closure that snapshots the current account
+    /// list on the MainActor. Used by `MailSyncWorker` (an actor) so it can
+    /// read the latest accounts each sync without crossing isolation unsafely.
+    func accountsProvider() -> @Sendable () async -> [StoredEmailAccount] {
+        { [weak self] in
+            await MainActor.run { self?.accounts ?? [] }
+        }
+    }
+
+    @discardableResult
+    func add(_ account: StoredEmailAccount) -> StoredEmailAccount {
+        accounts.append(account)
+        persist()
+        return account
+    }
+
+    func update(_ account: StoredEmailAccount) {
+        guard let index = accounts.firstIndex(where: { $0.id == account.id }) else {
+            accounts.append(account)
+            persist()
+            return
+        }
+        accounts[index] = account
+        persist()
+    }
+
+    func remove(_ account: StoredEmailAccount, deleteKeychain: Bool = true) {
+        accounts.removeAll(where: { $0.id == account.id })
+        if deleteKeychain {
+            Keychain.delete(EmailAccountKeychainKeys.imapPassword(for: account.id))
+            Keychain.delete(EmailAccountKeychainKeys.smtpPassword(for: account.id))
+        }
+        // Drop incremental-sync high-water marks so a re-added account with
+        // the same UUID doesn't resume from a stale position.
+        MailboxSyncStateStore.shared.resetAll(for: account.id)
+        persist()
+    }
+
+    func account(for id: UUID) -> StoredEmailAccount? {
+        accounts.first(where: { $0.id == id })
+    }
+
+    /// True if at least one configured account is complete enough to sync.
+    var hasConfiguredAccount: Bool {
+        accounts.contains(where: { $0.isComplete })
+    }
+
+    // MARK: - Keychain
+
+    func imapPassword(for account: StoredEmailAccount) -> String? {
+        Keychain.string(forKey: EmailAccountKeychainKeys.imapPassword(for: account.id))
+    }
+
+    func smtpPassword(for account: StoredEmailAccount) -> String? {
+        Keychain.string(forKey: EmailAccountKeychainKeys.smtpPassword(for: account.id))
+    }
+
+    func setPassword(_ password: String, kind: EmailAccountPasswordKind, for account: StoredEmailAccount) {
+        let key: String
+        switch kind {
+        case .imap: key = EmailAccountKeychainKeys.imapPassword(for: account.id)
+        case .smtp: key = EmailAccountKeychainKeys.smtpPassword(for: account.id)
+        }
+        Keychain.set(password, forKey: key)
+    }
+
+    // MARK: - Legacy migration
+
+    /// Reads the pre-multi-account flat settings keys (`SettingsKeys.emailImapHost`
+    /// etc.) and synthesizes a single `StoredEmailAccount` with the same
+    /// values. Copies any Keychain passwords to per-account keys, then clears
+    /// the legacy keys. Idempotent: a no-op if `accounts` is already non-empty
+    /// or no legacy host was stored.
+    func migrateLegacyIfNeeded() {
+        guard accounts.isEmpty else { return }
+        let legacyHost = userDefaults.string(forKey: SettingsKeys.emailImapHost) ?? ""
+        guard !legacyHost.isEmpty else { return }
+
+        let account = StoredEmailAccount(
+            id: UUID(),
+            displayName: userDefaults.string(forKey: SettingsKeys.emailImapUsername) ?? "",
+            imapHost: legacyHost,
+            imapPort: {
+                let stored = userDefaults.integer(forKey: SettingsKeys.emailImapPort)
+                return stored > 0 ? stored : SettingsStorage.defaultEmailImapPort
+            }(),
+            imapUsername: userDefaults.string(forKey: SettingsKeys.emailImapUsername) ?? "",
+            smtpHost: userDefaults.string(forKey: SettingsKeys.emailSmtpHost) ?? "",
+            smtpPort: {
+                let stored = userDefaults.integer(forKey: SettingsKeys.emailSmtpPort)
+                return stored > 0 ? stored : SettingsStorage.defaultEmailSmtpPort
+            }(),
+            smtpUsername: userDefaults.string(forKey: SettingsKeys.emailSmtpUsername) ?? "",
+            fromAddress: userDefaults.string(forKey: SettingsKeys.emailFromAddress) ?? ""
+        )
+        accounts = [account]
+
+        if let imapPW = Keychain.string(forKey: SettingsKeys.emailImapPassword), !imapPW.isEmpty {
+            Keychain.set(imapPW, forKey: EmailAccountKeychainKeys.imapPassword(for: account.id))
+        }
+        if let smtpPW = Keychain.string(forKey: SettingsKeys.emailSmtpPassword), !smtpPW.isEmpty {
+            Keychain.set(smtpPW, forKey: EmailAccountKeychainKeys.smtpPassword(for: account.id))
+        }
+
+        persist()
+
+        // Clear the legacy keys so this migration doesn't run again. The
+        // Keychain entries are left in place (harmless; no one reads them
+        // after migration).
+        for key in [
+            SettingsKeys.emailImapHost,
+            SettingsKeys.emailImapPort,
+            SettingsKeys.emailImapUsername,
+            SettingsKeys.emailSmtpHost,
+            SettingsKeys.emailSmtpPort,
+            SettingsKeys.emailSmtpUsername,
+            SettingsKeys.emailFromAddress,
+        ] {
+            userDefaults.removeObject(forKey: key)
+        }
+    }
+
+    // MARK: - Internals
+
+    private func persist() {
+        if let data = try? JSONEncoder().encode(accounts) {
+            userDefaults.set(data, forKey: SettingsKeys.emailAccounts)
+        }
+    }
+}
+
+enum EmailAccountPasswordKind {
+    case imap
+    case smtp
+}

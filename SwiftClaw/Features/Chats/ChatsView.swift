@@ -3,6 +3,7 @@ import SwiftData
 
 struct ChatsView: View {
     @Environment(\.modelContext) private var modelContext
+    var emailDispatcher: AnyHashableReviewActionDispatcher?
 
     @Binding private var selectedChatID: UUID?
     @Query(sort: \Chat.updatedAt, order: .reverse) private var chats: [Chat]
@@ -26,8 +27,9 @@ struct ChatsView: View {
         return orderedChats.first
     }
 
-    init(selectedChatID: Binding<UUID?> = .constant(nil)) {
+    init(selectedChatID: Binding<UUID?> = .constant(nil), emailDispatcher: AnyHashableReviewActionDispatcher? = nil) {
         _selectedChatID = selectedChatID
+        self.emailDispatcher = emailDispatcher
     }
 
     var body: some View {
@@ -43,7 +45,12 @@ struct ChatsView: View {
             Divider()
 
             if let selectedChat {
-                ChatTranscriptView(chat: selectedChat)
+                ChatTranscriptView(
+                    chat: selectedChat,
+                    emailDispatcherProvider: { [emailDispatcher] in
+                        emailDispatcher
+                    }
+                )
                     .id(selectedChat.id)
             } else {
                 EmptyChatsView()
@@ -306,6 +313,7 @@ private struct ChatTranscriptView: View {
     @Environment(\.modelContext) private var modelContext
 
     let chat: Chat
+    let emailDispatcherProvider: () -> AnyHashableReviewActionDispatcher?
     @State private var previewSelection: ImageAttachmentPreviewSelection?
 
     private var scrollTrigger: String {
@@ -329,6 +337,7 @@ private struct ChatTranscriptView: View {
                         ForEach(chat.visibleMessages) { message in
                             ChatMessageRow(
                                 message: message,
+                                emailDispatcher: emailDispatcherProvider(),
                                 showImagePreview: showImagePreview
                             )
                                 .id(message.id.uuidString)
@@ -477,7 +486,10 @@ private struct ChatHeaderView: View {
 
 private struct ChatMessageRow: View {
     let message: ChatMessage
+    var emailDispatcher: AnyHashableReviewActionDispatcher?
     let showImagePreview: ([ImageAttachmentRecord], Int) -> Void
+
+    @Environment(\.modelContext) private var modelContext
 
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
     @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
@@ -509,6 +521,27 @@ private struct ChatMessageRow: View {
             }
 
             VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
+                if let reviewCard = message.reviewCard {
+                    ReviewCardRendererRegistry.shared.makeView(
+                        for: reviewCard,
+                        dispatcherProvider: { [emailDispatcher] _ in emailDispatcher },
+                        onItemActioned: { itemID in
+                            guard var updated = message.reviewCard else { return }
+                            updated.items.removeAll { $0.id == itemID }
+                            message.reviewCard = updated
+                            try? modelContext.save()
+                        },
+                        onItemView: { emailID in
+                            NotificationCenter.default.post(
+                                name: .emailReviewViewEmail,
+                                object: nil,
+                                userInfo: ["emailID": emailID]
+                            )
+                        }
+                    )
+                    .frame(maxWidth: ChatBubbleLayout.maxWidth, alignment: .leading)
+                }
+
                 if !imageAttachments.isEmpty {
                     ImageAttachmentFanStack(
                         attachments: imageAttachments,
@@ -516,30 +549,26 @@ private struct ChatMessageRow: View {
                     )
                 }
 
-                ChatMarkdownView(
-                    content: message.content,
-                    defaultForeground: isUser ? .white : .primary,
-                    codeAccent: isUser ? .white : accent,
-                    quoteAccent: quoteAccent,
-                    linkAccent: isUser ? .white : accent,
-                    maximumContentWidth: ChatBubbleLayout.contentMaxWidth
-                )
-                .textSelection(.enabled)
-                .padding(.horizontal, ChatBubbleLayout.horizontalPadding)
-                .padding(.vertical, ChatBubbleLayout.verticalPadding)
-                .background {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(isUser ? accent : Color.secondary.opacity(0.12))
+                if !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ChatMarkdownView(
+                        content: message.content,
+                        defaultForeground: isUser ? .white : .primary,
+                        codeAccent: isUser ? .white : accent,
+                        quoteAccent: quoteAccent,
+                        linkAccent: isUser ? .white : accent,
+                        maximumContentWidth: ChatBubbleLayout.contentMaxWidth
+                    )
+                    .textSelection(.enabled)
+                    .padding(.horizontal, ChatBubbleLayout.horizontalPadding)
+                    .padding(.vertical, ChatBubbleLayout.verticalPadding)
+                    .background {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(isUser ? accent : Color.secondary.opacity(0.12))
+                    }
                 }
             }
                 .frame(maxWidth: ChatBubbleLayout.maxWidth, alignment: isUser ? .trailing : .leading)
                 .padding(isUser ? .trailing : .leading, ChatBubbleLayout.avatarSpacing)
-                .onAppear {
-                    printRawMessage()
-                }
-                .onChange(of: message.content) { _, _ in
-                    printRawMessage()
-                }
 
             if isUser {
                 UserAvatarView()

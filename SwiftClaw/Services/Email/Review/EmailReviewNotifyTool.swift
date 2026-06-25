@@ -1,0 +1,199 @@
+import Foundation
+import SwiftData
+import os
+
+/// System-only tool that creates a review chat listing emails that need
+/// attention. NOT registered on `ToolRegistry.shared` — the assistant must
+/// never be able to invoke it during normal user chats. Constructed by
+/// `EmailReviewService` in a one-off `ToolRegistry(tools: [EmailReviewNotifyTool()])`.
+final class EmailReviewNotifyTool: Tool {
+    private static let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
+        category: "mail.review.tool"
+    )
+
+    let name = "notify_user_about_emails"
+    let displayName = "Notify User About Emails"
+    let description = """
+    Notifies the user about emails that need attention. \
+    Call this only when at least one email needs an action (review, flag, reply, delete). \
+    If no emails need attention, output nothing and do not call any tool.
+    """
+    let systemImage = "envelope.badge"
+    let parameters: [ToolParameter] = [
+        ToolParameter(name: "email_actions", type: .array, description: """
+        Array of objects, each describing one email that needs attention: \
+        { "email_guid": "<UUID>", "action": "review"|"flag"|"reply"|"delete", "summary": "<short reason>" }
+        """, isRequired: true),
+        ToolParameter(name: "message", type: .string, description: """
+        A friendly summary message shown above the cards. One or two sentences.
+        """, isRequired: true),
+    ]
+
+    var isConfigured: Bool { true }
+    var isEnabled: Bool { true }
+    var requiresExplicitEnable: Bool { false }
+
+    private let modelContainer: ModelContainer
+    private let onReviewCreated: (@MainActor (UUID) -> Void)?
+
+    /// Idempotency guard against the agentic loop calling this tool more
+    /// than once per `EmailReviewService.runOnce()` pass: the first call
+    /// creates the review chat; subsequent calls within the same run are a
+    /// no-op returning a friendly message instead of producing duplicate
+    /// review chats. Reset by constructing a fresh tool instance (which
+    /// `EmailReviewService` does every run).
+    @MainActor private var hasCreatedChatForRun: Bool = false
+
+    init(modelContainer: ModelContainer, onReviewCreated: (@MainActor (UUID) -> Void)? = nil) {
+        self.modelContainer = modelContainer
+        self.onReviewCreated = onReviewCreated
+    }
+
+    func execute(arguments: [String: JSONValue]) async throws -> String {
+        guard let actionsJSON = arguments["email_actions"],
+              let message = arguments["message"]?.stringValue else {
+            throw ToolError.missingArgument("email_actions/message")
+        }
+
+        // The model is supposed to send `email_actions` as a JSON array (the
+        // schema now declares `"type": "array"`). Some OpenAI-compatible
+        // proxies still stringify tool arguments regardless of the schema, so
+        // accept either an actual array or a JSON-encoded array string.
+        let actions: [EmailReviewAction]
+        switch actionsJSON {
+        case .array:
+            let actionsData = try JSONEncoder().encode(actionsJSON)
+            actions = try JSONDecoder().decode([EmailReviewAction].self, from: actionsData)
+        case .string(let jsonString):
+            guard let jsonData = jsonString.data(using: .utf8) else {
+                throw ToolError.invalidArguments("email_actions string is not valid UTF-8")
+            }
+            do {
+                actions = try JSONDecoder().decode([EmailReviewAction].self, from: jsonData)
+            } catch {
+                throw ToolError.invalidArguments("email_actions is not a JSON-encoded array: \(error.localizedDescription)")
+            }
+        default:
+            throw ToolError.invalidArguments("email_actions must be an array or a JSON-array string")
+        }
+
+        // Look up the referenced emails up-front so the review-card rows
+        // can display subject + sender. Without this the renderer falls back
+        // to the literal "Email" placeholder for every row. The lookup + the
+        // chat insert share one `ModelContext` so we don't open + close a
+        // second context moments later just to write the chat.
+        let actionsWithGUIDs = actions.compactMap { action -> (EmailReviewAction, UUID)? in
+            guard let uuid = UUID(uuidString: action.emailGUID) else { return nil }
+            return (action, uuid)
+        }
+
+        let title = "Inbox review — \(Self.reviewDateFormatter.string(from: .now))"
+        let createdChatID: UUID? = await MainActor.run {
+            // Idempotency guard: a single review pass must produce at most one
+            // review chat. `InferenceService.complete(...)` runs up to 8
+            // tool-calling rounds; without this guard the model could call
+            // `notify_user_about_emails` repeatedly and create duplicate
+            // "Inbox review — …" chats in one pass.
+            if self.hasCreatedChatForRun {
+                return nil
+            }
+            self.hasCreatedChatForRun = true
+
+            let context = ModelContext(modelContainer)
+            let repository = EmailRepository(modelContext: context)
+
+            // Batch-fetch subjects + senders in the same context the chat
+            // insert will use — one `ModelContext` for the whole tool call.
+            var subjectsAndSenders: [UUID: (subject: String, sender: String)] = [:]
+            for (_, uuid) in actionsWithGUIDs where subjectsAndSenders[uuid] == nil {
+                if let email = repository.fetchEmail(by: uuid) {
+                    subjectsAndSenders[uuid] = (email.subject, email.fromAddress)
+                }
+            }
+
+            let reviewItems: [ReviewItem] = actionsWithGUIDs.map { action, uuid in
+                let token = ReviewActionToken(rawValue: action.actionToken) ?? .review
+                let meta = subjectsAndSenders[uuid]
+                return ReviewItem(
+                    itemID: uuid,
+                    actionToken: token,
+                    actionLabel: token.displayName,
+                    summary: action.summary,
+                    subject: meta?.subject,
+                    sender: meta?.sender
+                )
+            }
+
+            let payload = ReviewCardPayload(reviewType: .email, items: reviewItems)
+            return self.createReviewChat(
+                in: context,
+                title: title,
+                payload: payload,
+                message: message
+            )
+        }
+
+        if createdChatID == nil {
+            return "Already created a review chat for this pass — additional `notify_user_about_emails` call ignored."
+        }
+        let itemCount = actionsWithGUIDs.count
+        return "Created review chat with \(itemCount) item\(itemCount == 1 ? "" : "s")."
+    }
+
+    @MainActor
+    @discardableResult
+    private func createReviewChat(
+        in context: ModelContext,
+        title: String,
+        payload: ReviewCardPayload,
+        message: String
+    ) -> UUID? {
+        let chat = Chat(
+            title: title,
+            modelSelection: UserDefaults.standard.string(forKey: SettingsKeys.clawModel) ?? ""
+        )
+        context.insert(chat)
+
+        let cardMessage = ChatMessage(
+            role: .assistant,
+            content: "",
+            sortIndex: 0,
+            reviewCard: payload
+        )
+        cardMessage.chat = chat
+        context.insert(cardMessage)
+
+        let summaryMessage = ChatMessage(
+            role: .assistant,
+            content: message,
+            sortIndex: 1
+        )
+        summaryMessage.chat = chat
+        context.insert(summaryMessage)
+
+        chat.updatedAt = .now
+
+        do {
+            try context.save()
+            Self.logger.info("""
+                created review chat \"\(title, privacy: .public)\" \
+                with \(payload.items.count, privacy: .public) items
+                """)
+            onReviewCreated?(chat.id)
+            return chat.id
+        } catch {
+            Self.logger.error("""
+                failed to save review chat: \(String(describing: error))
+                """)
+            return nil
+        }
+    }
+
+    private static let reviewDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+}

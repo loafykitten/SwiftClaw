@@ -15,12 +15,14 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/MacPaw/OpenAI.git", branch: "main"),
+        .package(url: "https://github.com/Cocoanetics/SwiftMail", revision: "3bfb4a3a2a9677c6090221f622c537870ee78960"),
     ],
     targets: [
         .executableTarget(
             name: "SwiftClaw",
             dependencies: [
                 .product(name: "OpenAI", package: "OpenAI"),
+                .product(name: "SwiftMail", package: "SwiftMail"),
             ],
             path: "SwiftClaw",
             resources: [
