@@ -5,8 +5,8 @@ import os
 /// Emails review-card renderer. Used by `ReviewCardRendererRegistry` when a
 /// `ChatMessage` carries a `ReviewCardPayload` of type `.email`. Tap a row's
 /// body → navigates to the email in EmailView. Tap the action-label badge →
-/// confirmation dialog → dispatcher performs the action. Long-press → context
-/// menu of View / Archive / Flag / Add Notes / Delete.
+/// dispatcher performs the action. Long-press → context menu of View /
+/// Archive / Flag / Delete.
 struct EmailReviewCardRenderer: View {
     let payload: ReviewCardPayload
     let dispatcher: AnyHashableReviewActionDispatcher
@@ -21,9 +21,11 @@ struct EmailReviewCardRenderer: View {
     /// the row body (not the action badge) — the host navigates to EmailView
     /// with that email's thread selected.
     let onItemView: (UUID) -> Void
+    let onRefreshAnalysis: () async -> Void
 
     @State private var pendingItem: ReviewItem?
     @State private var pendingAction: ReviewActionToken?
+    @State private var isRefreshingAnalysis = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -33,6 +35,22 @@ struct EmailReviewCardRenderer: View {
                 Text("Inbox review")
                     .font(.headline)
                 Spacer()
+                Button {
+                    refreshAnalysis()
+                } label: {
+                    if isRefreshingAnalysis || MailSyncMonitor.shared.isReviewing {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: 16, height: 16)
+                    } else {
+                        Image(systemName: "sparkles")
+                            .frame(width: 16, height: 16)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .disabled(isRefreshingAnalysis || MailSyncMonitor.shared.isReviewing)
+                .help("Run updated email analysis")
+                .accessibilityLabel("Run updated email analysis")
             }
 
             if payload.items.isEmpty {
@@ -45,7 +63,12 @@ struct EmailReviewCardRenderer: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(payload.items) { item in
-                    row(for: item)
+                    EmailReviewCardRow(
+                        item: item,
+                        selectAction: { action in selectAction(action, for: item) },
+                        performAction: { action in perform(action: action, for: item) },
+                        viewEmail: { onItemView(item.itemID) }
+                    )
                     if item.id != payload.items.last?.id {
                         Divider()
                     }
@@ -68,17 +91,9 @@ struct EmailReviewCardRenderer: View {
         ) { item in
             if let action = pendingAction {
                 Button(action.displayName, role: action.role) {
-                    let actedItemID = item.id
                     pendingItem = nil
                     pendingAction = nil
-                    Task {
-                        await dispatcher.dispatcher.perform(action: action, itemID: item.itemID)
-                    }
-                    // Optimistically remove from the card — server failures
-                    // surface via `MailSyncMonitor` rather than keeping the
-                    // row stuck (matches the dispatcher's "local mutation
-                    // always applies" contract).
-                    onItemActioned(actedItemID)
+                    perform(action: action, for: item)
                 }
             }
             Button("Cancel", role: .cancel) {
@@ -90,8 +105,75 @@ struct EmailReviewCardRenderer: View {
         }
     }
 
-    @ViewBuilder
-    private func row(for item: ReviewItem) -> some View {
+    /// Handles a deliberate action pick (action badge or context menu). `review`
+    /// is non-destructive, so it performs immediately and opens the email —
+    /// matching the swipe and badge-tap paths. Everything else routes through
+    /// the confirmation dialog first.
+    private func selectAction(_ action: ReviewActionToken, for item: ReviewItem) {
+        if action == .review {
+            perform(action: action, for: item)
+            onItemView(item.itemID)
+        } else {
+            pendingItem = item
+            pendingAction = action
+        }
+    }
+
+    private func perform(action: ReviewActionToken, for item: ReviewItem) {
+        Task {
+            await dispatcher.dispatcher.perform(action: action, itemID: item.itemID)
+        }
+        // Optimistically remove from the card — server failures surface via
+        // `MailSyncMonitor` rather than keeping the row stuck.
+        onItemActioned(item.id)
+    }
+
+    private func refreshAnalysis() {
+        guard !isRefreshingAnalysis else { return }
+        isRefreshingAnalysis = true
+        Task {
+            await onRefreshAnalysis()
+            isRefreshingAnalysis = false
+        }
+    }
+}
+
+private struct EmailReviewCardRow: View {
+    let item: ReviewItem
+    let selectAction: (ReviewActionToken) -> Void
+    let performAction: (ReviewActionToken) -> Void
+    let viewEmail: () -> Void
+
+    @State private var horizontalOffset: CGFloat = 0
+
+    private let actionWidth: CGFloat = 100
+    private var triggerDistance: CGFloat {
+        actionWidth + 18
+    }
+    private var maxDragDistance: CGFloat {
+        max(actionWidth, triggerDistance)
+    }
+
+    private var recommendedAction: ReviewActionToken {
+        item.action ?? .review
+    }
+
+    private var revealProgress: Double {
+        min(Double(abs(horizontalOffset) / triggerDistance), 1)
+    }
+
+    var body: some View {
+        ZStack {
+            swipeBackground
+            rowContent
+                .offset(x: horizontalOffset)
+                .gesture(dragGesture)
+        }
+        .clipShape(Rectangle())
+        .animation(.easeOut(duration: 0.16), value: horizontalOffset)
+    }
+
+    private var rowContent: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(item.subject ?? "Email")
@@ -100,8 +182,7 @@ struct EmailReviewCardRenderer: View {
                     .lineLimit(2)
                 Spacer()
                 Button {
-                    pendingItem = item
-                    pendingAction = item.action ?? .review
+                    selectAction(recommendedAction)
                 } label: {
                     Text(item.actionLabel)
                         .font(.caption)
@@ -116,7 +197,7 @@ struct EmailReviewCardRenderer: View {
                 Text(summary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             let metadata = [item.sender, item.date]
                 .compactMap { $0 }
@@ -130,15 +211,74 @@ struct EmailReviewCardRenderer: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            onItemView(item.itemID)
+            viewEmail()
         }
         .contextMenu {
             ForEach(ReviewActionToken.allCases.filter { $0 != .reply }) { action in
                 Button(action.displayName) {
-                    pendingItem = item
-                    pendingAction = action
+                    selectAction(action)
                 }
             }
+        }
+    }
+
+    private var swipeBackground: some View {
+        HStack {
+            Spacer()
+            HStack(spacing: 8) {
+                Image(systemName: recommendedAction.swipeSystemImage)
+                    .font(.headline)
+                Text(recommendedAction.displayName)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+            }
+            .frame(width: actionWidth)
+            .frame(maxHeight: .infinity)
+            .background(recommendedAction.swipeColor.opacity(0.25 + 0.65 * revealProgress))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .opacity(revealProgress == 0 ? 0 : 1)
+        .accessibilityHidden(true)
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                horizontalOffset = max(-maxDragDistance, min(0, value.translation.width))
+            }
+            .onEnded { value in
+                let shouldPerform = value.translation.width <= -triggerDistance
+                horizontalOffset = 0
+                guard shouldPerform else { return }
+                performAction(recommendedAction)
+                if recommendedAction == .review {
+                    viewEmail()
+                }
+            }
+    }
+}
+
+private extension ReviewActionToken {
+    var swipeSystemImage: String {
+        switch self {
+        case .review: "envelope.open"
+        case .flag: "flag.fill"
+        case .reply: "arrowshape.turn.up.left.fill"
+        case .delete: "trash.fill"
+        case .archive: "archivebox.fill"
+        }
+    }
+
+    var swipeColor: Color {
+        switch self {
+        case .review: .blue
+        case .flag: .orange
+        case .reply: .green
+        case .delete: .red
+        case .archive: .gray
         }
     }
 }

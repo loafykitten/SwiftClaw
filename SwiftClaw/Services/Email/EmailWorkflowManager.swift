@@ -97,8 +97,11 @@ final class EmailWorkflowManager {
     /// Forces past the 60 s overlap guard so a manual tap always runs and the
     /// button feels responsive (previously the manual button could silently
     /// no-op when a scheduled pass had just fired).
-    func reviewNow() async {
-        await runReviewOnce(force: true)
+    /// Returns the review's final status message (e.g. "Review complete",
+    /// "No email to review") so callers like the AI refresh tool can relay it.
+    @discardableResult
+    func reviewNow(appendingTo chatID: UUID? = nil) async -> String? {
+        await runReviewOnce(force: true, targetChatID: chatID)
     }
 
     private func startReviewLoop(modelContainer: ModelContainer) {
@@ -128,14 +131,15 @@ final class EmailWorkflowManager {
     /// Mirroring it here meant the production path double-checked; we
     /// instead rely on `runOnce()`'s return value to set the manual-path
     /// "Review complete" status only when the pass actually ran.
-    private func runReviewOnce(force: Bool = false) async {
-        guard let reviewService else { return }
+    @discardableResult
+    private func runReviewOnce(force: Bool = false, targetChatID: UUID? = nil) async -> String? {
+        guard let reviewService else { return nil }
         // Guard against overlapping runs (scheduled path only). The manual
         // button forces past this so the user gets immediate feedback.
         if !force {
             guard lastReviewRun == nil
                 || Date().timeIntervalSince(lastReviewRun!) > 60 else {
-                return
+                return nil
             }
         }
         // Surface an active status for the manual path so the button gives
@@ -144,17 +148,16 @@ final class EmailWorkflowManager {
         if force {
             MailSyncMonitor.shared.setReviewing(true)
         }
-        if !ProcessInfo.processInfo.isRunningInPreview {
-            lastReviewRun = .now
-            let didRun = await reviewService.runOnce(force: force)
-            if force {
-                MailSyncMonitor.shared.setStatus(
-                    didRun ? "Review complete" : "Review needs a model in Settings",
-                    syncing: false
-                )
-                MailSyncMonitor.shared.isReviewing = false
-            }
+        guard !ProcessInfo.processInfo.isRunningInPreview else { return nil }
+        lastReviewRun = .now
+        let didRun = await reviewService.runOnce(force: force, targetChatID: targetChatID)
+        let status = reviewService.lastStatusMessage
+            ?? (didRun ? "Review complete" : "Review did not run")
+        if force {
+            MailSyncMonitor.shared.setStatus(status, syncing: false)
+            MailSyncMonitor.shared.isReviewing = false
         }
+        return status
     }
 
     private func handleReviewChatCreated(_ chatID: UUID) {

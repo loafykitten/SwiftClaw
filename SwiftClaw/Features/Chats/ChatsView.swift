@@ -537,6 +537,9 @@ private struct ChatMessageRow: View {
                                 object: nil,
                                 userInfo: ["emailID": emailID]
                             )
+                        },
+                        onRefreshAnalysis: {
+                            await EmailWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
                         }
                     )
                     .frame(maxWidth: ChatBubbleLayout.maxWidth, alignment: .leading)

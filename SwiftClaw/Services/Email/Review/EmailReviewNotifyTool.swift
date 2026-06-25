@@ -32,6 +32,7 @@ final class EmailReviewNotifyTool: Tool {
     var requiresExplicitEnable: Bool { false }
 
     private let modelContainer: ModelContainer
+    private let targetChatID: UUID?
     private let onReviewCreated: (@MainActor (UUID) -> Void)?
 
     /// Idempotency guard against the agentic loop calling this tool more
@@ -42,8 +43,13 @@ final class EmailReviewNotifyTool: Tool {
     /// `EmailReviewService` does every run).
     @MainActor private var hasCreatedChatForRun: Bool = false
 
-    init(modelContainer: ModelContainer, onReviewCreated: (@MainActor (UUID) -> Void)? = nil) {
+    init(
+        modelContainer: ModelContainer,
+        targetChatID: UUID? = nil,
+        onReviewCreated: (@MainActor (UUID) -> Void)? = nil
+    ) {
         self.modelContainer = modelContainer
+        self.targetChatID = targetChatID
         self.onReviewCreated = onReviewCreated
     }
 
@@ -97,7 +103,12 @@ final class EmailReviewNotifyTool: Tool {
             }
             self.hasCreatedChatForRun = true
 
-            let context = ModelContext(modelContainer)
+            // Use the container's main context (we're on MainActor) so mutations
+            // to an existing chat — collapsing a prior card into its label — land
+            // on the same objects the chat view observes. A separate context
+            // would persist the change but leave the UI's cached card instance
+            // stale, so the superseded card would linger on screen.
+            let context = modelContainer.mainContext
             let repository = EmailRepository(modelContext: context)
 
             // Batch-fetch subjects + senders in the same context the chat
@@ -128,19 +139,32 @@ final class EmailReviewNotifyTool: Tool {
             }
 
             let payload = ReviewCardPayload(reviewType: .email, items: reviewItems)
-            return self.createReviewChat(
-                in: context,
-                title: title,
-                payload: payload,
-                message: message
-            )
+            if let targetChatID {
+                return self.appendReview(
+                    to: targetChatID,
+                    in: context,
+                    payload: payload,
+                    message: message
+                )
+            } else {
+                return self.createReviewChat(
+                    in: context,
+                    title: title,
+                    payload: payload,
+                    message: message
+                )
+            }
         }
 
         if createdChatID == nil {
             return "Already created a review chat for this pass — additional `notify_user_about_emails` call ignored."
         }
         let itemCount = actionsWithGUIDs.count
-        return "Created review chat with \(itemCount) item\(itemCount == 1 ? "" : "s")."
+        if targetChatID != nil {
+            return "Updated review chat with \(itemCount) item\(itemCount == 1 ? "" : "s")."
+        } else {
+            return "Created review chat with \(itemCount) item\(itemCount == 1 ? "" : "s")."
+        }
     }
 
     @MainActor
@@ -187,6 +211,65 @@ final class EmailReviewNotifyTool: Tool {
         } catch {
             Self.logger.error("""
                 failed to save review chat: \(String(describing: error))
+                """)
+            return nil
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func appendReview(
+        to chatID: UUID,
+        in context: ModelContext,
+        payload: ReviewCardPayload,
+        message: String
+    ) -> UUID? {
+        var descriptor = FetchDescriptor<Chat>(
+            predicate: #Predicate { $0.id == chatID }
+        )
+        descriptor.fetchLimit = 1
+        guard let chat = try? context.fetch(descriptor).first else {
+            Self.logger.error("failed to append review: target chat not found")
+            return nil
+        }
+
+        // Supersede any prior card(s) so the chat shows a single live card —
+        // each stale card collapses into a plain status label.
+        for message in chat.messages where message.reviewCard != nil {
+            message.reviewCard = nil
+            message.content = "An updated analysis has been requested."
+        }
+
+        let nextIndex = (chat.messages.map(\.sortIndex).max() ?? -1) + 1
+        let cardMessage = ChatMessage(
+            role: .assistant,
+            content: "",
+            sortIndex: nextIndex,
+            reviewCard: payload
+        )
+        cardMessage.chat = chat
+        context.insert(cardMessage)
+
+        let summaryMessage = ChatMessage(
+            role: .assistant,
+            content: message,
+            sortIndex: nextIndex + 1
+        )
+        summaryMessage.chat = chat
+        context.insert(summaryMessage)
+
+        chat.updatedAt = .now
+
+        do {
+            try context.save()
+            Self.logger.info("""
+                appended updated review to chat \(chatID.uuidString, privacy: .public) \
+                with \(payload.items.count, privacy: .public) items
+                """)
+            return chat.id
+        } catch {
+            Self.logger.error("""
+                failed to save updated review in existing chat: \(String(describing: error))
                 """)
             return nil
         }

@@ -52,6 +52,12 @@ enum ChatCompletionService {
         let canInvestigate = allowInvestigation
             && canUseTools
             && effectiveReasoningEffort?.isReasoningEnabled == true
+        let reviewCardPayloads = chat.sortedMessages.compactMap(\.reviewCard)
+        let emailReviewContext = EmailReviewFollowUpContextBuilder.makeContext(
+            for: reviewCardPayloads,
+            in: modelContext
+        )
+        let isEmailReviewChat = emailReviewContext != nil
 
         var messages = chat.sortedMessages.compactMap {
             $0.inferenceMessage(includingImages: canUseImages)
@@ -69,15 +75,26 @@ enum ChatCompletionService {
                 renumbering entries.
                 """))
         }
+        if let emailReviewContext {
+            messages.append(.system(emailReviewContext))
+        }
+
+        var tools: [any Tool] = []
+        if canUseTools {
+            tools = ToolRegistry.shared.availableTools(includingExplicitlyEnabled: canInvestigate)
+            if isEmailReviewChat {
+                tools.append(EmailReviewAddNoteTool(modelContainer: modelContext.container))
+                tools.append(EmailReviewSetFlagTool(modelContainer: modelContext.container))
+                tools.append(EmailReviewRefreshTool(chatID: chat.id))
+            }
+        }
 
         do {
             let response = try await InferenceService.shared.complete(
                 messages: messages,
                 model: chat.modelSelection,
                 reasoningEffort: effectiveReasoningEffort,
-                tools: canUseTools
-                    ? ToolRegistry.shared.availableTools(includingExplicitlyEnabled: canInvestigate)
-                    : []
+                tools: tools
             )
 
             chat.appendMessage(role: .assistant, content: response)

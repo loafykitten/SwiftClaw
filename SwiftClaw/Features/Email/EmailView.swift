@@ -646,7 +646,6 @@ private struct EmailThreadDetailView: View {
         EmailRepository(modelContext: modelContext)
     }
 
-    /// Marks only the thread's latest message as read on appear (instead of
     /// Marks a single message as read on the server when its card appears.
     /// Per-message rather than per-thread so only what the user actually sees
     /// gets the `\Seen` flag — older messages in a thread stay unread until

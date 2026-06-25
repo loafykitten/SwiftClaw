@@ -128,6 +128,104 @@ struct EmailReviewNotifyToolTests {
         #expect(chats.count == 1)
     }
 
+    @Test func executeCanAppendUpdatedReviewToExistingChat() async throws {
+        let container = try Self.inMemoryContainer()
+        let setupContext = ModelContext(container)
+        let email = Email(
+            messageID: "<update@example.com>",
+            subject: "Updated analysis",
+            fromAddress: "sender@example.com",
+            toAddresses: ["me@example.com"],
+            date: .now,
+            bodyText: "Needs a fresh look."
+        )
+        let chat = Chat(title: "Inbox review — existing", modelSelection: "test")
+        let existing = ChatMessage(role: .assistant, content: "Earlier analysis", sortIndex: 0)
+        existing.chat = chat
+        setupContext.insert(email)
+        setupContext.insert(chat)
+        setupContext.insert(existing)
+        try setupContext.save()
+
+        let tool = EmailReviewNotifyTool(modelContainer: container, targetChatID: chat.id)
+        let arguments: [String: JSONValue] = [
+            "message": .string("Updated analysis found one item."),
+            "email_actions": .array([
+                .object([
+                    "email_guid": .string(email.id.uuidString),
+                    "action": .string("review"),
+                    "summary": .string("Fresh review")
+                ])
+            ])
+        ]
+
+        let result = try await tool.execute(arguments: arguments)
+        #expect(result.contains("Updated review chat"))
+
+        let readContext = ModelContext(container)
+        let chats = try readContext.fetch(FetchDescriptor<Chat>())
+        #expect(chats.count == 1)
+        let refreshed = try #require(chats.first)
+        let messages = refreshed.sortedMessages
+        #expect(messages.count == 3)
+        #expect(messages[0].content == "Earlier analysis")
+        let card = try #require(messages[1].reviewCard)
+        #expect(card.items.count == 1)
+        #expect(card.items[0].itemID == email.id)
+        #expect(messages[2].content == "Updated analysis found one item.")
+    }
+
+    @Test func appendingUpdatedReviewCollapsesPriorCardIntoLabel() async throws {
+        let container = try Self.inMemoryContainer()
+        let setupContext = ModelContext(container)
+        let email = Email(
+            messageID: "<update@example.com>",
+            subject: "Updated analysis",
+            fromAddress: "sender@example.com",
+            toAddresses: ["me@example.com"],
+            date: .now,
+            bodyText: "Needs a fresh look."
+        )
+        let chat = Chat(title: "Inbox review — existing", modelSelection: "test")
+        let priorCard = ChatMessage(
+            role: .assistant,
+            content: "",
+            sortIndex: 0,
+            reviewCard: ReviewCardPayload(
+                reviewType: .email,
+                items: [ReviewItem(itemID: email.id, actionToken: .review, actionLabel: "Review")]
+            )
+        )
+        priorCard.chat = chat
+        setupContext.insert(email)
+        setupContext.insert(chat)
+        setupContext.insert(priorCard)
+        try setupContext.save()
+
+        let tool = EmailReviewNotifyTool(modelContainer: container, targetChatID: chat.id)
+        _ = try await tool.execute(arguments: [
+            "message": .string("Updated analysis found one item."),
+            "email_actions": .array([
+                .object([
+                    "email_guid": .string(email.id.uuidString),
+                    "action": .string("review"),
+                    "summary": .string("Fresh review")
+                ])
+            ])
+        ])
+
+        let readContext = ModelContext(container)
+        let refreshed = try #require(try readContext.fetch(FetchDescriptor<Chat>()).first)
+        let messages = refreshed.sortedMessages
+        #expect(messages.count == 3)
+        // Prior card is superseded: no payload, collapsed to the label.
+        #expect(messages[0].reviewCard == nil)
+        #expect(messages[0].content == "An updated analysis has been requested.")
+        // The fresh card is the only live one.
+        #expect(messages[1].reviewCard?.items.count == 1)
+        #expect(messages[2].content == "Updated analysis found one item.")
+    }
+
     @Test func executeRejectsMissingArguments() async throws {
         let container = try Self.inMemoryContainer()
         let tool = EmailReviewNotifyTool(modelContainer: container)

@@ -49,3 +49,14 @@ enum EmailReviewDateFormatter {
         return formatter.string(from: date)
     }
 }
+
+enum EmailReviewDateContext {
+    static func currentString(now: Date = Date(), timeZone: TimeZone = .current) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .full
+        formatter.timeStyle = .short
+        formatter.timeZone = timeZone
+
+        return "Current user date/time: \(formatter.string(from: now)) (\(timeZone.identifier))"
+    }
+}

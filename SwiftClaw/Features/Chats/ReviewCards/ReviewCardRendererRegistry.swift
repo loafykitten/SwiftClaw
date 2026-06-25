@@ -20,7 +20,8 @@ struct ReviewCardRendererRegistry {
         for payload: ReviewCardPayload,
         dispatcherProvider: @escaping (ReviewType) -> AnyHashableReviewActionDispatcher?,
         onItemActioned: @escaping (UUID) -> Void,
-        onItemView: @escaping (UUID) -> Void
+        onItemView: @escaping (UUID) -> Void,
+        onRefreshAnalysis: @escaping () async -> Void
     ) -> some View {
         switch payload.reviewType {
         case .email:
@@ -28,7 +29,8 @@ struct ReviewCardRendererRegistry {
                 payload: payload,
                 dispatcher: dispatcherProvider(.email) ?? AnyHashableReviewActionDispatcher(NoOpReviewActionDispatcher()),
                 onItemActioned: onItemActioned,
-                onItemView: onItemView
+                onItemView: onItemView,
+                onRefreshAnalysis: onRefreshAnalysis
             )
         case .calendar, .reminders:
             Text("Reviewer for \(payload.reviewType.rawValue) not yet implemented.")

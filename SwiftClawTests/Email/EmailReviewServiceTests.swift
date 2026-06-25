@@ -48,6 +48,7 @@ struct EmailReviewServiceTests {
 
         let didSucceed = await service.runOnce()
         #expect(didSucceed == false)
+        #expect(service.lastStatusMessage == "Review failed")
 
         // C1 contract: the thread the failed pass was supposed to triage
         // must NOT be suppressed — the next pass should still pick it up.
@@ -126,6 +127,7 @@ struct EmailReviewServiceTests {
         }
         let scheduledDidRun = await service.runOnce()
         #expect(scheduledDidRun == false)
+        #expect(service.lastStatusMessage == "Review is already up to date")
         let scheduledCalls = await capture.count
         #expect(scheduledCalls == 0)
 
@@ -319,8 +321,75 @@ struct EmailReviewServiceTests {
         let systemPrompt = try #require(await capture.systemPrompt)
         #expect(systemPrompt.contains("Mittens"))
         #expect(systemPrompt.contains("Speak like a terse pirate captain."))
+        #expect(systemPrompt.contains("Current user date/time:"))
         // The triage instructions still ride alongside the persona.
         #expect(systemPrompt.contains("notify_user_about_emails"))
+        // The cold (scheduled) path has no user turn to steer it.
+        #expect(!systemPrompt.contains("steer this run"))
+    }
+
+    @Test
+    func reanalysisReplaysChatHistoryAndAsksForContinuation() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let message = Self.message(
+            uid: 1,
+            messageID: "<reanalyze@example.com>",
+            subject: "Needs another look",
+            date: .now
+        )
+        repository.upsertMessages([message], mailbox: "INBOX", accountID: UUID())
+        repository.resolveThreads()
+
+        // An existing review chat with a prior exchange + an (empty) card.
+        let chat = Chat(title: "Inbox review", modelSelection: "test-claw-model")
+        let priorSummary = ChatMessage(
+            role: .assistant, content: "Earlier I flagged the budget thread.", sortIndex: 0
+        )
+        let priorCard = ChatMessage(
+            role: .assistant, content: "", sortIndex: 1,
+            reviewCard: ReviewCardPayload(reviewType: .email, items: [])
+        )
+        let userAsk = ChatMessage(
+            role: .user, content: "Could you run an additional analysis?", sortIndex: 2
+        )
+        context.insert(chat)
+        [priorSummary, priorCard, userAsk].forEach {
+            $0.chat = chat
+            context.insert($0)
+        }
+        try context.save()
+
+        UserDefaults.standard.set("test-claw-model", forKey: SettingsKeys.clawModel)
+        defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
+
+        let service = EmailReviewService(modelContainer: container)
+        let capture = PromptCapture()
+        service.completeProvider = { messages, _, _, _ in
+            await capture.record(messages: messages)
+            return ""
+        }
+
+        #expect(await service.runOnce(force: true, targetChatID: chat.id) == true)
+
+        let contents = await capture.allMessages.compactMap { message -> String? in
+            switch message {
+            case .user(let content, _): return content
+            case .assistant(let content): return content
+            case .system(let content): return content
+            default: return nil
+            }
+        }
+        // Prior conversation is replayed; the empty card message is not.
+        #expect(contents.contains("Earlier I flagged the budget thread."))
+        #expect(contents.contains("Could you run an additional analysis?"))
+        #expect(!contents.contains(""))
+        // The system prompt asks the model to continue rather than restart, and
+        // to honor any steering in the user's latest message for this run.
+        let systemPrompt = try #require(await capture.systemPrompt)
+        #expect(systemPrompt.contains("natural continuation"))
+        #expect(systemPrompt.contains("steer this run"))
     }
 
     @Test
@@ -348,6 +417,7 @@ struct EmailReviewServiceTests {
 
         let didSucceed = await service.runOnce()
         #expect(didSucceed == false)
+        #expect(service.lastStatusMessage == "Review needs a model in Settings")
 
         // The thread must still be eligible — no stamp.
         #expect(repository.fetchNonArchivedThreadsForReview().count == 1)
@@ -358,8 +428,10 @@ struct EmailReviewServiceTests {
     private actor PromptCapture {
         private(set) var userPrompt: String? = nil
         private(set) var systemPrompt: String? = nil
+        private(set) var allMessages: [InferenceMessage] = []
 
         func record(messages: [InferenceMessage]) {
+            allMessages = messages
             for message in messages {
                 switch message {
                 case .user(let content, _):

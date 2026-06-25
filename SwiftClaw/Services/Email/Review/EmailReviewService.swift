@@ -26,6 +26,8 @@ final class EmailReviewService {
     /// the user to it (or fire a dock badge / toast).
     var onReviewCreated: ((UUID) -> Void)?
 
+    private(set) var lastStatusMessage: String?
+
     /// Testable inference seam. Defaults to the real
     /// `InferenceService.shared.complete(...)` call; tests inject a
     /// throwing/succeeding variant to assert the stamp-after-success contract
@@ -59,13 +61,17 @@ final class EmailReviewService {
     /// was already reviewed in a prior pass. The scheduled loop keeps
     /// `force: false` so the H3 "no re-send until new mail" contract holds.
     @discardableResult
-    func runOnce(force: Bool = false) async -> Bool {
+    func runOnce(force: Bool = false, targetChatID: UUID? = nil) async -> Bool {
+        lastStatusMessage = nil
         // Order matters: run every guard that can short-circuit *before*
         // stamping triage suppression, otherwise a failed pass permanently
         // suppresses the threads it was supposed to review. Stamping only on
         // success keeps "nothing-to-do" suppression (the legitimate case)
         // while letting retries land on the next interval.
-        guard !ProcessInfo.processInfo.isRunningInPreview else { return false }
+        guard !ProcessInfo.processInfo.isRunningInPreview else {
+            lastStatusMessage = "Review skipped in previews"
+            return false
+        }
 
         let context = ModelContext(modelContainer)
         let repository = EmailRepository(modelContext: context)
@@ -86,8 +92,10 @@ final class EmailReviewService {
                     review: all \(allThreadCount, privacy: .public) inbox thread\(allThreadCount == 1 ? "" : "s") \
                     already triaged since last new mail; skipping
                     """)
+                lastStatusMessage = "Review is already up to date"
             } else {
                 Self.logger.info("review: inbox has no triageable threads; skipping")
+                lastStatusMessage = "No email to review"
             }
             return false
         }
@@ -95,6 +103,7 @@ final class EmailReviewService {
         let modelSelection = UserDefaults.standard.string(forKey: SettingsKeys.clawModel) ?? ""
         guard !modelSelection.isEmpty else {
             Self.logger.warning("review skipped — clawModel not configured")
+            lastStatusMessage = "Review needs a model in Settings"
             MailSyncMonitor.shared.setStatus("Review needs a model in Settings", syncing: false)
             return false
         }
@@ -109,20 +118,31 @@ final class EmailReviewService {
             """)
 
         let descriptors = threads.map { Self.descriptor(for: $0) }
-        let systemPrompt = Self.systemPrompt()
+        let systemPrompt = Self.systemPrompt(isContinuation: targetChatID != nil)
         let userPrompt = Self.userPrompt(for: descriptors)
 
-        let tool = EmailReviewNotifyTool(modelContainer: modelContainer) { [weak self] chatID in
-            self?.onReviewCreated?(chatID)
+        // When appending to an existing review chat, replay that chat's history
+        // so the model's summary reads as a continuation rather than a fresh
+        // cold review.
+        var messages: [InferenceMessage] = [.system(systemPrompt)]
+        if let targetChatID {
+            messages.append(contentsOf: Self.chatHistory(for: targetChatID, in: context))
+        }
+        messages.append(.user(userPrompt))
+
+        let tool = EmailReviewNotifyTool(
+            modelContainer: modelContainer,
+            targetChatID: targetChatID
+        ) { [weak self] chatID in
+            if targetChatID == nil {
+                self?.onReviewCreated?(chatID)
+            }
         }
         let registry = ToolRegistry(tools: [tool])
 
         do {
             _ = try await completeProvider(
-                [
-                    .system(systemPrompt),
-                    .user(userPrompt)
-                ],
+                messages,
                 modelSelection,
                 .standalone,
                 registry.availableTools
@@ -134,6 +154,7 @@ final class EmailReviewService {
             Self.logger.error("""
                 review complete() failed: \(String(describing: error))
                 """)
+            lastStatusMessage = "Review failed"
             return false
         }
 
@@ -143,16 +164,52 @@ final class EmailReviewService {
         // Batched into a single `save()` (one per pass rather than one per
         // thread).
         repository.markThreadsReviewed(threads, at: Date())
+        lastStatusMessage = "Review complete"
         return true
+    }
+
+    /// Prior messages of the target review chat, as inference history. Skips
+    /// empty messages (review cards carry their data out-of-band and have no
+    /// text content) so the model only sees actual conversation turns.
+    private static func chatHistory(for chatID: UUID, in context: ModelContext) -> [InferenceMessage] {
+        var descriptor = FetchDescriptor<Chat>(predicate: #Predicate { $0.id == chatID })
+        descriptor.fetchLimit = 1
+        guard let chat = try? context.fetch(descriptor).first else { return [] }
+        return chat.sortedMessages.compactMap { message in
+            guard !message.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return message.inferenceMessage(includingImages: false)
+        }
     }
 
     // MARK: - Prompt construction
 
     private static func systemPrompt(
-        persona: String = AssistantPersona.personaPrompt()
+        persona: String = AssistantPersona.personaPrompt(),
+        isContinuation: Bool = false
     ) -> String {
+        // When re-running inside an existing review chat the prior conversation
+        // is sent as message history, so the model should pick up the thread
+        // rather than greet the user from scratch.
+        let continuationNote = isContinuation ? """
+
+
+        The user has asked you to re-run this analysis during an ongoing conversation, which is \
+        included in the messages of this chat. Write your `message` as a natural continuation — \
+        don't greet the user again or reintroduce yourself. Pick up where the conversation left \
+        off and focus on what's changed or still stands out since the last analysis.
+
+        The user's most recent message may also steer this run — for example, which senders or \
+        topics to prioritize, surface, ignore, or treat as deletable. If it does, follow that \
+        steering: it takes precedence over the default triage preferences above (including the \
+        usual caution around `delete`) for this pass only. Apply it just to this run; don't treat \
+        it as a standing rule.
+        """ : ""
         return """
         \(persona)
+
+        \(EmailReviewDateContext.currentString())
 
         You are triaging the user's email inbox on their behalf. Your job is to decide which threads \
         genuinely need the user to do something, and to tell them about those in your own voice.
@@ -193,7 +250,7 @@ final class EmailReviewService {
         not a generic phrase. Mention timing when a date actually matters, but do not add a separate dates list.
         - Write both each `summary` and the `message` in your own voice, per the personality above.
 
-        If nothing needs action, output nothing and do not call any tool.
+        If nothing needs action, output nothing and do not call any tool.\(continuationNote)
         """
     }
 
