@@ -51,13 +51,26 @@ actor MockMailClient: @preconcurrency MailClient {
         uidValidity = newValue
     }
 
-    func fetchMailbox(name: String, sinceUID: UInt32? = nil) async throws -> MailboxFetchResult {
+    private(set) var fetchRequests: [(name: String, sinceUID: UInt32?, maxMessages: Int?)] = []
+
+    func fetchMailbox(
+        name: String,
+        sinceUID: UInt32? = nil,
+        maxMessages: Int? = nil
+    ) async throws -> MailboxFetchResult {
+        fetchRequests.append((name: name, sinceUID: sinceUID, maxMessages: maxMessages))
         let all = mailboxes[name] ?? []
-        let filtered: [FetchedMessage]
+        let filteredByUID: [FetchedMessage]
         if let sinceUID, sinceUID > 0 {
-            filtered = all.filter { UInt32($0.uid) > sinceUID }
+            filteredByUID = all.filter { UInt32($0.uid) > sinceUID }
         } else {
-            filtered = all
+            filteredByUID = all
+        }
+        let filtered: [FetchedMessage]
+        if let maxMessages, maxMessages > 0, filteredByUID.count > maxMessages {
+            filtered = Array(filteredByUID.sorted { $0.uid < $1.uid }.suffix(maxMessages))
+        } else {
+            filtered = filteredByUID
         }
         let maxUID = filtered.map { UInt32($0.uid) }.max()
         return MailboxFetchResult(

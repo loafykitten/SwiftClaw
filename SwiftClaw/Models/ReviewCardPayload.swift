@@ -59,6 +59,7 @@ struct ReviewItem: Codable, Sendable, Identifiable, Hashable {
     var summary: String?
     var subject: String?
     var sender: String?
+    var date: String?
 
     init(
         id: UUID = UUID(),
@@ -67,7 +68,8 @@ struct ReviewItem: Codable, Sendable, Identifiable, Hashable {
         actionLabel: String,
         summary: String? = nil,
         subject: String? = nil,
-        sender: String? = nil
+        sender: String? = nil,
+        date: String? = nil
     ) {
         self.id = id
         self.itemID = itemID
@@ -76,6 +78,7 @@ struct ReviewItem: Codable, Sendable, Identifiable, Hashable {
         self.summary = summary
         self.subject = subject
         self.sender = sender
+        self.date = date
     }
 
     var action: ReviewActionToken? {

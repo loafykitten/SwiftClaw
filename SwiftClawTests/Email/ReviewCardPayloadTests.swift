@@ -13,7 +13,8 @@ struct ReviewCardPayloadTests {
                     actionLabel: "Flag",
                     summary: "Awaiting reply",
                     subject: "Q3 planning",
-                    sender: "boss@example.com"
+                    sender: "boss@example.com",
+                    date: "Jun 24, 2026 at 10:00 PM"
                 ),
                 ReviewItem(
                     itemID: UUID(),
@@ -33,6 +34,7 @@ struct ReviewCardPayloadTests {
         #expect(decoded.reviewType == .email)
         #expect(decoded.items.count == 2)
         #expect(decoded.items[0].action == .flag)
+        #expect(decoded.items[0].date == "Jun 24, 2026 at 10:00 PM")
         #expect(decoded.items[1].action == .delete)
     }
 

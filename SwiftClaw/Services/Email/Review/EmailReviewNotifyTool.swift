@@ -88,7 +88,7 @@ final class EmailReviewNotifyTool: Tool {
             return (action, uuid)
         }
 
-        let title = "Inbox review — \(Self.reviewDateFormatter.string(from: .now))"
+        let title = "Inbox review — \(EmailReviewDateFormatter.string(from: .now))"
         let createdChatID: UUID? = await MainActor.run {
             // Idempotency guard: a single review pass must produce at most one
             // review chat. `InferenceService.complete(...)` runs up to 8
@@ -105,23 +105,28 @@ final class EmailReviewNotifyTool: Tool {
 
             // Batch-fetch subjects + senders in the same context the chat
             // insert will use — one `ModelContext` for the whole tool call.
-            var subjectsAndSenders: [UUID: (subject: String, sender: String)] = [:]
-            for (_, uuid) in actionsWithGUIDs where subjectsAndSenders[uuid] == nil {
+            var emailMetadata: [UUID: (subject: String, sender: String, date: String)] = [:]
+            for (_, uuid) in actionsWithGUIDs where emailMetadata[uuid] == nil {
                 if let email = repository.fetchEmail(by: uuid) {
-                    subjectsAndSenders[uuid] = (email.subject, email.fromAddress)
+                    emailMetadata[uuid] = (
+                        email.subject,
+                        email.fromAddress,
+                        EmailReviewDateFormatter.string(from: email.date)
+                    )
                 }
             }
 
             let reviewItems: [ReviewItem] = actionsWithGUIDs.map { action, uuid in
                 let token = ReviewActionToken(rawValue: action.actionToken) ?? .review
-                let meta = subjectsAndSenders[uuid]
+                let meta = emailMetadata[uuid]
                 return ReviewItem(
                     itemID: uuid,
                     actionToken: token,
                     actionLabel: token.displayName,
                     summary: action.summary,
                     subject: meta?.subject,
-                    sender: meta?.sender
+                    sender: meta?.sender,
+                    date: meta?.date
                 )
             }
 
@@ -189,11 +194,4 @@ final class EmailReviewNotifyTool: Tool {
             return nil
         }
     }
-
-    private static let reviewDateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return formatter
-    }()
 }

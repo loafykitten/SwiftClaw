@@ -76,6 +76,59 @@ struct EmailRepositoryTests {
         #expect(threadsAfter.isEmpty)
     }
 
+    @Test func openedEmailStillQualifiesForReviewWhenNotArchived() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+
+        let fetched = Self.simpleMessage(
+            uid: 1,
+            messageID: "<opened@example.com>",
+            subject: "Opened but needs review",
+            isRead: true
+        )
+        repository.upsertMessages([fetched], mailbox: "INBOX", accountID: Self.accountID)
+        repository.resolveThreads()
+
+        let threads = repository.fetchNonArchivedThreadsForReview()
+        #expect(threads.count == 1)
+        #expect(threads.first?.latestReviewableMessage?.isRead == true)
+    }
+
+    @Test func archivedLatestMessageDoesNotRetriggerReviewedThread() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let activeDate = Date().addingTimeInterval(-120)
+        let archivedDate = Date().addingTimeInterval(-60)
+
+        let active = Self.simpleMessage(
+            uid: 1,
+            messageID: "<active-reviewed@example.com>",
+            subject: "Mixed reviewed",
+            date: activeDate
+        )
+        let archived = Self.simpleMessage(
+            uid: 2,
+            messageID: "<archived-reviewed@example.com>",
+            subject: "Mixed reviewed",
+            date: archivedDate
+        )
+        repository.upsertMessages([active, archived], mailbox: "INBOX", accountID: Self.accountID)
+        repository.resolveThreads()
+
+        let archivedEmail = try #require(
+            try context.fetch(FetchDescriptor<Email>()).first { $0.uid == 2 }
+        )
+        repository.archive(messageID: archivedEmail.id)
+
+        let threads = repository.fetchNonArchivedThreadsForReview()
+        #expect(threads.count == 1)
+        repository.markThreadsReviewed(threads, at: activeDate.addingTimeInterval(30))
+
+        #expect(repository.fetchNonArchivedThreadsForReview().isEmpty)
+    }
+
     @Test func flagUpdateReconcilesWithFetchedState() async throws {
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
@@ -426,7 +479,13 @@ struct EmailRepositoryTests {
         )
     }
 
-    static func simpleMessage(uid: Int, messageID: String, subject: String) -> FetchedMessage {
+    static func simpleMessage(
+        uid: Int,
+        messageID: String,
+        subject: String,
+        isRead: Bool = false,
+        date: Date = .now
+    ) -> FetchedMessage {
         FetchedMessage(
             uid: uid,
             messageID: messageID,
@@ -435,13 +494,13 @@ struct EmailRepositoryTests {
             toAddresses: ["me@example.com"],
             ccAddresses: [],
             bccAddresses: [],
-            date: .now,
-            internalDate: .now,
+            date: date,
+            internalDate: date,
             bodyText: "Body",
             bodyHTML: nil,
             inReplyTo: nil,
             references: [],
-            isRead: false,
+            isRead: isRead,
             isFlagged: false,
             mailbox: "INBOX",
             attachmentDescriptors: []

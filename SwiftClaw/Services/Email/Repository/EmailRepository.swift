@@ -332,7 +332,7 @@ final class EmailRepository {
         let threads = (try? modelContext.fetch(descriptor)) ?? []
         guard !force else { return threads }
         return threads.filter { thread in
-            let latestMessageDate = thread.latestMessage?.date ?? .distantPast
+            let latestMessageDate = thread.latestReviewableMessage?.date ?? .distantPast
             // No prior review → include. Prior review older than the latest
             // message → new mail since review → include. Otherwise skip —
             // the previous pass already triaged this thread and nothing has

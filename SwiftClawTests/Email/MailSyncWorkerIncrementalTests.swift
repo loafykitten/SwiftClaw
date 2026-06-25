@@ -63,6 +63,49 @@ struct MailSyncWorkerIncrementalTests {
         #expect(thirdState.uidValidity == 7)
     }
 
+    @Test func firstSyncCapsInitialBodyFetchAndRecordsHighWater() async throws {
+        let container = try Self.inMemoryContainer()
+        let mock = MockMailClient()
+        let accountID = UUID()
+        let account = Self.completeAccount(id: accountID)
+        let total = MailSyncWorker.firstSyncMaxMessages + 10
+        await mock.setUIDValidity(7)
+        await mock.setMailbox("INBOX", messages: Self.messages(uids: 1...total, accountID: accountID))
+
+        var states: [String: MailboxSyncState] = [:]
+        let provider: @Sendable (UUID, String) async -> MailboxSyncState? = { id, mailbox in
+            await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] }
+        }
+        let updater: @Sendable (MailboxSyncState, UUID, String) async -> Void = { state, id, mailbox in
+            await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] = state }
+        }
+
+        let worker = MailSyncWorker(
+            accountsProvider: { [account] },
+            modelContainer: container,
+            clientFactory: { _ in mock },
+            syncStateProvider: provider,
+            syncStateUpdater: updater
+        )
+
+        let inserted = await worker.syncOnce()
+        #expect(inserted == MailSyncWorker.firstSyncMaxMessages)
+
+        let firstRequest = await mock.fetchRequests.first
+        #expect(firstRequest?.sinceUID == nil)
+        #expect(firstRequest?.maxMessages == MailSyncWorker.firstSyncMaxMessages)
+
+        let state = try #require(states[MailboxSyncStateStore.key(for: accountID, mailbox: "INBOX")])
+        #expect(state.uidValidity == 7)
+        #expect(state.lastSeenUID == UInt32(total))
+
+        let secondInserted = await worker.syncOnce()
+        #expect(secondInserted == 0)
+        let requests = await mock.fetchRequests.filter { $0.name == "INBOX" }
+        #expect(requests.last?.sinceUID == UInt32(total))
+        #expect(requests.last?.maxMessages == nil)
+    }
+
     @Test func uidValidityChangeTriggersFullRefetch() async throws {
         let container = try Self.inMemoryContainer()
         let mock = MockMailClient()

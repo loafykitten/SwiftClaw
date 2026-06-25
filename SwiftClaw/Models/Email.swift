@@ -12,8 +12,8 @@ final class EmailThread {
     /// Last time an inbox-review pass included this thread. Set by
     /// `EmailReviewService.runOnce()` for every fetched thread (actioned or
     /// not) so "nothing-to-do" threads aren't re-sent to the LLM until new
-    /// mail lands in them. Compared against `latestMessage.date` to decide
-    /// whether a thread is current (no new mail since last review).
+    /// mail lands in them. Compared against `latestReviewableMessage.date`
+    /// to decide whether a thread is current (no new mail since last review).
     var lastReviewedAt: Date?
 
     init(
@@ -40,8 +40,28 @@ final class EmailThread {
         sortedMessages.last
     }
 
+    var reviewableMessages: [Email] {
+        sortedMessages.filter { !$0.isArchived && !$0.isDeleted }
+    }
+
+    var latestReviewableMessage: Email? {
+        reviewableMessages.last
+    }
+
+    var isReviewFlagged: Bool {
+        hasFlaggedMessage(in: reviewableMessages)
+    }
+
+    var reviewUnreadCount: Int {
+        unreadCount(in: reviewableMessages)
+    }
+
+    var reviewParticipantSummary: String {
+        participantSummary(for: reviewableMessages)
+    }
+
     var isFlagged: Bool {
-        messages.contains { $0.isFlagged }
+        hasFlaggedMessage(in: messages)
     }
 
     var isArchived: Bool {
@@ -63,10 +83,22 @@ final class EmailThread {
     }
 
     var unreadCount: Int {
-        messages.filter { !$0.isRead }.count
+        unreadCount(in: messages)
     }
 
     var participantSummary: String {
+        participantSummary(for: messages)
+    }
+
+    private func hasFlaggedMessage(in messages: [Email]) -> Bool {
+        messages.contains { $0.isFlagged }
+    }
+
+    private func unreadCount(in messages: [Email]) -> Int {
+        messages.filter { !$0.isRead }.count
+    }
+
+    private func participantSummary(for messages: [Email]) -> String {
         let addresses = messages.flatMap { [$0.fromAddress] + $0.toAddresses }
         let unique = Array(NSOrderedSet(array: addresses)).compactMap { $0 as? String }
         return unique.prefix(3).joined(separator: ", ")

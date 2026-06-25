@@ -1,12 +1,11 @@
 # SwiftClaw Email Feature — Plan & Status
 
-The email feature is **code-complete** and green on `swift build`, `swift test`
-(104 tests, 19 suites), and `xcodebuild -scheme SwiftClaw -destination
-'platform=macOS' build`. What remains is live end-to-end verification against a
-real account and a short list of explicitly-deferred scope items (§ Next work).
+The email feature is **code-complete**. The remaining active work is live
+end-to-end verification against a real account; everything else below is either
+the shipped shape or explicitly deferred scope.
 
-This doc is the design reference: locked decisions, conventions to follow, what
-ships today, and what's deferred. Implementation history lives in git.
+Current local verification: `swift test` and
+`xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build` pass.
 
 ## Locked decisions
 
@@ -52,6 +51,9 @@ ships today, and what's deferred. Implementation history lives in git.
   `resolveThreads()`, note authoring, review selection, sent-message ingest,
   server-side deletion + flag reconciliation (`fetchMailboxUIDSet` cheap scan).
 - Incremental high-water-UID fetch with UIDVALIDITY-change full re-fetch.
+- First-sync body fetch is capped to the newest 500 messages per mailbox; the
+  high-water mark still advances to the newest fetched UID so later syncs stay
+  incremental.
 - Multi-mailbox sync (INBOX + resolved Sent/Trash); synthetic Sent rows and
   moved-to-Trash rows reconcile to real server UIDs by Message-ID.
 - `MailSyncScheduler` (foreground loop + macOS background activity) +
@@ -60,6 +62,11 @@ ships today, and what's deferred. Implementation history lives in git.
 **Review pipeline**
 - `EmailReviewService` (own interval, batch-capped at 40 threads/pass, stamps
   `lastReviewedAt` only after a successful inference pass) + `EmailReviewNotifyTool`.
+- Review selection includes opened/read mail as long as it is not archived or
+  deleted. Mixed threads only send active messages to the model.
+- Review prompts include date context; review-card rows show subject, sender,
+  date, summary, and action. The summary chat message does not append a
+  separate date list.
 - `ReviewCardPayload` rendering via `ReviewCardRendererRegistry` +
   `EmailReviewCardRenderer`; `EmailReviewActionDispatcher` routes actions
   through the repo + per-account `MailClient`. Acted-upon items drop off the
@@ -69,9 +76,17 @@ ships today, and what's deferred. Implementation history lives in git.
 - `EmailView`: mailbox sidebar (Inbox/Flagged/Archive/Trash, dead mailboxes
   hidden when empty) + thread list + detail. Mark-read on view, two-click
   archive/delete, Delete-Permanently in Trash, reply composer with quoting,
-  note editor, attachment list with QuickLook, WKWebView HTML rendering.
+  note editor, attachment list with QuickLook, WKWebView HTML rendering
+  preferred when an HTML body is present, with plain text as fallback.
+- Email thread/detail rows use plain text, not Markdown, for email bodies.
+  Unread rows get a soft tint, noted rows show a notepad popover, and both the
+  thread list and thread messages use soft dividers between items.
+- HTML email bodies expand to their content height; the embedded WKWebView and
+  document scrollbars stay disabled, and scroll gestures over the body pass up
+  to the outer thread view.
 - Sync Now / Review Now toolbar buttons (with spinner + disabled state),
-  dock badge, optional auto-navigate to the review chat.
+  dock badge, in-app Chats navigation dot for new review chats, optional
+  auto-navigate to the review chat.
 - Review-card row tap → navigates to the email; action-badge tap → confirm →
   dispatch.
 - `EmailSettingsView`: account list + add/edit sheet with Test Connection.
@@ -94,14 +109,6 @@ ships today, and what's deferred. Implementation history lives in git.
    - A review pass produces a review chat; acting on a card item removes it and
      dispatches to the right server call.
 
-   **Next code step once live testing surfaces nothing blocking: cap the
-   first-sync fetch** (see deferred item below). It's promoted from "defer until
-   observed" to the top of the queue because live testing now runs against a
-   real mailbox, where an unbounded full-body + attachment pull on first sync is
-   the single most likely thing to actually hurt (slow/janky first sync, disk
-   churn). Fetch most-recent-N (or a date window) on the first pass, then let
-   the incremental high-water path take over.
-
 2. **Explicitly deferred (out-of-scope, not active work):**
    - **Phase 0.5 / iOS target** — `.iOS(...)` in `Package.swift`, `#if os(iOS)`
      audit, `BGTaskSchedulerPermittedIdentifiers` in Info.plist, and a
@@ -111,9 +118,6 @@ ships today, and what's deferred. Implementation history lives in git.
    - **Per-op connection reuse** — each archive/delete/flag/send op does a fresh
      connect→login→op→disconnect. SwiftMail's per-op lifetime is fine for the
      MVP poll cadence; revisit if a provider rate-limits.
-   - **First-sync fetch is unbounded** (full body + attachments for every INBOX
-     message). If a large mailbox makes first sync slow during live testing,
-     cap the initial fetch — but defer until that's actually observed.
    - **Archive mailbox sync** — archive actions move server mail to the
      provider's Archive/All Mail folder and hide the row locally. Pulling the
      Archive mailbox as a first-class synced mailbox is deferred.

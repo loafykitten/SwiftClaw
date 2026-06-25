@@ -165,13 +165,13 @@ final class EmailWorkflowManager {
             forKey: SettingsKeys.emailAutoNavigateToReviewChat
         ) as? Bool ?? SettingsStorage.defaultEmailAutoNavigateToReviewChat
 
-        if autoNavigate {
-            NotificationCenter.default.post(
-                name: .emailReviewChatCreated,
-                object: nil,
-                userInfo: ["chatID": chatID]
-            )
-        } else {
+        NotificationCenter.default.post(
+            name: .emailReviewChatCreated,
+            object: nil,
+            userInfo: ["chatID": chatID, "autoNavigate": autoNavigate]
+        )
+
+        if !autoNavigate {
             dockBadge()
         }
     }

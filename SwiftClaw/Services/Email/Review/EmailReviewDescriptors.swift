@@ -5,6 +5,7 @@ import Foundation
 struct EmailReviewThreadDescriptor: Codable, Sendable {
     let threadID: UUID
     let subject: String
+    let latestMessageDate: String
     let participantSummary: String
     let snippet: String
     let unreadCount: Int
@@ -16,6 +17,7 @@ struct EmailReviewMessageDescriptor: Codable, Sendable {
     let messageID: UUID
     let subject: String
     let fromAddress: String
+    let date: String
     let snippet: String
     let isRead: Bool
     let isFlagged: Bool
@@ -36,5 +38,14 @@ struct EmailReviewAction: Codable, Sendable {
         case emailGUID = "email_guid"
         case actionToken = "action"
         case summary
+    }
+}
+
+enum EmailReviewDateFormatter {
+    static func string(from date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
     }
 }

@@ -7,6 +7,7 @@ struct AccentSidebarList<Item: Identifiable & Hashable>: View {
     var topContentInset: CGFloat = 0
     let title: (Item) -> String
     let systemImage: (Item) -> String
+    var showsBadge: (Item) -> Bool = { _ in false }
 
     var body: some View {
         List {
@@ -15,7 +16,8 @@ struct AccentSidebarList<Item: Identifiable & Hashable>: View {
                     title: title(item),
                     systemImage: systemImage(item),
                     accent: accent,
-                    isSelected: selection == item
+                    isSelected: selection == item,
+                    showsBadge: showsBadge(item)
                 ) {
                     selection = item
                 }
@@ -33,6 +35,7 @@ private struct AccentSidebarRow: View {
     let systemImage: String
     let accent: Color
     let isSelected: Bool
+    let showsBadge: Bool
     let action: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -52,6 +55,13 @@ private struct AccentSidebarRow: View {
                     .foregroundStyle(.primary)
 
                 Spacer(minLength: 0)
+
+                if showsBadge {
+                    Circle()
+                        .fill(accent)
+                        .frame(width: 7, height: 7)
+                        .accessibilityLabel("New item")
+                }
             }
             .frame(minHeight: 28)
             .padding(.horizontal, 8)

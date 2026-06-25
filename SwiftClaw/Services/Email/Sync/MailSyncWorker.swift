@@ -26,6 +26,8 @@ import os
 /// mailbox is fetched in full. After the fetch, `syncStateUpdater` records
 /// the new high-water for next time.
 actor MailSyncWorker {
+    static let firstSyncMaxMessages = 500
+
     private static let logger = Logger(
         subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
         category: "mail.sync"
@@ -169,7 +171,12 @@ actor MailSyncWorker {
         let didHavePriorState = (stored?.uidValidity ?? 0) > 0
         let sinceUID: UInt32? = didHavePriorState ? stored?.lastSeenUID : nil
 
-        var result = try await client.fetchMailbox(name: mailbox, sinceUID: sinceUID)
+        let firstSyncLimit = didHavePriorState ? nil : Self.firstSyncMaxMessages
+        var result = try await client.fetchMailbox(
+            name: mailbox,
+            sinceUID: sinceUID,
+            maxMessages: firstSyncLimit
+        )
 
         // UIDVALIDITY safety: when a server rebuilds a folder every UID is
         // reassigned, so the old `(accountID, uid, mailbox)` dedup key no

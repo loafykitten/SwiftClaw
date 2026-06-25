@@ -154,7 +154,8 @@ final class EmailReviewService {
               "actionLabel": "Review" | "Flag" | "Reply" | "Delete",
               "summary": "<one-line reason>",
               "subject": "<optional>",
-              "sender": "<optional>"
+              "sender": "<optional>",
+              "date": "<optional>"
             }
           ]
         }
@@ -178,6 +179,8 @@ final class EmailReviewService {
         unanswered question), `flag` for items to follow up on, `reply` when the user clearly owes a response, \
         and `delete` only for obvious spam/newsletters. Default to "review" when unsure. (Note: `archive` is \
         intentionally NOT offered to the model — the user can still choose it from a review card's context menu.)
+        Include the email date in an item's `summary` when timing matters, but do not add a separate Dates \
+        section or date list to the user-facing message.
 
         ReviewCardPayload schema (for your context only):
         \(schema)
@@ -201,11 +204,14 @@ final class EmailReviewService {
     }
 
     private static func descriptor(for thread: EmailThread) -> EmailReviewThreadDescriptor {
-        let messages = thread.sortedMessages.map { message in
+        let reviewableMessages = thread.reviewableMessages
+        let latest = thread.latestReviewableMessage
+        let messages = reviewableMessages.map { message in
             EmailReviewMessageDescriptor(
                 messageID: message.id,
                 subject: message.subject,
                 fromAddress: message.fromAddress,
+                date: EmailReviewDateFormatter.string(from: message.date),
                 snippet: message.snippet,
                 isRead: message.isRead,
                 isFlagged: message.isFlagged,
@@ -214,11 +220,12 @@ final class EmailReviewService {
         }
         return EmailReviewThreadDescriptor(
             threadID: thread.id,
-            subject: thread.latestMessage?.subject ?? "",
-            participantSummary: thread.participantSummary,
-            snippet: thread.latestMessage?.snippet ?? "",
-            unreadCount: thread.unreadCount,
-            isFlagged: thread.isFlagged,
+            subject: latest?.subject ?? "",
+            latestMessageDate: latest.map { EmailReviewDateFormatter.string(from: $0.date) } ?? "",
+            participantSummary: thread.reviewParticipantSummary,
+            snippet: latest?.snippet ?? "",
+            unreadCount: thread.reviewUnreadCount,
+            isFlagged: thread.isReviewFlagged,
             messages: messages
         )
     }

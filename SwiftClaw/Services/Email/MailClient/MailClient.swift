@@ -160,13 +160,15 @@ protocol MailClient: Sendable {
     /// Throws `MailClientError` on any failure.
     func testConnection() async throws
 
-    /// Fetch all messages from the named mailbox since (and including) the
-    /// given UID. `sinceUID == nil` or `0` fetches the whole mailbox. Returns
-    /// the messages plus the mailbox's UIDVALIDITY and the highest UID seen.
+    /// Fetch messages from the named mailbox since the given UID.
+    /// `sinceUID == nil` or `0` fetches from the start of the mailbox.
+    /// `maxMessages` caps the returned body fetch to the newest messages in
+    /// that range. Returns the messages plus the mailbox's UIDVALIDITY and
+    /// the highest UID seen in the returned batch.
     /// Incremental callers should pass the previously-recorded `lastSeenUID`
     /// so the server only returns new mail; if the UIDVALIDITY has changed
     /// since the last sync the caller should reset to `nil` and re-fetch all.
-    func fetchMailbox(name: String, sinceUID: UInt32?) async throws -> MailboxFetchResult
+    func fetchMailbox(name: String, sinceUID: UInt32?, maxMessages: Int?) async throws -> MailboxFetchResult
 
     /// Cheap UID + flags scan of a mailbox's *current* membership, with no
     /// body fetch. Used by `MailSyncWorker` to reconcile server-side
@@ -214,6 +216,12 @@ protocol MailClient: Sendable {
     /// paths so the right server-side folder is targeted per provider.
     /// Throws on connection failure; callers swallow + fall back to defaults.
     func resolveSpecialUseMailboxes() async throws
+}
+
+extension MailClient {
+    func fetchMailbox(name: String, sinceUID: UInt32?) async throws -> MailboxFetchResult {
+        try await fetchMailbox(name: name, sinceUID: sinceUID, maxMessages: nil)
+    }
 }
 
 enum MailClientError: LocalizedError {

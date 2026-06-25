@@ -10,6 +10,7 @@ struct EmailReviewPromptTests {
         let thread = EmailReviewThreadDescriptor(
             threadID: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
             subject: "Q3 planning",
+            latestMessageDate: "Jun 24, 2026 at 10:00 PM",
             participantSummary: "boss@example.com, me@example.com",
             snippet: "Let's sync on the roadmap.",
             unreadCount: 2,
@@ -19,6 +20,7 @@ struct EmailReviewPromptTests {
                     messageID: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
                     subject: "Q3 planning",
                     fromAddress: "boss@example.com",
+                    date: "Jun 24, 2026 at 10:00 PM",
                     snippet: "Let's sync on the roadmap.",
                     isRead: false,
                     isFlagged: true,
@@ -37,6 +39,7 @@ struct EmailReviewPromptTests {
         // Keys the system/user prompt rely on being present in the JSON.
         #expect(json.contains("\"threadID\""))
         #expect(json.contains("\"subject\""))
+        #expect(json.contains("\"latestMessageDate\""))
         #expect(json.contains("\"participantSummary\""))
         #expect(json.contains("\"snippet\""))
         #expect(json.contains("\"unreadCount\""))
@@ -44,6 +47,7 @@ struct EmailReviewPromptTests {
         #expect(json.contains("\"messages\""))
         #expect(json.contains("\"messageID\""))
         #expect(json.contains("\"fromAddress\""))
+        #expect(json.contains("\"date\""))
         #expect(json.contains("\"isRead\""))
         #expect(json.contains("\"notes\""))
         #expect(json.contains("\"author\""))
@@ -54,6 +58,7 @@ struct EmailReviewPromptTests {
         let thread = EmailReviewThreadDescriptor(
             threadID: UUID(),
             subject: "Sprint review",
+            latestMessageDate: "Jun 24, 2026 at 10:00 PM",
             participantSummary: "team@example.com",
             snippet: "Notes attached.",
             unreadCount: 0,
@@ -63,6 +68,7 @@ struct EmailReviewPromptTests {
                     messageID: UUID(),
                     subject: "Sprint review",
                     fromAddress: "team@example.com",
+                    date: "Jun 24, 2026 at 10:00 PM",
                     snippet: "Notes attached.",
                     isRead: true,
                     isFlagged: false,

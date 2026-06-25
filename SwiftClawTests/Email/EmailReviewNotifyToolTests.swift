@@ -78,11 +78,13 @@ struct EmailReviewNotifyToolTests {
         // renders the literal placeholder "Email".
         #expect(card.items[0].subject == "Needs a reply")
         #expect(card.items[0].sender == "boss@example.com")
+        #expect(card.items[0].date?.isEmpty == false)
 
         // (2) The summary text message comes second.
         let summaryMessage = messages[1]
         #expect(summaryMessage.sortIndex == 1)
         #expect(summaryMessage.content == "Two items need attention.")
+        #expect(!summaryMessage.content.contains("Dates:"))
         #expect(summaryMessage.reviewCard == nil)
     }
 

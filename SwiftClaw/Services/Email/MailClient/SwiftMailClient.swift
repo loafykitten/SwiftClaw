@@ -95,7 +95,11 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
         }
     }
 
-    func fetchMailbox(name: String, sinceUID: UInt32? = nil) async throws -> MailboxFetchResult {
+    func fetchMailbox(
+        name: String,
+        sinceUID: UInt32? = nil,
+        maxMessages: Int? = nil
+    ) async throws -> MailboxFetchResult {
         guard isConfigured else { throw MailClientError.notConfigured }
 
         let server = makeIMAPServer()
@@ -126,10 +130,22 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
                 )
             }
 
+            let infosToFetch: [MessageInfo]
+            if let maxMessages, maxMessages > 0, infos.count > maxMessages {
+                infosToFetch = Array(
+                    infos
+                        .filter { $0.uid != nil }
+                        .sorted { ($0.uid?.value ?? 0) < ($1.uid?.value ?? 0) }
+                        .suffix(maxMessages)
+                )
+            } else {
+                infosToFetch = infos
+            }
+
             var fetched: [FetchedMessage] = []
-            fetched.reserveCapacity(infos.count)
+            fetched.reserveCapacity(infosToFetch.count)
             var maxUID: UInt32 = (sinceUID ?? 0)
-            for info in infos {
+            for info in infosToFetch {
                 guard let uid = info.uid else { continue }
                 let message = try await server.fetchMessage(from: info)
                 fetched.append(Self.normalize(message, uid: uid, mailbox: name))

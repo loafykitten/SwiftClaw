@@ -118,8 +118,12 @@ struct EmailReviewCardRenderer: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(3)
             }
-            if let sender = item.sender, !sender.isEmpty {
-                Text(sender)
+            let metadata = [item.sender, item.date]
+                .compactMap { $0 }
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+            if !metadata.isEmpty {
+                Text(metadata)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }

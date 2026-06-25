@@ -373,13 +373,17 @@ private struct EmailThreadListView: View {
                 )
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 4) {
-                        ForEach(threads) { thread in
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(threads.enumerated()), id: \.element.id) { index, thread in
                             EmailThreadRow(
                                 thread: thread,
                                 isSelected: thread.id == selectedThreadID,
                                 select: { selectedThreadID = thread.id }
                             )
+                            if index < threads.count - 1 {
+                                EmailItemSeparator()
+                                    .padding(.vertical, 2)
+                            }
                         }
                     }
                     .padding(.horizontal, 8)
@@ -396,54 +400,119 @@ private struct EmailThreadRow: View {
     let isSelected: Bool
     let select: () -> Void
 
+    @State private var showingNotes = false
+
+    private var hasNotes: Bool {
+        thread.messages.contains { !$0.notes.isEmpty }
+    }
+
     var body: some View {
-        Button(action: select) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if thread.isFlagged {
-                        Image(systemName: "flag.fill")
-                            .foregroundStyle(.yellow)
-                            .font(.caption)
-                    }
-                    Text(thread.latestMessage?.fromAddress ?? "Unknown")
-                        .font(.subheadline)
-                        .fontWeight(thread.unreadCount > 0 ? .semibold : .regular)
-                        .lineLimit(1)
-                    Spacer()
-                    Text(thread.lastDate.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if thread.isFlagged {
+                    Image(systemName: "flag.fill")
+                        .foregroundStyle(.yellow)
+                        .font(.caption)
                 }
-                Text(thread.latestMessage?.subject ?? "(no subject)")
-                    .font(.callout)
+                Text(thread.latestMessage?.fromAddress ?? "Unknown")
+                    .font(.subheadline)
                     .fontWeight(thread.unreadCount > 0 ? .semibold : .regular)
                     .lineLimit(1)
-                Text(thread.latestMessage?.snippet ?? "")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                if thread.unreadCount > 0 {
-                    Text("\(thread.unreadCount) unread")
-                        .font(.caption2)
-                        .foregroundStyle(.tint)
+                Spacer()
+                Text(thread.lastDate.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                if hasNotes {
+                    Button {
+                        showingNotes.toggle()
+                    } label: {
+                        Image(systemName: "note.text")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Show notes")
+                    .popover(isPresented: $showingNotes) {
+                        EmailNotesPopover(emails: thread.sortedMessages)
+                    }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
-            .background {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.accentColor.opacity(0.18))
-                }
+            Text(thread.latestMessage?.subject ?? "(no subject)")
+                .font(.callout)
+                .fontWeight(thread.unreadCount > 0 ? .semibold : .regular)
+                .lineLimit(1)
+            Text(thread.latestMessage?.snippet ?? "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            if thread.unreadCount > 0 {
+                Text("\(thread.unreadCount) unread")
+                    .font(.caption2)
+                    .foregroundStyle(.tint)
             }
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .background {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(rowBackground)
+        }
+        .onTapGesture(perform: select)
+    }
+
+    private var rowBackground: Color {
+        if isSelected { return Color.accentColor.opacity(0.18) }
+        if thread.unreadCount > 0 { return Color.accentColor.opacity(0.07) }
+        return .clear
     }
 }
 
-    private struct EmailThreadDetailView: View {
+private struct EmailNotesPopover: View {
+    let emails: [Email]
+
+    private var noteGroups: [EmailNoteGroup] {
+        emails.compactMap { email in
+            let notes = email.notes.sorted { $0.createdAt < $1.createdAt }
+            return notes.isEmpty ? nil : EmailNoteGroup(email: email, notes: notes)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Notes")
+                .font(.headline)
+            ForEach(noteGroups) { item in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.email.subject.isEmpty ? "(no subject)" : item.email.subject)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    ForEach(item.notes) { note in
+                        Text(note.content)
+                            .font(.caption)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(8)
+                            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 280)
+    }
+}
+
+private struct EmailNoteGroup: Identifiable {
+    let email: Email
+    let notes: [EmailNote]
+
+    var id: UUID { email.id }
+}
+
+private struct EmailThreadDetailView: View {
     let thread: EmailThread
     let onReply: (Email) -> Void
 
@@ -485,8 +554,9 @@ private struct EmailThreadRow: View {
             Divider()
 
             ScrollView {
-                LazyVStack(spacing: 16) {
-                    ForEach(thread.sortedMessages) { email in
+                LazyVStack(spacing: 12) {
+                    let messages = thread.sortedMessages
+                    ForEach(Array(messages.enumerated()), id: \.element.id) { index, email in
                         EmailMessageCard(
                             email: email,
                             onMarkRead: { markAsReadIfNeeded(email) },
@@ -497,6 +567,9 @@ private struct EmailThreadRow: View {
                             onToggleFlag: { toggleFlag(email) },
                             onAddNote: { composingNoteFor = email }
                         )
+                        if index < messages.count - 1 {
+                            EmailItemSeparator()
+                        }
                     }
                 }
                 .padding(20)
@@ -651,6 +724,15 @@ private struct EmailThreadRow: View {
     }
 }
 
+private struct EmailItemSeparator: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.16))
+            .frame(height: 1)
+            .padding(.horizontal, 8)
+    }
+}
+
 private struct EmailMessageCard: View {
     let email: Email
     let onMarkRead: () -> Void
@@ -660,6 +742,7 @@ private struct EmailMessageCard: View {
     let onPermanentDelete: () -> Void
     let onToggleFlag: () -> Void
     let onAddNote: () -> Void
+    @State private var showingNotes = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -673,6 +756,19 @@ private struct EmailMessageCard: View {
                         .foregroundStyle(.tertiary)
                 }
                 Spacer()
+                if !email.notes.isEmpty {
+                    Button {
+                        showingNotes.toggle()
+                    } label: {
+                        Image(systemName: "note.text")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Show notes")
+                    .popover(isPresented: $showingNotes) {
+                        EmailNotesPopover(emails: [email])
+                    }
+                }
                 Button {
                     onToggleFlag()
                 } label: {
@@ -683,37 +779,14 @@ private struct EmailMessageCard: View {
                 .help(email.isFlagged ? "Unflag" : "Flag")
             }
 
-            if !email.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ChatMarkdownView(
-                    content: email.bodyText,
-                    defaultForeground: .primary,
-                    codeAccent: .accentColor,
-                    quoteAccent: .secondary,
-                    linkAccent: .accentColor
-                )
-                .textSelection(.enabled)
-            } else if let html = email.bodyHTML, !html.isEmpty {
-                EmailHTMLView(html: html)
-            }
-
-            if !email.notes.isEmpty {
-                Divider()
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Notes")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(email.notes) { note in
-                        Text(note.content)
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.secondary.opacity(0.10))
-                            }
-                    }
-                }
+            if let html = email.bodyHTML,
+               !html.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                EmailHTMLBodyView(html: html)
+            } else if !email.bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(email.bodyText)
+                    .font(.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
             }
 
             if !email.attachments.isEmpty {
@@ -764,7 +837,7 @@ private struct EmailMessageCard: View {
         .padding(14)
         .background {
             RoundedRectangle(cornerRadius: 10)
-                .fill(Color.secondary.opacity(0.08))
+                .fill(email.isRead ? Color.secondary.opacity(0.08) : Color.accentColor.opacity(0.08))
         }
         .onAppear { onMarkRead() }
     }
@@ -1081,22 +1154,55 @@ private enum AttachmentFormatter {
 
 #if os(macOS)
 /// Renders HTML email bodies via WKWebView. Used when the server provides
-/// only an HTML part (no plain-text alternative). Links open in the default
-/// browser. Height auto-fits content.
-struct EmailHTMLView: NSViewRepresentable {
+/// an HTML part. Links open in the default browser.
+private struct EmailHTMLBodyView: View {
     let html: String
+    @State private var contentHeight: CGFloat = 160
+
+    var body: some View {
+        EmailHTMLView(html: html, contentHeight: $contentHeight)
+            .frame(height: max(contentHeight, 120))
+    }
+}
+
+private struct EmailHTMLView: NSViewRepresentable {
+    let html: String
+    @Binding var contentHeight: CGFloat
 
     func makeNSView(context: Context) -> WKWebView {
-        let webView = WKWebView()
+        let webView = EmailScrollPassthroughWebView()
         webView.navigationDelegate = context.coordinator
+        webView.setValue(false, forKey: "drawsBackground")
+        disableScrolling(in: webView)
+        loadHTML(in: webView, coordinator: context.coordinator)
+        return webView
+    }
+
+    func updateNSView(_ webView: WKWebView, context: Context) {
+        disableScrolling(in: webView)
+        context.coordinator.contentHeight = $contentHeight
+        if context.coordinator.currentHTML != html {
+            loadHTML(in: webView, coordinator: context.coordinator)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(contentHeight: $contentHeight)
+    }
+
+    private func loadHTML(in webView: WKWebView, coordinator: Coordinator) {
+        coordinator.currentHTML = html
         let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let bg = isDark ? "#1e1e1e" : "#ffffff"
         let fg = isDark ? "#e0e0e0" : "#1a1a1a"
         let wrapped = """
         <html><head><meta charset="utf-8">
         <style>
+            html, body { overflow: hidden !important; height: auto !important; }
             body { background: \(bg); color: \(fg); font-family: -apple-system, sans-serif; \
-            font-size: 14px; line-height: 1.5; padding: 8px; word-wrap: break-word; }
+            font-size: 14px; line-height: 1.5; margin: 0; padding: 8px; word-wrap: break-word; }
+            * { max-width: 100% !important; max-height: none !important; overflow: visible !important; }
+            ::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none !important; }
             a { color: -webkit-link; }
             img { max-width: 100%; height: auto; }
             table { max-width: 100%; }
@@ -1105,14 +1211,29 @@ struct EmailHTMLView: NSViewRepresentable {
         </head><body>\(html)</body></html>
         """
         webView.loadHTMLString(wrapped, baseURL: nil)
-        return webView
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {}
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    private func disableScrolling(in view: NSView) {
+        if let scrollView = view as? NSScrollView {
+            scrollView.hasVerticalScroller = false
+            scrollView.hasHorizontalScroller = false
+            scrollView.autohidesScrollers = true
+            scrollView.verticalScrollElasticity = .none
+            scrollView.horizontalScrollElasticity = .none
+        }
+        for subview in view.subviews {
+            disableScrolling(in: subview)
+        }
+    }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
+        var contentHeight: Binding<CGFloat>
+        var currentHTML: String?
+
+        init(contentHeight: Binding<CGFloat>) {
+            self.contentHeight = contentHeight
+        }
+
         func webView(_ webView: WKWebView,
                       decidePolicyFor navigationAction: WKNavigationAction,
                       decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
@@ -1124,6 +1245,51 @@ struct EmailHTMLView: NSViewRepresentable {
             }
             decisionHandler(.allow)
         }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            updateContentHeight(for: webView)
+        }
+
+        private func updateContentHeight(for webView: WKWebView) {
+            webView.evaluateJavaScript(
+                """
+                (() => {
+                    const nodes = [document.documentElement, document.body, ...document.body.querySelectorAll('*')];
+                    return Math.ceil(nodes.reduce((height, node) => {
+                        const rect = node.getBoundingClientRect();
+                        return Math.max(height, rect.bottom, node.scrollHeight || 0, node.offsetHeight || 0);
+                    }, 0));
+                })()
+                """
+            ) { [weak self] value, _ in
+                guard let self else { return }
+                let measured = (value as? NSNumber)?.doubleValue ?? 0
+                Task { @MainActor in
+                    self.contentHeight.wrappedValue = max(CGFloat(measured), 120)
+                }
+            }
+        }
+    }
+}
+
+private final class EmailScrollPassthroughWebView: WKWebView {
+    override func scrollWheel(with event: NSEvent) {
+        if let parentScrollView {
+            parentScrollView.scrollWheel(with: event)
+        } else {
+            super.scrollWheel(with: event)
+        }
+    }
+
+    private var parentScrollView: NSScrollView? {
+        var current = superview
+        while let view = current {
+            if let scrollView = view as? NSScrollView {
+                return scrollView
+            }
+            current = view.superview
+        }
+        return nil
     }
 }
 #endif

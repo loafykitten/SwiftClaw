@@ -48,6 +48,7 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var selectedNavigationItem: NavigationItem? = .home
     @State private var selectedChatID: UUID?
+    @State private var unreadChatID: UUID?
     @State private var pendingEmailViewID: UUID?
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
     @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
@@ -76,7 +77,8 @@ struct ContentView: View {
                 selection: $selectedNavigationItem,
                 accent: accent,
                 title: { $0.rawValue },
-                systemImage: { $0.systemImage }
+                systemImage: { $0.systemImage },
+                showsBadge: { $0 == .chats && unreadChatID != nil }
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
@@ -100,21 +102,19 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .emailReviewChatCreated)) { note in
             if let chatID = note.userInfo?["chatID"] as? UUID {
-                selectedChatID = chatID
-                selectedNavigationItem = .chats
-                // Auto-navigate is the badge-irrelevant path (no badge was
-                // set when auto-navigate is on); `.emailReviewChatOpened`
-                // below is posted by the `selectedNavigationItem` change.
+                unreadChatID = chatID
+                if note.userInfo?["autoNavigate"] as? Bool == true {
+                    selectedChatID = chatID
+                    selectedNavigationItem = .chats
+                    clearUnreadChatIfOpened()
+                }
             }
         }
         .onChange(of: selectedNavigationItem) { _, item in
-            // The badge-clear fires whenever the user lands on Chats — covers
-            // both the auto-navigate path above and the default config where
-            // a badge was set but no auto-open happened (otherwise the badge
-            // lingers until email is disabled / app quits).
-            if item == .chats {
-                NotificationCenter.default.post(name: .emailReviewChatOpened, object: nil)
-            }
+            if item == .chats { clearUnreadChatIfOpened() }
+        }
+        .onChange(of: selectedChatID) { _, _ in
+            clearUnreadChatIfOpened()
         }
         .onReceive(NotificationCenter.default.publisher(for: .emailReviewViewEmail)) { note in
             if let emailID = note.userInfo?["emailID"] as? UUID {
@@ -122,6 +122,14 @@ struct ContentView: View {
                 selectedNavigationItem = .email
             }
         }
+    }
+
+    private func clearUnreadChatIfOpened() {
+        guard selectedNavigationItem == .chats,
+              let unreadChatID,
+              selectedChatID == unreadChatID else { return }
+        self.unreadChatID = nil
+        NotificationCenter.default.post(name: .emailReviewChatOpened, object: nil)
     }
 
     @MainActor @ViewBuilder

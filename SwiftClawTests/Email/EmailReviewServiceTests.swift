@@ -231,6 +231,59 @@ struct EmailReviewServiceTests {
     }
 
     @Test
+    func reviewPromptOmitsArchivedMessagesFromMixedThread() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let accountID = UUID()
+        let active = Self.message(
+            uid: 1,
+            messageID: "<active-mixed@example.com>",
+            subject: "Shared thread",
+            date: Date().addingTimeInterval(-120),
+            fromAddress: "active@example.com",
+            bodyText: "Active body still needs attention"
+        )
+        let archived = Self.message(
+            uid: 2,
+            messageID: "<archived-mixed@example.com>",
+            subject: "Shared thread",
+            date: Date().addingTimeInterval(-60),
+            fromAddress: "archived@example.com",
+            bodyText: "Archived body should stay out"
+        )
+
+        repository.upsertMessages([active, archived], mailbox: "INBOX", accountID: accountID)
+        repository.resolveThreads()
+
+        let archivedEmail = try #require(
+            try context.fetch(FetchDescriptor<Email>()).first { $0.uid == 2 }
+        )
+        repository.archive(messageID: archivedEmail.id)
+
+        #expect(repository.fetchNonArchivedThreadsForReview().count == 1)
+
+        UserDefaults.standard.set("test-claw-model", forKey: SettingsKeys.clawModel)
+        defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
+
+        let service = EmailReviewService(modelContainer: container)
+        let capture = PromptCapture()
+        service.completeProvider = { messages, _, _, _ in
+            await capture.record(messages: messages)
+            return ""
+        }
+
+        let didRun = await service.runOnce()
+        #expect(didRun == true)
+
+        let prompt = try #require(await capture.userPrompt)
+        #expect(prompt.contains("active@example.com"))
+        #expect(prompt.contains("Active body still needs attention"))
+        #expect(!prompt.contains("archived@example.com"))
+        #expect(!prompt.contains("Archived body should stay out"))
+    }
+
+    @Test
     func runOnceSkipsWhenModelNotConfiguredWithoutStamping() async throws {
         // The model-not-configured guard must also short-circuit BEFORE
         // stamping — otherwise disabling the model after seeding threads
@@ -294,23 +347,26 @@ struct EmailReviewServiceTests {
         uid: Int,
         messageID: String,
         subject: String,
-        date: Date
+        date: Date,
+        fromAddress: String = "sender@example.com",
+        bodyText: String = "Body",
+        isRead: Bool = false
     ) -> FetchedMessage {
         FetchedMessage(
             uid: uid,
             messageID: messageID,
             subject: subject,
-            fromAddress: "sender@example.com",
+            fromAddress: fromAddress,
             toAddresses: ["me@example.com"],
             ccAddresses: [],
             bccAddresses: [],
             date: date,
             internalDate: date,
-            bodyText: "Body",
+            bodyText: bodyText,
             bodyHTML: nil,
             inReplyTo: nil,
             references: [],
-            isRead: false,
+            isRead: isRead,
             isFlagged: false,
             mailbox: "INBOX",
             attachmentDescriptors: []
