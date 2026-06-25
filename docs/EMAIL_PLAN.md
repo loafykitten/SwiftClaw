@@ -142,12 +142,17 @@ Current local verification: `swift test` and
      Investigation steering hint. Cap the body excerpt for token cost.
    - **Per-completion email tools** injected for review chats (mirroring how
      `EmailReviewService` injects `EmailReviewNotifyTool` via a one-off
-     registry), constructed with the `modelContext`. Start with
-     `add_email_note(email_guid, note)`; extensible to flag/reply/delete by
-     reusing `EmailReviewActionDispatcher`.
-   - Open scope decisions: which actions beyond `add_email_note` to expose, and
-     how much body to include. Pairs with the deferred email-memory hook (feed
-     standing notes into context so the assistant knows sender-level prefs).
+     registry), constructed with the `modelContext`. Scope for v1 (decided):
+     `add_email_note(email_guid, note)` — author `.ai` via
+     `EmailRepository.addNote` — and `set_email_flag(email_guid, flagged)` via
+     `EmailRepository.setFlag`. Both key off the card's `ReviewItem.itemID`
+     (the email GUID). reply/delete are deferred until the note+flag loop has
+     been used; when added they reuse `EmailReviewActionDispatcher`.
+   - **Body excerpt: capped (decided)** — ~500 chars of `bodyText` per email in
+     the injected context, enough to discuss without blowing up tokens on large
+     cards.
+   - Pairs with the deferred email-memory hook (feed standing notes into context
+     so the assistant knows sender-level prefs).
 
 3. **Explicitly deferred (out-of-scope, not active work):**
    - **Phase 0.5 / iOS target** — `.iOS(...)` in `Package.swift`, `#if os(iOS)`
