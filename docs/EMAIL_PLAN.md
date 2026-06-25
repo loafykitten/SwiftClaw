@@ -32,9 +32,11 @@ Current local verification: `swift test` and
   let shared` (UI-facing: `MailSyncMonitor`, `EmailAccountStore`) or `actor`
   (rate gates). SwiftData mutations stay MainActor-isolated.
 - **Errors**: `LocalizedError` enums with `errorDescription` (`MailClientError`).
-- **Logging**: `os.Logger`, `category: "mail.*"`. Error payloads and account
-  identity use default privacy (can echo hostnames/usernames); non-sensitive
-  values (mailbox names, counts) stay `.public`.
+- **Logging**: `AppLog.make("mail.*")` (in `Shared/AppLog.swift`) — wraps
+  `os.Logger` so Console.app / `log show` are unchanged, and in DEBUG also
+  mirrors a clean `HH:mm:ss.SSS  level  category  message` line to stdout.
+  Call sites keep the `logger.info("… \(x, privacy: .public) …")` form; the
+  rendered message is logged `.public`, so values are never `<private>`.
 - **Sendable**: Swift 6 strict concurrency — annotate all new domain types.
 - **Cross-platform**: `#if os(macOS)` guards throughout; Email code is written
   iOS-clean even though only macOS builds today.

@@ -158,10 +158,7 @@ struct HomeView: View {
 }
 
 private enum HomeBlurb {
-    static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "HomeBlurb"
-    )
+    static let logger = AppLog.make("HomeBlurb")
 
     static let previewFallback = "There's no place like 127.0.0.1"
 

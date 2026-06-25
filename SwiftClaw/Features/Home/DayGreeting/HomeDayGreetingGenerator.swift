@@ -2,10 +2,7 @@ import Foundation
 import os
 
 enum HomeDayGreetingGenerator {
-    static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "HomeDayGreeting"
-    )
+    static let logger = AppLog.make("HomeDayGreeting")
 
     static let initial = " "
 

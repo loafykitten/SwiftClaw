@@ -11,10 +11,7 @@ import os
 /// threading, and review selection.
 @MainActor
 final class EmailRepository {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "mail.repository"
-    )
+    private static let logger = AppLog.make("mail.repository")
 
     private let modelContext: ModelContext
 

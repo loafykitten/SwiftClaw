@@ -17,10 +17,7 @@ import SwiftMail
 /// `smtpPasswordOverride` to short-circuit the Keychain read for
 /// `testConnection()` only; sync paths still go through the Keychain.
 final class SwiftMailClient: MailClient, @unchecked Sendable {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "mail"
-    )
+    private static let logger = AppLog.make("mail")
 
     private let account: StoredEmailAccount
     private let imapPasswordOverride: String?

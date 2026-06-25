@@ -16,10 +16,7 @@ struct HomeOpenMeteoWeather: Sendable {
 }
 
 struct HomeOpenMeteoClient: Sendable {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "HomeDayGreeting"
-    )
+    private static let logger = AppLog.make("HomeDayGreeting")
 
     func weather(for location: CLLocation) async throws -> HomeOpenMeteoWeather {
         var components = URLComponents()

@@ -12,10 +12,7 @@ import AppKit
 @MainActor
 @Observable
 final class EmailWorkflowManager {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "mail.workflow"
-    )
+    private static let logger = AppLog.make("mail.workflow")
 
     static let shared = EmailWorkflowManager()
 

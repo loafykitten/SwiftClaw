@@ -18,10 +18,7 @@ typealias EmailReviewInferenceComplete = @Sendable (
 
 @MainActor
 final class EmailReviewService {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "mail.review"
-    )
+    private static let logger = AppLog.make("mail.review")
 
     private let modelContainer: ModelContainer
 

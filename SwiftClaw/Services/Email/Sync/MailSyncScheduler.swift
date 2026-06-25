@@ -16,10 +16,7 @@ protocol MailSyncScheduler: AnyObject, Sendable {
 /// Cross-platform baseline scheduler. Always-on `Task` + `Task.sleep` loop.
 /// Mirrors the cadence of `BraveRateGate` / `InvestigationEngine`.
 final class ForegroundLoopMailSyncScheduler: MailSyncScheduler, @unchecked Sendable {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "mail.sync.scheduler"
-    )
+    private static let logger = AppLog.make("mail.sync.scheduler")
 
     private let worker: MailSyncWorker
     private let intervalProvider: () -> Int
@@ -69,10 +66,7 @@ import Foundation
 /// the consistent baseline and this only fires when the system deems it a good
 /// time to wake the app.
 final class BackgroundActivityMailSyncScheduler: MailSyncScheduler, @unchecked Sendable {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "mail.sync.scheduler.background"
-    )
+    private static let logger = AppLog.make("mail.sync.scheduler.background")
 
     private let worker: MailSyncWorker
     private let intervalProvider: () -> Int

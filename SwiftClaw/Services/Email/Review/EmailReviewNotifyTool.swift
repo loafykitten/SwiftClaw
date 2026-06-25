@@ -7,10 +7,7 @@ import os
 /// never be able to invoke it during normal user chats. Constructed by
 /// `EmailReviewService` in a one-off `ToolRegistry(tools: [EmailReviewNotifyTool()])`.
 final class EmailReviewNotifyTool: Tool {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "mail.review.tool"
-    )
+    private static let logger = AppLog.make("mail.review.tool")
 
     let name = "notify_user_about_emails"
     let displayName = "Notify User About Emails"

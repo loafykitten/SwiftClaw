@@ -16,10 +16,7 @@ import os
 /// threads that can't finish surface as partial results instead of failing
 /// the whole investigation.
 struct InvestigationEngine: Sendable {
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "InvestigationEngine"
-    )
+    private static let logger = AppLog.make("InvestigationEngine")
 
     private static let totalBudget = Duration.seconds(120)
     private static let maxAttempts = 3

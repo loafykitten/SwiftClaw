@@ -28,10 +28,7 @@ import os
 actor MailSyncWorker {
     static let firstSyncMaxMessages = 500
 
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "mail.sync"
-    )
+    private static let logger = AppLog.make("mail.sync")
 
     private let accountsProvider: @Sendable () async -> [StoredEmailAccount]
     private let modelContainer: ModelContainer

@@ -6,10 +6,7 @@ import os
 final class HomeDayGreetingContextProvider {
     private let locationProvider = HomeDayGreetingLocationProvider()
     private let weatherClient = HomeOpenMeteoClient()
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "HomeDayGreeting"
-    )
+    private let logger = AppLog.make("HomeDayGreeting")
 
     func loadContext(now: Date = Date()) async -> HomeDayGreetingContext {
         do {
@@ -82,10 +79,7 @@ private enum HomeDayGreetingLocationError: LocalizedError {
 
 @MainActor
 private final class HomeDayGreetingLocationProvider: NSObject, CLLocationManagerDelegate {
-    private let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "HomeDayGreeting"
-    )
+    private let logger = AppLog.make("HomeDayGreeting")
 
     private var manager: CLLocationManager?
     private var continuation: CheckedContinuation<CLLocation, Error>?

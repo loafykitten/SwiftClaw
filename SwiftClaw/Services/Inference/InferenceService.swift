@@ -92,10 +92,7 @@ struct ResolvedModel: Sendable {
 struct InferenceService: Sendable {
     static let shared = InferenceService()
 
-    private static let logger = Logger(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw",
-        category: "InferenceService"
-    )
+    private static let logger = AppLog.make("InferenceService")
 
     /// Resolves a model selection string into a provider and model identifier.
     func resolve(_ modelSelection: String) throws -> ResolvedModel {
