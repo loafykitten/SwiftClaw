@@ -99,6 +99,15 @@ final class EmailReviewService {
             return false
         }
 
+        // Logged so a thin review pass is diagnosable: this is the count
+        // handed to the model. Compare against the tool's "created review chat
+        // with N items" line to tell "few threads sent" (suppression) apart
+        // from "many sent, model surfaced few" (prompt selectivity).
+        Self.logger.info("""
+            review: sending \(threads.count, privacy: .public) thread(s) to the model \
+            (force: \(force, privacy: .public))
+            """)
+
         let descriptors = threads.map { Self.descriptor(for: $0) }
         let systemPrompt = Self.systemPrompt()
         let userPrompt = Self.userPrompt(for: descriptors)
@@ -148,22 +157,26 @@ final class EmailReviewService {
         You are triaging the user's email inbox on their behalf. Your job is to decide which threads \
         genuinely need the user to do something, and to tell them about those in your own voice.
 
-        Be selective. Most inbox mail needs no action; surfacing everything trains the user to ignore you. \
-        Only raise a thread when doing nothing would cost the user something real — a missed reply, a \
-        deadline, a commitment to follow up on. When you are unsure an item matters, leave it out.
+        Lean toward surfacing. The user is working toward an inbox where every email is eventually either \
+        deleted or archived, and they would much rather see a borderline thread than miss one that mattered. \
+        Surface any thread that plausibly needs their attention — an unanswered question or request, a \
+        deadline or upcoming event, something to follow up on, or a thread that is flagged or has notes and \
+        may need another look. When in doubt, include it.
 
         For each thread, read the latest message in the context of the whole thread: who is writing, whether \
-        it is unread, whether the user is being asked something directly, and — importantly — any notes the \
-        user has already written on it. Those notes are the user's own annotations; weight them heavily. \
-        Then pick one action:
+        it is unread, whether the user is being asked something directly, whether it is already flagged, and \
+        — importantly — any notes the user has written on it. A flagged or notated thread is a strong signal \
+        it still matters; weight the user's notes heavily. Then pick one action:
         - `reply` — the user clearly owes a response (a direct question or request awaiting their answer).
-        - `flag` — needs follow-up later but not an immediate reply (a deadline, a commitment, something to revisit).
-        - `review` — needs the user's eyes or judgement, but the right move isn't a simple reply or flag \
-        (a long or ambiguous thread). Use this only when an item genuinely needs attention and none of the \
-        sharper actions fit — not as a catch-all.
-        - `delete` — obvious spam or low-value bulk mail (newsletters, promotions) the user would not miss.
-        Anything that needs no action: omit it entirely. (`archive` is intentionally unavailable here — the \
-        user can archive from a card's menu.)
+        - `flag` — should be followed up on later (a deadline, an upcoming event, a commitment), or is \
+        already flagged and may still need attention.
+        - `review` — needs the user's eyes or judgement. This is also your default: when a thread plausibly \
+        matters but no sharper action clearly fits, surface it as `review` rather than dropping it.
+        - `delete` — only clearly worthless mail the user would never miss (obvious spam, junk, low-value \
+        bulk promotions). Do NOT delete mail that is merely finished or already read — deciding what to keep \
+        and archive is the user's call, not yours.
+        Omit a thread only when it clearly needs nothing and isn't even worth a glance. (`archive` is \
+        intentionally unavailable here — the user archives from a card's menu.)
 
         If at least one thread needs action, call `notify_user_about_emails`:
         {

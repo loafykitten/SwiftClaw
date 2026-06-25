@@ -68,11 +68,19 @@ Current local verification: `swift test` and
   deleted. Mixed threads only send active messages to the model.
 - The review system prompt prepends the configured assistant persona
   (`AssistantPersona.personaPrompt()`) so the user-facing summary message and
-  per-item reasons sound in the user's chosen voice, and gives the model
-  explicit triage guidance — be selective, weigh the user's own notes, pick the
-  sharpest action (reply/flag/review/delete), and omit no-action mail. It runs
-  in `.standalone` inference mode (the persona is baked into the prompt string
-  rather than prepended by `InferenceService`).
+  per-item reasons sound in the user's chosen voice. It runs in `.standalone`
+  inference mode (the persona is baked into the prompt string rather than
+  prepended by `InferenceService`).
+- Triage **leans toward recall** (resurfacing): surface anything that plausibly
+  needs attention, treat flagged/notated threads as strong "still matters"
+  signals (weight user notes heavily), and use `review` as the default when no
+  sharper action (reply/flag/delete) fits — drop a thread only when it clearly
+  needs nothing. `delete` is reserved for clear junk; "finished but keep" is the
+  user's archive call, which the model is not offered. Each pass logs
+  `review: sending N thread(s) … (force:)` so a thin pass is diagnosable
+  (few-sent = `lastReviewedAt` suppression vs. many-sent-few-surfaced = prompt).
+- Deferred hook: once memory ships, feed email memory (e.g. "sender X is spam")
+  into the review system prompt so standing notes influence triage.
 - Review prompts include date context; review-card rows show subject, sender,
   date, summary, and action. The summary chat message does not append a
   separate date list.
@@ -118,7 +126,30 @@ Current local verification: `swift test` and
    - A review pass produces a review chat; acting on a card item removes it and
      dispatches to the right server call.
 
-2. **Explicitly deferred (out-of-scope, not active work):**
+2. **Conversational follow-up on review chats (next code step).** Let the user
+   reply to a review summary and have the assistant act on the referenced
+   emails — e.g. "for the email from Suzy, note that it needs a reply by the
+   19th and I need to ask her what color cake." Not supported today: the
+   review-card message carries `content: ""` (data is in `reviewCardData`), so
+   `ChatMessage.inferenceMessage` yields an empty assistant turn — the model
+   never sees the card's emails — and `ToolRegistry.shared` has no email tools.
+   Design (reuses existing patterns, no `ToolRegistry.shared` container needed):
+   - **Context injection** in `ChatCompletionService.completeScopedChat` (which
+     already holds the `modelContext` + `Chat`): when the chat contains a
+     review card, fetch the referenced emails via `EmailRepository` and append a
+     fresh, non-persisted `.system` message listing each — GUID, subject,
+     sender, date, a body excerpt, and existing notes — mirroring the transient
+     Investigation steering hint. Cap the body excerpt for token cost.
+   - **Per-completion email tools** injected for review chats (mirroring how
+     `EmailReviewService` injects `EmailReviewNotifyTool` via a one-off
+     registry), constructed with the `modelContext`. Start with
+     `add_email_note(email_guid, note)`; extensible to flag/reply/delete by
+     reusing `EmailReviewActionDispatcher`.
+   - Open scope decisions: which actions beyond `add_email_note` to expose, and
+     how much body to include. Pairs with the deferred email-memory hook (feed
+     standing notes into context so the assistant knows sender-level prefs).
+
+3. **Explicitly deferred (out-of-scope, not active work):**
    - **Phase 0.5 / iOS target** — `.iOS(...)` in `Package.swift`, `#if os(iOS)`
      audit, `BGTaskSchedulerPermittedIdentifiers` in Info.plist, and a
      `BGTaskMailSyncScheduler`. Until then iOS falls back to the foreground loop.
@@ -131,7 +162,7 @@ Current local verification: `swift test` and
      provider's Archive/All Mail folder and hide the row locally. Pulling the
      Archive mailbox as a first-class synced mailbox is deferred.
 
-3. **Known by-design behaviors (not bugs):**
+4. **Known by-design behaviors (not bugs):**
    - Optimistic local flag/read mutations can be briefly reverted by
      `reconcileFlagsFromSnapshot` if a sync races the action's server
      round-trip. Self-heals on the next sync; the window is a fraction of the
