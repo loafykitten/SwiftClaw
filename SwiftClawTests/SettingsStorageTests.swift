@@ -121,26 +121,53 @@ struct SettingsStorageTests {
         #expect(!SettingsStorage.isInvestigationEnabled(userDefaults: fixture.defaults))
     }
 
-    @Test func emailReviewMaxThreadsDefaultsToFifteen() throws {
+    @Test func emailReviewMaxThreadsDefaultsToTen() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
-        #expect(SettingsStorage.loadEmailReviewMaxThreads(userDefaults: fixture.defaults) == 15)
+        #expect(SettingsStorage.loadEmailReviewMaxThreads(userDefaults: fixture.defaults) == 10)
     }
 
-    @Test func emailReviewMaxThreadsMigratesLegacyDefaultToFifteenOnce() throws {
+    @Test func emailReviewMaxThreadsMigratesLegacyDefaultToTenOnce() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         fixture.defaults.set(40, forKey: SettingsKeys.emailReviewMaxThreads)
         SettingsStorage.migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: fixture.defaults)
 
-        #expect(fixture.defaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == 15)
+        #expect(fixture.defaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == 10)
 
         fixture.defaults.set(40, forKey: SettingsKeys.emailReviewMaxThreads)
         SettingsStorage.migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: fixture.defaults)
 
         #expect(fixture.defaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == 40)
+    }
+
+    @Test func emailReviewMaxThreadsMigratesPreviousDefaultToTenOnce() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(15, forKey: SettingsKeys.emailReviewMaxThreads)
+        SettingsStorage.migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: fixture.defaults)
+
+        #expect(fixture.defaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == 10)
+
+        fixture.defaults.set(15, forKey: SettingsKeys.emailReviewMaxThreads)
+        SettingsStorage.migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: fixture.defaults)
+
+        #expect(fixture.defaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == 15)
+    }
+
+    @Test func emailReviewMaxThreadsMigratesPreviousDefaultAfterLegacyMigrationRan() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(true, forKey: SettingsKeys.emailReviewMaxThreadsDefaultMigrated)
+        fixture.defaults.set(15, forKey: SettingsKeys.emailReviewMaxThreads)
+
+        SettingsStorage.migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: fixture.defaults)
+
+        #expect(fixture.defaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == SettingsStorage.defaultEmailReviewMaxThreads)
     }
 }
 

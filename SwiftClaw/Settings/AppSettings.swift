@@ -129,14 +129,29 @@ enum SettingsKeys {
     static let emailFromAddress = "settings.email.fromAddress"
     static let emailPollIntervalSeconds = "settings.email.pollIntervalSeconds"
     static let emailReviewIntervalSeconds = "settings.email.reviewIntervalSeconds"
+    static let emailReviewScheduleMode = "settings.email.reviewScheduleMode"
+    static let emailReviewDailyTimes = "settings.email.reviewDailyTimes"
+    static let emailLastReviewCompletedAt = "settings.email.lastReviewCompletedAt"
     static let emailReviewMaxThreads = "settings.email.reviewMaxThreads"
     static let emailReviewMaxThreadsDefaultMigrated = "settings.email.reviewMaxThreads.defaultMigrated"
+    static let emailReviewMaxThreadsDefaultTenMigrated = "settings.email.reviewMaxThreads.defaultTenMigrated"
+    static let emailReviewDefaultMaxAgeEnabled = "settings.email.reviewDefaultMaxAge.enabled"
+    static let emailReviewDefaultMaxAgeDays = "settings.email.reviewDefaultMaxAge.days"
+    static let emailReviewDefaultIncludeFlagged = "settings.email.reviewDefaultInclude.flagged"
+    static let emailReviewDefaultIncludeNotated = "settings.email.reviewDefaultInclude.notated"
+    static let emailReviewDefaultIncludeRead = "settings.email.reviewDefaultInclude.read"
+    static let emailReviewDefaultIncludeUnread = "settings.email.reviewDefaultInclude.unread"
+    static let emailReviewDefaultIncludeArchived = "settings.email.reviewDefaultInclude.archived"
+    static let emailReviewDefaultIncludeTrashed = "settings.email.reviewDefaultInclude.trashed"
     static let emailAutoNavigateToReviewChat = "settings.email.autoNavigateToReviewChat"
     static let emailMailboxSyncStates = "settings.email.mailboxSyncStates"
 }
 
 enum SettingsNotifications {
     static let keychainDidChange = Notification.Name("settings.keychain.didChange")
+    static let emailReviewScheduleDidChange = Notification.Name(
+        "settings.email.reviewSchedule.didChange"
+    )
     static let changedKey = "changedKey"
 }
 
@@ -256,6 +271,54 @@ enum ModelReasoningEffort: String, CaseIterable, Identifiable, Sendable {
 
     var isReasoningEnabled: Bool {
         self != .off
+    }
+}
+
+enum EmailReviewScheduleMode: String, CaseIterable, Identifiable, Sendable {
+    case interval
+    case daily
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .interval: "Interval"
+        case .daily: "Daily Times"
+        }
+    }
+}
+
+struct EmailReviewFetchDefaults: Equatable, Sendable {
+    var maxAgeDays: Int?
+    var limit: Int
+    var includeFlagged: Bool
+    var includeNotated: Bool
+    var includeRead: Bool
+    var includeUnread: Bool
+    var includeArchived: Bool
+    var includeTrashed: Bool
+
+    func filter(applySuppression: Bool) -> EmailReviewFetchFilter {
+        var filter = EmailReviewFetchFilter(applySuppression: applySuppression)
+        filter.maxAgeDays = maxAgeDays ?? Int.max
+        filter.limit = limit
+        filter.includeFlagged = includeFlagged
+        filter.includeNotated = includeNotated
+        filter.includeRead = includeRead
+        filter.includeUnread = includeUnread
+        filter.includeArchived = includeArchived
+        filter.includeTrashed = includeTrashed
+        return filter
+    }
+
+    var maxAgeDescription: String {
+        maxAgeDays.map { "\($0) day\($0 == 1 ? "" : "s")" } ?? "omitted (no hard age cap)"
+    }
+}
+
+private extension ClosedRange where Bound == Int {
+    func clamping(_ value: Int) -> Int {
+        min(max(value, lowerBound), upperBound)
     }
 }
 
@@ -395,10 +458,24 @@ enum SettingsStorage {
     static let defaultEmailPollIntervalSeconds = 300
     static let emailPollIntervalSecondsRange: ClosedRange<Int> = 60...3600
     static let defaultEmailReviewIntervalSeconds = 1800
-    static let emailReviewIntervalSecondsRange: ClosedRange<Int> = 300...14400
+    static let emailReviewIntervalSecondsRange: ClosedRange<Int> = 300...86400
+    static let emailReviewFirstRunMinimumDelaySeconds = 60
+    static let defaultEmailReviewScheduleMode = EmailReviewScheduleMode.interval
+    static let defaultEmailReviewDailyTimes = [9 * 60]
+    static let emailReviewDailyTimeRange: ClosedRange<Int> = 0...1439
     private static let legacyDefaultEmailReviewMaxThreads = 40
-    static let defaultEmailReviewMaxThreads = 15
+    private static let previousDefaultEmailReviewMaxThreads = 15
+    static let defaultEmailReviewMaxThreads = 10
     static let emailReviewMaxThreadsRange: ClosedRange<Int> = 5...100
+    static let defaultEmailReviewDefaultMaxAgeEnabled = false
+    static let defaultEmailReviewDefaultMaxAgeDays = 30
+    static let emailReviewDefaultMaxAgeDaysRange: ClosedRange<Int> = 1...365
+    static let defaultEmailReviewDefaultIncludeFlagged = true
+    static let defaultEmailReviewDefaultIncludeNotated = true
+    static let defaultEmailReviewDefaultIncludeRead = true
+    static let defaultEmailReviewDefaultIncludeUnread = true
+    static let defaultEmailReviewDefaultIncludeArchived = false
+    static let defaultEmailReviewDefaultIncludeTrashed = false
     static let defaultEmailAutoNavigateToReviewChat = false
 
     static func isEmailEnabled(userDefaults: UserDefaults = .standard) -> Bool {
@@ -414,10 +491,7 @@ enum SettingsStorage {
         guard stored > 0 else {
             return defaultEmailPollIntervalSeconds
         }
-        return min(
-            max(stored, emailPollIntervalSecondsRange.lowerBound),
-            emailPollIntervalSecondsRange.upperBound
-        )
+        return emailPollIntervalSecondsRange.clamping(stored)
     }
 
     static func loadEmailReviewInterval(userDefaults: UserDefaults = .standard) -> Int {
@@ -425,10 +499,129 @@ enum SettingsStorage {
         guard stored > 0 else {
             return defaultEmailReviewIntervalSeconds
         }
-        return min(
-            max(stored, emailReviewIntervalSecondsRange.lowerBound),
-            emailReviewIntervalSecondsRange.upperBound
+        return emailReviewIntervalSecondsRange.clamping(stored)
+    }
+
+    static func loadEmailReviewScheduleMode(userDefaults: UserDefaults = .standard) -> EmailReviewScheduleMode {
+        let raw = userDefaults.string(forKey: SettingsKeys.emailReviewScheduleMode)
+        return raw.flatMap(EmailReviewScheduleMode.init(rawValue:)) ?? defaultEmailReviewScheduleMode
+    }
+
+    static func loadEmailReviewDailyTimes(userDefaults: UserDefaults = .standard) -> [Int] {
+        let values: [Int]
+        if let data = userDefaults.data(forKey: SettingsKeys.emailReviewDailyTimes),
+           let decoded = try? JSONDecoder().decode([Int].self, from: data) {
+            values = decoded
+        } else {
+            values = defaultEmailReviewDailyTimes
+        }
+
+        return normalizedEmailReviewDailyTimes(values)
+    }
+
+    static func saveEmailReviewDailyTimes(_ times: [Int], userDefaults: UserDefaults = .standard) {
+        guard let data = try? JSONEncoder().encode(normalizedEmailReviewDailyTimes(times)) else {
+            return
+        }
+        userDefaults.set(data, forKey: SettingsKeys.emailReviewDailyTimes)
+    }
+
+    static func loadEmailLastReviewCompletedAt(userDefaults: UserDefaults = .standard) -> Date? {
+        userDefaults.object(forKey: SettingsKeys.emailLastReviewCompletedAt) as? Date
+    }
+
+    static func saveEmailLastReviewCompletedAt(_ date: Date, userDefaults: UserDefaults = .standard) {
+        userDefaults.set(date, forKey: SettingsKeys.emailLastReviewCompletedAt)
+    }
+
+    static func nextEmailReviewDate(
+        now: Date = Date(),
+        userDefaults: UserDefaults = .standard,
+        calendar: Calendar = .current
+    ) -> Date {
+        nextEmailReviewDate(
+            now: now,
+            lastCompletedAt: loadEmailLastReviewCompletedAt(userDefaults: userDefaults),
+            userDefaults: userDefaults,
+            calendar: calendar
         )
+    }
+
+    static func nextEmailReviewDate(
+        now: Date,
+        lastCompletedAt: Date?,
+        userDefaults: UserDefaults = .standard,
+        calendar: Calendar = .current
+    ) -> Date {
+        switch loadEmailReviewScheduleMode(userDefaults: userDefaults) {
+        case .interval:
+            let interval = TimeInterval(loadEmailReviewInterval(userDefaults: userDefaults))
+            guard let lastCompletedAt else {
+                return now.addingTimeInterval(max(TimeInterval(emailReviewFirstRunMinimumDelaySeconds), interval / 4))
+            }
+            return lastCompletedAt.addingTimeInterval(interval)
+        case .daily:
+            let next = nextDailyEmailReviewDate(
+                now: now,
+                lastCompletedAt: lastCompletedAt,
+                times: loadEmailReviewDailyTimes(userDefaults: userDefaults),
+                calendar: calendar
+            )
+            guard lastCompletedAt != nil else {
+                return next <= now
+                    ? now.addingTimeInterval(TimeInterval(emailReviewFirstRunMinimumDelaySeconds))
+                    : next
+            }
+            return next
+        }
+    }
+
+    static func nextDailyEmailReviewDate(
+        now: Date,
+        lastCompletedAt: Date?,
+        times: [Int],
+        calendar: Calendar = .current
+    ) -> Date {
+        let dailyTimes = times.isEmpty ? defaultEmailReviewDailyTimes : times.sorted()
+        let todayOccurrences = dailyTimes.compactMap {
+            dailyReviewDate(minutesAfterMidnight: $0, onDayContaining: now, calendar: calendar)
+        }
+        let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now.addingTimeInterval(-86_400)
+        let yesterdayOccurrences = dailyTimes.compactMap {
+            dailyReviewDate(minutesAfterMidnight: $0, onDayContaining: yesterday, calendar: calendar)
+        }
+        let elapsed = (yesterdayOccurrences + todayOccurrences).filter { $0 <= now }
+
+        if let latestElapsed = elapsed.max(),
+           lastCompletedAt.map({ $0 < latestElapsed }) ?? true {
+            return now
+        }
+
+        if let nextToday = todayOccurrences.filter({ $0 > now }).min() {
+            return nextToday
+        }
+
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: now) ?? now.addingTimeInterval(86_400)
+        return dailyTimes.compactMap {
+            dailyReviewDate(minutesAfterMidnight: $0, onDayContaining: tomorrow, calendar: calendar)
+        }.min() ?? now.addingTimeInterval(86_400)
+    }
+
+    static func dailyReviewDate(
+        minutesAfterMidnight: Int,
+        onDayContaining date: Date,
+        calendar: Calendar = .current
+    ) -> Date? {
+        let clamped = emailReviewDailyTimeRange.clamping(minutesAfterMidnight)
+        let start = calendar.startOfDay(for: date)
+        return calendar.date(byAdding: .minute, value: clamped, to: start)
+    }
+
+    static func dailyReviewMinutes(afterMidnightFrom date: Date, calendar: Calendar = .current) -> Int {
+        let components = calendar.dateComponents([.hour, .minute], from: date)
+        let hour = components.hour ?? 0
+        let minute = components.minute ?? 0
+        return emailReviewDailyTimeRange.clamping(hour * 60 + minute)
     }
 
     static func loadEmailReviewMaxThreads(userDefaults: UserDefaults = .standard) -> Int {
@@ -436,25 +629,73 @@ enum SettingsStorage {
         guard stored > 0 else {
             return defaultEmailReviewMaxThreads
         }
-        return min(
-            max(stored, emailReviewMaxThreadsRange.lowerBound),
-            emailReviewMaxThreadsRange.upperBound
-        )
+        return emailReviewMaxThreadsRange.clamping(stored)
     }
 
     static func migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: UserDefaults = .standard) {
-        guard !userDefaults.bool(forKey: SettingsKeys.emailReviewMaxThreadsDefaultMigrated) else {
+        guard !userDefaults.bool(forKey: SettingsKeys.emailReviewMaxThreadsDefaultTenMigrated) else {
             return
         }
-        defer { userDefaults.set(true, forKey: SettingsKeys.emailReviewMaxThreadsDefaultMigrated) }
+        defer {
+            userDefaults.set(true, forKey: SettingsKeys.emailReviewMaxThreadsDefaultMigrated)
+            userDefaults.set(true, forKey: SettingsKeys.emailReviewMaxThreadsDefaultTenMigrated)
+        }
 
         guard userDefaults.object(forKey: SettingsKeys.emailReviewMaxThreads) != nil else {
             return
         }
-        guard userDefaults.integer(forKey: SettingsKeys.emailReviewMaxThreads) == legacyDefaultEmailReviewMaxThreads else {
+        let stored = userDefaults.integer(forKey: SettingsKeys.emailReviewMaxThreads)
+        guard [legacyDefaultEmailReviewMaxThreads, previousDefaultEmailReviewMaxThreads].contains(stored) else {
             return
         }
         userDefaults.set(defaultEmailReviewMaxThreads, forKey: SettingsKeys.emailReviewMaxThreads)
+    }
+
+    static func loadEmailReviewFetchDefaults(userDefaults: UserDefaults = .standard) -> EmailReviewFetchDefaults {
+        let maxAgeEnabled = boolSetting(
+            forKey: SettingsKeys.emailReviewDefaultMaxAgeEnabled,
+            defaultValue: defaultEmailReviewDefaultMaxAgeEnabled,
+            userDefaults: userDefaults
+        )
+        let rawMaxAgeDays = userDefaults.integer(forKey: SettingsKeys.emailReviewDefaultMaxAgeDays)
+        let maxAgeDays = emailReviewDefaultMaxAgeDaysRange.clamping(
+            rawMaxAgeDays > 0 ? rawMaxAgeDays : defaultEmailReviewDefaultMaxAgeDays
+        )
+
+        return EmailReviewFetchDefaults(
+            maxAgeDays: maxAgeEnabled ? maxAgeDays : nil,
+            limit: loadEmailReviewMaxThreads(userDefaults: userDefaults),
+            includeFlagged: boolSetting(
+                forKey: SettingsKeys.emailReviewDefaultIncludeFlagged,
+                defaultValue: defaultEmailReviewDefaultIncludeFlagged,
+                userDefaults: userDefaults
+            ),
+            includeNotated: boolSetting(
+                forKey: SettingsKeys.emailReviewDefaultIncludeNotated,
+                defaultValue: defaultEmailReviewDefaultIncludeNotated,
+                userDefaults: userDefaults
+            ),
+            includeRead: boolSetting(
+                forKey: SettingsKeys.emailReviewDefaultIncludeRead,
+                defaultValue: defaultEmailReviewDefaultIncludeRead,
+                userDefaults: userDefaults
+            ),
+            includeUnread: boolSetting(
+                forKey: SettingsKeys.emailReviewDefaultIncludeUnread,
+                defaultValue: defaultEmailReviewDefaultIncludeUnread,
+                userDefaults: userDefaults
+            ),
+            includeArchived: boolSetting(
+                forKey: SettingsKeys.emailReviewDefaultIncludeArchived,
+                defaultValue: defaultEmailReviewDefaultIncludeArchived,
+                userDefaults: userDefaults
+            ),
+            includeTrashed: boolSetting(
+                forKey: SettingsKeys.emailReviewDefaultIncludeTrashed,
+                defaultValue: defaultEmailReviewDefaultIncludeTrashed,
+                userDefaults: userDefaults
+            )
+        )
     }
 
     static func loadInvestigationMaxSubAgents() -> Int {
@@ -475,10 +716,23 @@ enum SettingsStorage {
         defaultValue: Bool,
         userDefaults: UserDefaults
     ) -> Bool {
+        boolSetting(forKey: key, defaultValue: defaultValue, userDefaults: userDefaults)
+    }
+
+    private static func boolSetting(
+        forKey key: String,
+        defaultValue: Bool,
+        userDefaults: UserDefaults
+    ) -> Bool {
         guard userDefaults.object(forKey: key) != nil else {
             return defaultValue
         }
 
         return userDefaults.bool(forKey: key)
+    }
+
+    private static func normalizedEmailReviewDailyTimes(_ times: [Int]) -> [Int] {
+        let unique = Array(Set(times.map(emailReviewDailyTimeRange.clamping))).sorted()
+        return unique.isEmpty ? defaultEmailReviewDailyTimes : unique
     }
 }

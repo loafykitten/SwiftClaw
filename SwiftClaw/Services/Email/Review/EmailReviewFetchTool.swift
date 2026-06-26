@@ -16,38 +16,9 @@ final class EmailReviewFetchTool: Tool {
 
     let name = "fetch_inbox_emails"
     let displayName = "Fetch Inbox Emails"
-    let description = """
-    Fetches a filtered slice of the user's inbox threads to review. Call this \
-    first, before deciding what needs the user's attention. All parameters are \
-    optional; the defaults select review-eligible inbox mail without a hard age \
-    cap so old read backlog can resurface. \
-    Defaults: max_age_days omitted (no hard age cap — set it to focus on recent \
-    mail); limit=\(SettingsStorage.loadEmailReviewMaxThreads()) \
-    (max threads, though unread/flagged/notated threads are always returned even \
-    beyond the limit); include_flagged=true, include_notated=true, \
-    include_read=true, include_unread=true; include_archived=false, \
-    include_trashed=false (exclude archived and trashed mail unless the user \
-    asks about it). Set include_read=false to fetch only unread, or narrow the \
-    include flags to focus on a category (e.g. only flagged).
-    """
+    let description: String
     let systemImage = "tray.and.arrow.down"
-    let parameters: [ToolParameter] = [
-        ToolParameter(name: "max_age_days", type: .integer, description: """
-        Only include threads whose latest activity is within this many days. \
-        Omit for no hard age cap. Flagged/notated threads ignore this window.
-        """),
-        ToolParameter(name: "limit", type: .integer, description: """
-        Maximum number of threads to return. Unread, flagged, and notated \
-        threads are returned even when there are more of them than the limit. \
-        Default is the user's configured review maximum.
-        """),
-        ToolParameter(name: "include_flagged", type: .boolean, description: "Include flagged threads. Default true."),
-        ToolParameter(name: "include_notated", type: .boolean, description: "Include threads the user has written notes on. Default true."),
-        ToolParameter(name: "include_read", type: .boolean, description: "Include already-read threads. Set false to fetch only unread. Default true."),
-        ToolParameter(name: "include_unread", type: .boolean, description: "Include unread threads. Default true."),
-        ToolParameter(name: "include_archived", type: .boolean, description: "Include archived threads. Default false."),
-        ToolParameter(name: "include_trashed", type: .boolean, description: "Include trashed threads. Default false."),
-    ]
+    let parameters: [ToolParameter]
 
     var isConfigured: Bool { true }
     var requiresExplicitEnable: Bool { false }
@@ -57,9 +28,9 @@ final class EmailReviewFetchTool: Tool {
     /// suppression on); the forced/conversational path sets false so the model
     /// can query the whole inbox by its filters.
     private let applySuppression: Bool
-    /// Default `limit` when the model omits the argument — the user's
-    /// configured review maximum.
-    private let defaultLimit: Int
+    /// Defaults used when the model omits optional arguments. The model can
+    /// still override any of them when the user's message steers a pass.
+    private let defaults: EmailReviewFetchDefaults
     /// Reports the thread IDs returned by each fetch call so the service can
     /// stamp exactly what was reviewed (the union across calls in a pass).
     private let onThreadsFetched: (@MainActor ([UUID]) -> Void)?
@@ -67,18 +38,19 @@ final class EmailReviewFetchTool: Tool {
     init(
         modelContainer: ModelContainer,
         applySuppression: Bool,
-        defaultLimit: Int,
+        defaults: EmailReviewFetchDefaults,
         onThreadsFetched: (@MainActor ([UUID]) -> Void)? = nil
     ) {
         self.modelContainer = modelContainer
         self.applySuppression = applySuppression
-        self.defaultLimit = defaultLimit
+        self.defaults = defaults
         self.onThreadsFetched = onThreadsFetched
+        self.description = Self.description(defaults: defaults)
+        self.parameters = Self.parameters(defaults: defaults)
     }
 
     func execute(arguments: [String: JSONValue]) async throws -> String {
-        var filter = EmailReviewFetchFilter(applySuppression: applySuppression)
-        filter.limit = defaultLimit
+        var filter = defaults.filter(applySuppression: applySuppression)
         if let age = Self.intArgument(arguments["max_age_days"]) { filter.maxAgeDays = max(0, age) }
         if let limit = Self.intArgument(arguments["limit"]) { filter.limit = max(1, limit) }
         if let v = Self.boolArgument(arguments["include_flagged"]) { filter.includeFlagged = v }
@@ -117,6 +89,44 @@ final class EmailReviewFetchTool: Tool {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data = (try? encoder.encode(descriptors)) ?? Data()
         return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    private static func description(defaults: EmailReviewFetchDefaults) -> String {
+        """
+        Fetches a filtered slice of the user's inbox threads to review. Call this \
+        first, before deciding what needs the user's attention. All parameters are \
+        optional; omitted parameters use the user's configured defaults. The user's \
+        current defaults are: max_age_days \(defaults.maxAgeDescription); \
+        limit=\(defaults.limit) (max threads, though unread/flagged/notated \
+        threads are always returned even beyond the limit); \
+        include_flagged=\(defaults.includeFlagged), include_notated=\(defaults.includeNotated), \
+        include_read=\(defaults.includeRead), include_unread=\(defaults.includeUnread), \
+        include_archived=\(defaults.includeArchived), include_trashed=\(defaults.includeTrashed). \
+        Override these when the user asks for a narrower timeframe, a different limit, \
+        or a category like unread, flagged, archived, or trash.
+        """
+    }
+
+    private static func parameters(defaults: EmailReviewFetchDefaults) -> [ToolParameter] {
+        [
+            ToolParameter(name: "max_age_days", type: .integer, description: """
+            Only include threads whose latest activity is within this many days. \
+            Omit to use the user's default: \(defaults.maxAgeDescription). \
+            Flagged/notated threads ignore this window.
+            """),
+            ToolParameter(name: "limit", type: .integer, description: """
+            Maximum number of threads to return. Unread, flagged, and notated \
+            threads are returned even when there are more of them than the limit. \
+            Omit to use the user's configured default: \(defaults.limit). Set a \
+            value when the user asks for a specific amount.
+            """),
+            ToolParameter(name: "include_flagged", type: .boolean, description: "Include flagged threads. Default \(defaults.includeFlagged)."),
+            ToolParameter(name: "include_notated", type: .boolean, description: "Include threads the user has written notes on. Default \(defaults.includeNotated)."),
+            ToolParameter(name: "include_read", type: .boolean, description: "Include already-read threads. Set false to fetch only unread. Default \(defaults.includeRead)."),
+            ToolParameter(name: "include_unread", type: .boolean, description: "Include unread threads. Default \(defaults.includeUnread)."),
+            ToolParameter(name: "include_archived", type: .boolean, description: "Include archived threads. Default \(defaults.includeArchived)."),
+            ToolParameter(name: "include_trashed", type: .boolean, description: "Include trashed threads. Default \(defaults.includeTrashed)."),
+        ]
     }
 
     /// Lenient integer read: accepts a JSON number or a numeric string (some

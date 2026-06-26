@@ -3,10 +3,8 @@
 The email feature is code-complete for the current macOS MVP. The only active
 remaining work is live end-to-end verification against a real mail account.
 
-Current local verification, June 25, 2026 (re-confirmed by code review of the
-model-driven fetch work):
-- `xcodebuild test -scheme SwiftClaw -destination 'platform=macOS'` passes: all
-  22 suites green (the `fetch_inbox_emails` work adds `EmailReviewFetchTests`).
+Current local verification, June 25, 2026:
+- `swift test` passes: 149 tests across 22 suites.
   (The `SwiftClawTests` unit-test target and a shared test
   scheme are wired into the project; the test folder is attached as a
   synchronized group, so new test files are picked up automatically.)
@@ -36,14 +34,13 @@ model-driven fetch work):
   and conversational-refresh paths all use this two-step flow.
 - `fetch_inbox_emails` (backed by `EmailRepository.fetchThreadsForReview`) takes
   optional filters: `max_age_days` (omitted by default, so old read backlog can
-  resurface; set it to focus on a recent window), `limit` (default 15,
-  configurable in Email settings via "Emails per Review"), and include flags for
-  flagged/notated/read/unread/archived/trashed (defaults include flagged,
-  notated, read, unread; exclude archived, trashed). Unread, flagged, and notated
-  threads override the limit — they're never dropped by the cap; flagged/notated
-  also bypass any explicit age window. The model infers filters from user
-  steering (e.g. "this week" sets `max_age_days`, "what's flagged" narrows to
-  flagged only).
+  resurface), `limit` (default 10), and include flags for
+  flagged/notated/read/unread/archived/trashed. Those omitted-argument defaults
+  are configurable in Email settings, while chat steering can still override
+  them for one pass (e.g. "this week" sets `max_age_days`, "only five" sets
+  `limit`, "what's flagged" narrows to flagged only). Unread, flagged, and
+  notated threads override the limit — they're never dropped by the cap;
+  flagged/notated also bypass any explicit age window.
 - Review suppression via `EmailThread.lastReviewedAt` + `reviewedCount`: a thread
   is eligible when never reviewed, has new mail since its last review, or was last
   reviewed longer ago than its decayed resurface window. The window is
@@ -57,6 +54,11 @@ model-driven fetch work):
 - The scheduled loop skips the inference call entirely when nothing is eligible
   (`hasThreadsEligibleForReview`), preserving the "don't call the model when
   there's nothing to do" optimization the old inlined pre-fetch gave for free.
+- Review scheduling supports either an interval cadence (5 minutes to 24 hours)
+  or daily local review times. Successful review completion time is persisted so
+  reopening the app can run an overdue interval/daily review immediately.
+  Schedule changes in settings restart the sleeping review loop right away, and
+  daily first runs wait briefly when overdue so the first sync can land.
 - Review prompt leans toward resurfacing and treats age as a valid reason to
   surface, and `delete` may be suggested for any low-value mail (spam, promos,
   notifications, old read mail) — every delete is a user-confirmed suggestion.
@@ -103,29 +105,19 @@ model-driven fetch work):
   with action-colored reveal and no confirmation on release.
 - Review cards include an updated-analysis button that appends a fresh manual
   email review to the same Chat instead of creating a separate review chat.
-- `EmailSettingsView` supports account list, add/edit, and Test Connection.
+- `EmailSettingsView` supports account list, add/edit, Test Connection, review
+  scheduling, and review-fetch defaults.
 
 ## Remaining Work
 
 The model-driven `fetch_inbox_emails` selection, the `reviewedCount` resurface
-decay, and the matching regression tests are code-complete and pass locally
-(all 22 suites green). Default autonomous fetches no longer hard-drop old read
-mail, explicit `max_age_days` still narrows when requested, and the default
-limit matches settings. The two post-review cleanups are done: the dead
-`EmailThread.reviewUnreadCount` is removed, and the
-`fetchNonArchivedThreadsForReview` doc comment now states it's a test-only
-convenience (a code-review confirmed it has no remaining production caller, as
-does `reviewResurfaceInterval`). The next concrete step is the live pass below,
-including the real-store migration check for `EmailThread.reviewedCount` and the
-review-max-threads default migration (40 → 15), then memory-backed review
-context once the note/flag loop has real-world use.
-
-Optional (non-blocking) tidy noticed during review, do only if it ever gets in
-the way: the `fetch_inbox_emails` defaults are spelled out in three places —
-the tool `description`, the per-parameter descriptions, and the review system
-prompt's two-step instructions. The overlap is partly deliberate (the model
-reads tool text and prompt separately), but the system prompt could lean on the
-tool description instead of restating every default if it drifts out of sync.
+decay, configurable review-fetch defaults, 10-thread default limit, interval and
+daily review scheduling, persisted review-completion time, schedule-change
+wakeups, first-run delays, same-day relative email date labels, and "Yesterday"
+email date labels are code-complete and pass locally. The next concrete step is
+still the live pass below, including the real-store migration check for
+`EmailThread.reviewedCount`, then memory-backed review context once the
+note/flag loop has real-world use.
 
 One behavior to watch during the live pass (not a code change yet — confirm it
 against a real inbox before deciding): unread/flagged/notated threads override
@@ -154,6 +146,10 @@ return.
   card actions dispatch correctly.
 - A scheduled/default review over an inbox whose remaining mail is older than a
   week still fetches stale read mail for clearing instead of returning nothing.
+- Interval scheduling runs an overdue review after app relaunch; daily local
+  review times fire once per configured time and do not repeat after completion.
+- Editing a review interval/daily time or switching schedule modes while the app
+  is open takes effect immediately.
 - Conversational steering reshapes the fetch — e.g. "this week" sets an age
   window, "what's flagged" narrows to flagged — and a second scheduled pass with
   no new mail doesn't re-surface a just-reviewed thread until its decayed window

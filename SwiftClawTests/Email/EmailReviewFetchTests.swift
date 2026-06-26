@@ -284,7 +284,7 @@ struct EmailReviewFetchTests {
         let tool = EmailReviewFetchTool(
             modelContainer: container,
             applySuppression: false,
-            defaultLimit: 10,
+            defaults: Self.fetchDefaults(limit: 10),
             onThreadsFetched: { [box] ids in box.add(ids) }
         )
 
@@ -307,7 +307,11 @@ struct EmailReviewFetchTests {
         )
         repository.resolveThreads()
 
-        let tool = EmailReviewFetchTool(modelContainer: container, applySuppression: false, defaultLimit: 10)
+        let tool = EmailReviewFetchTool(
+            modelContainer: container,
+            applySuppression: false,
+            defaults: Self.fetchDefaults(limit: 10)
+        )
         let result = try await tool.execute(arguments: ["include_read": .bool(false)])
         #expect(result.contains("Unread one"))
         #expect(!result.contains("Read one"))
@@ -325,7 +329,11 @@ struct EmailReviewFetchTests {
             repository.resolveThreads()
         }
 
-        let tool = EmailReviewFetchTool(modelContainer: container, applySuppression: false, defaultLimit: 3)
+        let tool = EmailReviewFetchTool(
+            modelContainer: container,
+            applySuppression: false,
+            defaults: Self.fetchDefaults(limit: 3)
+        )
         let result = try await tool.execute(arguments: [:])
         #expect(result.components(separatedBy: "\"threadID\"").count - 1 == 3)
     }
@@ -344,9 +352,26 @@ struct EmailReviewFetchTests {
         )
         repository.resolveThreads()
 
-        let tool = EmailReviewFetchTool(modelContainer: container, applySuppression: true, defaultLimit: 10)
+        let tool = EmailReviewFetchTool(
+            modelContainer: container,
+            applySuppression: true,
+            defaults: Self.fetchDefaults(limit: 10)
+        )
         let result = try await tool.execute(arguments: [:])
         #expect(result.contains("Tool old read"))
         #expect(result.components(separatedBy: "\"threadID\"").count - 1 == 1)
+    }
+
+    private static func fetchDefaults(limit: Int) -> EmailReviewFetchDefaults {
+        EmailReviewFetchDefaults(
+            maxAgeDays: nil,
+            limit: limit,
+            includeFlagged: true,
+            includeNotated: true,
+            includeRead: true,
+            includeUnread: true,
+            includeArchived: false,
+            includeTrashed: false
+        )
     }
 }

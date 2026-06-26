@@ -147,7 +147,7 @@ final class EmailReviewService {
         let fetchTool = EmailReviewFetchTool(
             modelContainer: modelContainer,
             applySuppression: !force,
-            defaultLimit: SettingsStorage.loadEmailReviewMaxThreads(),
+            defaults: SettingsStorage.loadEmailReviewFetchDefaults(),
             onThreadsFetched: { [collector] ids in collector.add(ids) }
         )
         let notifyTool = EmailReviewNotifyTool(
@@ -242,6 +242,7 @@ final class EmailReviewService {
         usual caution around `delete`) for this pass only. Apply it just to this run; don't treat \
         it as a standing rule.
         """ : ""
+        let defaults = SettingsStorage.loadEmailReviewFetchDefaults()
         return """
         \(persona)
 
@@ -251,14 +252,15 @@ final class EmailReviewService {
         genuinely need the user to do something, and to tell them about those in your own voice.
 
         Work in two steps. FIRST call `fetch_inbox_emails` to pull the threads to look at — you choose \
-        how much of the inbox to see. Its filters are all optional and the defaults are right for a \
-        routine pass: omit `max_age_days` to let old read backlog resurface, or set it when the user \
-        asks for a narrower timeframe like "this week"; `limit` \
-        (a cap on threads, though unread, flagged, and notated threads always come back even beyond \
-        it); and include flags for flagged/notated/read/unread/archived/trashed (defaults include \
-        flagged + notated + read + unread and exclude archived + trashed). Let the user's steering set \
-        these — e.g. "what's flagged?" → only flagged, "anything in my trash?" → include trashed, \
-        "just the unread ones" → exclude read. THEN review what comes back and decide which threads \
+        how much of the inbox to see. Its filters are all optional and omitted values use the user's \
+        configured defaults: max_age_days \(defaults.maxAgeDescription), limit \(defaults.limit), \
+        include flagged=\(defaults.includeFlagged), notated=\(defaults.includeNotated), \
+        read=\(defaults.includeRead), unread=\(defaults.includeUnread), \
+        archived=\(defaults.includeArchived), trashed=\(defaults.includeTrashed). Let the user's \
+        steering override these for this pass — e.g. "this week" → set `max_age_days`, \
+        "what's flagged?" → only flagged, "anything in my trash?" → include trashed, \
+        "just the unread ones" → exclude read, or use a specific `limit` when they ask for an amount. \
+        THEN review what comes back and decide which threads \
         need the user. You may call `fetch_inbox_emails` again with different filters if a first pull \
         clearly missed what the user is after.
 

@@ -6,14 +6,33 @@ struct EmailSettingsView: View {
     private var pollIntervalSeconds = SettingsStorage.defaultEmailPollIntervalSeconds
     @AppStorage(SettingsKeys.emailReviewIntervalSeconds)
     private var reviewIntervalSeconds = SettingsStorage.defaultEmailReviewIntervalSeconds
+    @AppStorage(SettingsKeys.emailReviewScheduleMode)
+    private var reviewScheduleModeRaw = SettingsStorage.defaultEmailReviewScheduleMode.rawValue
     @AppStorage(SettingsKeys.emailReviewMaxThreads)
     private var reviewMaxThreads = SettingsStorage.defaultEmailReviewMaxThreads
+    @AppStorage(SettingsKeys.emailReviewDefaultMaxAgeEnabled)
+    private var reviewDefaultMaxAgeEnabled = SettingsStorage.defaultEmailReviewDefaultMaxAgeEnabled
+    @AppStorage(SettingsKeys.emailReviewDefaultMaxAgeDays)
+    private var reviewDefaultMaxAgeDays = SettingsStorage.defaultEmailReviewDefaultMaxAgeDays
+    @AppStorage(SettingsKeys.emailReviewDefaultIncludeFlagged)
+    private var reviewDefaultIncludeFlagged = SettingsStorage.defaultEmailReviewDefaultIncludeFlagged
+    @AppStorage(SettingsKeys.emailReviewDefaultIncludeNotated)
+    private var reviewDefaultIncludeNotated = SettingsStorage.defaultEmailReviewDefaultIncludeNotated
+    @AppStorage(SettingsKeys.emailReviewDefaultIncludeRead)
+    private var reviewDefaultIncludeRead = SettingsStorage.defaultEmailReviewDefaultIncludeRead
+    @AppStorage(SettingsKeys.emailReviewDefaultIncludeUnread)
+    private var reviewDefaultIncludeUnread = SettingsStorage.defaultEmailReviewDefaultIncludeUnread
+    @AppStorage(SettingsKeys.emailReviewDefaultIncludeArchived)
+    private var reviewDefaultIncludeArchived = SettingsStorage.defaultEmailReviewDefaultIncludeArchived
+    @AppStorage(SettingsKeys.emailReviewDefaultIncludeTrashed)
+    private var reviewDefaultIncludeTrashed = SettingsStorage.defaultEmailReviewDefaultIncludeTrashed
     @AppStorage(SettingsKeys.emailAutoNavigateToReviewChat)
     private var autoNavigateToReviewChat = SettingsStorage.defaultEmailAutoNavigateToReviewChat
 
     @State private var accountStore = EmailAccountStore.shared
     @State private var editingAccount: StoredEmailAccount? = nil
     @State private var presentingNewAccount: Bool = false
+    @State private var dailyReviewTimes = SettingsStorage.loadEmailReviewDailyTimes()
 
     private var pollIntervalMinutesBinding: Binding<Double> {
         Binding(
@@ -52,6 +71,23 @@ struct EmailSettingsView: View {
         let lower = Double(SettingsStorage.emailReviewMaxThreadsRange.lowerBound)
         let upper = Double(SettingsStorage.emailReviewMaxThreadsRange.upperBound)
         return lower...upper
+    }
+
+    private var reviewDefaultMaxAgeDaysBinding: Binding<Double> {
+        Binding(
+            get: { Double(reviewDefaultMaxAgeDays) },
+            set: { reviewDefaultMaxAgeDays = Int($0.rounded()) }
+        )
+    }
+
+    private var reviewDefaultMaxAgeDaysRange: ClosedRange<Double> {
+        let lower = Double(SettingsStorage.emailReviewDefaultMaxAgeDaysRange.lowerBound)
+        let upper = Double(SettingsStorage.emailReviewDefaultMaxAgeDaysRange.upperBound)
+        return lower...upper
+    }
+
+    private var usesIntervalReviewSchedule: Bool {
+        reviewScheduleModeRaw != EmailReviewScheduleMode.daily.rawValue
     }
 
     var body: some View {
@@ -111,6 +147,33 @@ struct EmailSettingsView: View {
             .disabled(!isEmailEnabled)
 
             Section {
+                Picker("Review Schedule", selection: $reviewScheduleModeRaw) {
+                    ForEach(EmailReviewScheduleMode.allCases) { mode in
+                        Text(mode.displayName).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                if usesIntervalReviewSchedule {
+                    HStack {
+                        Text("Review Interval")
+                        Spacer()
+                        Text(reviewIntervalLabel)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(
+                        value: reviewIntervalMinutesBinding,
+                        in: reviewRangeMinutes,
+                        step: 5
+                    )
+                    Text("How often the assistant reviews the inbox and creates a review chat when needed.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                } else {
+                    dailyTimesEditor
+                }
+
                 HStack {
                     Text("Sync Interval")
                     Spacer()
@@ -128,22 +191,6 @@ struct EmailSettingsView: View {
                     .foregroundStyle(.tertiary)
 
                 HStack {
-                    Text("Review Interval")
-                    Spacer()
-                    Text("\(Int(reviewIntervalMinutesBinding.wrappedValue)) min")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-                Slider(
-                    value: reviewIntervalMinutesBinding,
-                    in: reviewRangeMinutes,
-                    step: 5
-                )
-                Text("How often the assistant reviews the inbox and creates a review chat when needed.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-
-                HStack {
                     Text("Emails per Review")
                     Spacer()
                     Text("\(reviewMaxThreads)")
@@ -156,6 +203,42 @@ struct EmailSettingsView: View {
                     step: 5
                 )
                 Text("Most emails the inbox review looks at in one pass. Lower keeps each review cheaper and faster.")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+
+                Divider()
+
+                Toggle("Default max age", isOn: $reviewDefaultMaxAgeEnabled)
+                if reviewDefaultMaxAgeEnabled {
+                    HStack {
+                        Text("Max Age")
+                        Spacer()
+                        Text("\(reviewDefaultMaxAgeDays) day\(reviewDefaultMaxAgeDays == 1 ? "" : "s")")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(
+                        value: reviewDefaultMaxAgeDaysBinding,
+                        in: reviewDefaultMaxAgeDaysRange,
+                        step: 1
+                    )
+                }
+
+                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
+                    GridRow {
+                        Toggle("Flagged", isOn: $reviewDefaultIncludeFlagged)
+                        Toggle("Notated", isOn: $reviewDefaultIncludeNotated)
+                    }
+                    GridRow {
+                        Toggle("Read", isOn: $reviewDefaultIncludeRead)
+                        Toggle("Unread", isOn: $reviewDefaultIncludeUnread)
+                    }
+                    GridRow {
+                        Toggle("Archived", isOn: $reviewDefaultIncludeArchived)
+                        Toggle("Trash", isOn: $reviewDefaultIncludeTrashed)
+                    }
+                }
+                Text("These are the default fetch filters. A chat request can still override them for that one review.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
 
@@ -176,6 +259,89 @@ struct EmailSettingsView: View {
         .sheet(item: $editingAccount) { account in
             EmailAccountEditorSheet(mode: .edit(account), store: accountStore)
         }
+        .onChange(of: reviewScheduleModeRaw) { _, _ in
+            notifyReviewScheduleChanged()
+        }
+        .onChange(of: reviewIntervalSeconds) { _, _ in
+            notifyReviewScheduleChanged()
+        }
+        .onChange(of: dailyReviewTimes) { _, newValue in
+            SettingsStorage.saveEmailReviewDailyTimes(newValue)
+            notifyReviewScheduleChanged()
+        }
+    }
+
+    private var reviewIntervalLabel: String {
+        let minutes = Int(reviewIntervalMinutesBinding.wrappedValue)
+        if minutes >= 60, minutes.isMultiple(of: 60) {
+            return "\(minutes / 60) hr"
+        }
+        return "\(minutes) min"
+    }
+
+    private var dailyTimesEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(dailyReviewTimes.indices, id: \.self) { index in
+                HStack {
+                    DatePicker(
+                        "Review Time",
+                        selection: dailyTimeBinding(for: index),
+                        displayedComponents: .hourAndMinute
+                    )
+                    Button {
+                        removeDailyTime(at: index)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(dailyReviewTimes.count <= 1)
+                    .help("Remove time")
+                }
+            }
+            Button {
+                addDailyTime()
+            } label: {
+                Label("Add Time", systemImage: "plus")
+            }
+            .buttonStyle(.borderless)
+        }
+    }
+
+    private func dailyTimeBinding(for index: Int) -> Binding<Date> {
+        Binding(
+            get: {
+                let minutes = dailyReviewTimes.indices.contains(index)
+                    ? dailyReviewTimes[index]
+                    : SettingsStorage.defaultEmailReviewDailyTimes[0]
+                return SettingsStorage.dailyReviewDate(
+                    minutesAfterMidnight: minutes,
+                    onDayContaining: Date()
+                ) ?? Date()
+            },
+            set: { date in
+                guard dailyReviewTimes.indices.contains(index) else { return }
+                dailyReviewTimes[index] = SettingsStorage.dailyReviewMinutes(afterMidnightFrom: date)
+                dailyReviewTimes = Array(Set(dailyReviewTimes)).sorted()
+            }
+        )
+    }
+
+    private func addDailyTime() {
+        let next = ((dailyReviewTimes.last ?? SettingsStorage.defaultEmailReviewDailyTimes[0]) + 60)
+            % (24 * 60)
+        dailyReviewTimes = Array(Set(dailyReviewTimes + [next])).sorted()
+    }
+
+    private func removeDailyTime(at index: Int) {
+        guard dailyReviewTimes.indices.contains(index), dailyReviewTimes.count > 1 else { return }
+        dailyReviewTimes.remove(at: index)
+    }
+
+    private func notifyReviewScheduleChanged() {
+        NotificationCenter.default.post(
+            name: SettingsNotifications.emailReviewScheduleDidChange,
+            object: nil
+        )
     }
 }
 

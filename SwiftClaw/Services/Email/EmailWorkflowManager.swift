@@ -21,6 +21,7 @@ final class EmailWorkflowManager {
     private var reviewService: EmailReviewService?
     private var lastReviewRun: Date?
     private var reviewChatOpenedObserver: NSObjectProtocol?
+    private var reviewScheduleObserver: NSObjectProtocol?
 
     private init() {}
 
@@ -63,6 +64,14 @@ final class EmailWorkflowManager {
             Task { @MainActor in self?.clearDockBadge() }
         }
 
+        reviewScheduleObserver = NotificationCenter.default.addObserver(
+            forName: SettingsNotifications.emailReviewScheduleDidChange,
+            object: nil,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor in self?.restartReviewLoop(modelContainer: modelContainer) }
+        }
+
         startReviewLoop(modelContainer: modelContainer)
         Self.logger.info("email workflow started")
     }
@@ -76,6 +85,10 @@ final class EmailWorkflowManager {
         if let observer = reviewChatOpenedObserver {
             NotificationCenter.default.removeObserver(observer)
             reviewChatOpenedObserver = nil
+        }
+        if let observer = reviewScheduleObserver {
+            NotificationCenter.default.removeObserver(observer)
+            reviewScheduleObserver = nil
         }
         clearDockBadge()
         Self.logger.info("email workflow stopped")
@@ -129,18 +142,30 @@ final class EmailWorkflowManager {
     private func startReviewLoop(modelContainer: ModelContainer) {
         reviewTask = Task { [weak self] in
             guard let self else { return }
-            // Don't fire an inference call the instant the app enables
-            // email — let the first mail sync land first so the review has
-            // something to look at. The scheduler's first tick will run
-            // shortly; review then proceeds on its own cadence.
-            let initialDelay = max(60, SettingsStorage.loadEmailReviewInterval() / 4)
-            try? await Task.sleep(for: .seconds(initialDelay))
             while !Task.isCancelled {
+                let nextDate = self.nextReviewDate()
+                let delay = max(0, nextDate.timeIntervalSinceNow)
+                if delay > 0 {
+                    try? await Task.sleep(for: .seconds(Int(delay.rounded(.up))))
+                }
+                guard !Task.isCancelled else { break }
                 await self.runReviewOnce()
-                let interval = max(300, SettingsStorage.loadEmailReviewInterval())
-                try? await Task.sleep(for: .seconds(interval))
             }
         }
+    }
+
+    private func restartReviewLoop(modelContainer: ModelContainer) {
+        guard reviewService != nil else { return }
+        reviewTask?.cancel()
+        reviewTask = nil
+        startReviewLoop(modelContainer: modelContainer)
+        Self.logger.info("email review loop restarted after schedule change")
+    }
+
+    private func nextReviewDate(now: Date = Date()) -> Date {
+        let persisted = SettingsStorage.loadEmailLastReviewCompletedAt()
+        let anchor = [persisted, lastReviewRun].compactMap { $0 }.max()
+        return SettingsStorage.nextEmailReviewDate(now: now, lastCompletedAt: anchor)
     }
 
     /// `force` bypasses the 60 s overlap guard (used by the manual "Review
@@ -175,12 +200,18 @@ final class EmailWorkflowManager {
             MailSyncMonitor.shared.setReviewing(true)
         }
         guard !ProcessInfo.processInfo.isRunningInPreview else { return nil }
-        lastReviewRun = .now
+        let startedAt = Date()
+        lastReviewRun = startedAt
         let didRun = await reviewService.runOnce(
             force: force,
             targetChatID: targetChatID,
             suppressInlineSummary: conversational
         )
+        if didRun {
+            let completedAt = Date()
+            SettingsStorage.saveEmailLastReviewCompletedAt(completedAt)
+            lastReviewRun = completedAt
+        }
         let status = reviewService.lastStatusMessage
             ?? (didRun ? "Review complete" : "Review did not run")
         if force {

@@ -419,7 +419,7 @@ private struct EmailThreadRow: View {
                     .fontWeight(thread.unreadCount > 0 ? .semibold : .regular)
                     .lineLimit(1)
                 Spacer()
-                Text(thread.lastDate.formatted(date: .abbreviated, time: .shortened))
+                Text(EmailDisplayDateFormatter.label(for: thread.lastDate))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                 if hasNotes {
@@ -750,7 +750,7 @@ private struct EmailMessageCard: View {
                     Text(email.fromAddress)
                         .font(.subheadline)
                         .fontWeight(.semibold)
-                    Text(email.date.formatted(date: .abbreviated, time: .shortened))
+                    Text(EmailDisplayDateFormatter.label(for: email.date))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
