@@ -154,6 +154,14 @@ final class Email {
     /// `EmailRepository.upsertSentMessage` for the full lifecycle.
     var isLocallySynthetic: Bool = false
 
+    /// True when a local `isRead`/`isFlagged` change hasn't yet been confirmed
+    /// by a successful server `setFlags`. Set by `EmailRepository`'s flag/read
+    /// mutators, cleared by `EmailServerAction` once the server round-trip
+    /// succeeds. Guards `reconcileFlagsFromSnapshot` from clobbering an
+    /// unsynced local change with a stale server snapshot. Defaulted so
+    /// existing stores migrate without a schema bump.
+    var needsFlagSync: Bool = false
+
     init(
         id: UUID = UUID(),
         messageID: String? = nil,

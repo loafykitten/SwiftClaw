@@ -27,6 +27,8 @@ struct ChatComposerView: View {
     var onSubmit: (ChatComposerSubmission) -> Bool
 
     @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
+    @AppStorage(SettingsKeys.homeReasoningEffort)
+    private var selectedReasoningEffortRaw = ModelReasoningEffort.off.rawValue
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
     @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
     @AppStorage(SettingsKeys.webSearchEnabled)
@@ -41,12 +43,19 @@ struct ChatComposerView: View {
     @State private var previewSelection: ImageAttachmentPreviewSelection?
     @State private var availableModels = SettingsStorage.loadAvailableModels()
     @State private var isInvestigationEnabled = false
-    @State private var selectedReasoningEffort = ModelReasoningEffort.off
     @State private var isInvestigationAvailable = InvestigateTool().isConfigured
     @FocusState private var isMessageFieldFocused: Bool
 
     private var activeModelSelection: String {
         selectedModel
+    }
+
+    private var selectedReasoningEffort: ModelReasoningEffort {
+        guard selectedModelSupportsReasoning else {
+            return .off
+        }
+
+        return ModelReasoningEffort(rawValue: selectedReasoningEffortRaw) ?? .off
     }
 
     private var selectedModelCapabilities: Set<ModelCapability> {
@@ -440,10 +449,6 @@ struct ChatComposerView: View {
     }
 
     private func syncCapabilityState() {
-        if !selectedModelSupportsReasoning {
-            setReasoningEffort(.off)
-        }
-
         if !canEnableInvestigation {
             setInvestigation(false)
         }
@@ -463,7 +468,11 @@ struct ChatComposerView: View {
     }
 
     private func setReasoningEffort(_ effort: ModelReasoningEffort) {
-        selectedReasoningEffort = selectedModelSupportsReasoning ? effort : .off
+        guard selectedModelSupportsReasoning else {
+            return
+        }
+
+        selectedReasoningEffortRaw = effort.rawValue
 
         if !canEnableInvestigation {
             setInvestigation(false)

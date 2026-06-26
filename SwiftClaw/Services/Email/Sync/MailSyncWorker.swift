@@ -128,15 +128,26 @@ actor MailSyncWorker {
     ) async -> [SyncedMailbox] {
         var boxes = [SyncedMailbox(name: "INBOX", isDeletedMailbox: false)]
 
-        func append(_ name: String?, isDeletedMailbox: Bool) {
+        func append(_ name: String?, isDeletedMailbox: Bool, isArchiveMailbox: Bool = false) {
             guard let name, !name.isEmpty else { return }
             if !boxes.contains(where: { $0.name == name }) {
-                boxes.append(SyncedMailbox(name: name, isDeletedMailbox: isDeletedMailbox))
+                boxes.append(SyncedMailbox(
+                    name: name,
+                    isDeletedMailbox: isDeletedMailbox,
+                    isArchiveMailbox: isArchiveMailbox
+                ))
             }
         }
 
         append(account.sentMailbox, isDeletedMailbox: false)
         append(account.trashMailbox, isDeletedMailbox: true)
+        // Standard-IMAP only: sync a real `\Archive` SPECIAL-USE folder so mail
+        // archived from another client surfaces as archived rather than being
+        // reconciled as a Trash soft-delete. We pass the *raw* `archiveMailbox`
+        // (never the `resolvedArchiveMailbox` fallback) so this only fires when
+        // the server actually advertised `\Archive` — which excludes Gmail,
+        // whose archive target is the unbounded `\All` (All Mail) folder.
+        append(account.archiveMailbox, isDeletedMailbox: false, isArchiveMailbox: true)
 
         // Use cached special-use names when present; otherwise trigger a
         // one-shot resolve. The lookup also refreshes Archive names used by
@@ -152,6 +163,7 @@ actor MailSyncWorker {
             }
             append(refreshed?.sentMailbox ?? account.resolvedSentMailbox, isDeletedMailbox: false)
             append(refreshed?.trashMailbox ?? account.resolvedTrashMailbox, isDeletedMailbox: true)
+            append(refreshed?.archiveMailbox, isDeletedMailbox: false, isArchiveMailbox: true)
         }
         return boxes
     }
@@ -204,7 +216,8 @@ actor MailSyncWorker {
             fetched: result.messages,
             mailbox: mailbox,
             accountID: account.id,
-            isDeletedMailbox: syncedMailbox.isDeletedMailbox
+            isDeletedMailbox: syncedMailbox.isDeletedMailbox,
+            isArchiveMailbox: syncedMailbox.isArchiveMailbox
         )
     }
 
@@ -212,7 +225,8 @@ actor MailSyncWorker {
         fetched: [FetchedMessage],
         mailbox: String,
         accountID: UUID,
-        isDeletedMailbox: Bool
+        isDeletedMailbox: Bool,
+        isArchiveMailbox: Bool
     ) async -> Int {
         await MainActor.run {
             let context = ModelContext(modelContainer)
@@ -221,7 +235,8 @@ actor MailSyncWorker {
                 fetched,
                 mailbox: mailbox,
                 accountID: accountID,
-                isDeletedMailbox: isDeletedMailbox
+                isDeletedMailbox: isDeletedMailbox,
+                isArchiveMailbox: isArchiveMailbox
             )
             // Only re-cluster when messages were actually inserted. The
             // incremental path commonly returns `[]` (no new mail), and
@@ -291,4 +306,5 @@ actor MailSyncWorker {
 private struct SyncedMailbox: Sendable {
     let name: String
     let isDeletedMailbox: Bool
+    var isArchiveMailbox: Bool = false
 }

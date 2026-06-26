@@ -41,52 +41,55 @@ struct EmailView: View {
         threads.filter { $0.containsTrashed }
     }
 
-    private var filteredThreads: [EmailThread] {
+    var body: some View {
+        // Each partition filters all @Query threads and faults in
+        // `thread.messages`, so compute them ONCE per render and derive
+        // everything (filtered list, selection, visible mailboxes, the
+        // empty-state gate) from these locals — reading the partitions
+        // repeatedly used to re-run that work many times per `body` pass.
+        let inbox = inboxThreads
+        let archive = archiveThreads
+        let trash = trashThreads
+
+        let filtered: [EmailThread]
         switch selectedMailbox {
         case .inbox:
-            inboxThreads
+            filtered = inbox
         case .flagged:
-            inboxThreads.filter { $0.isFlagged }
+            filtered = inbox.filter { $0.isFlagged }
         case .archive:
-            archiveThreads
+            filtered = archive
         case .trash:
-            trashThreads
+            filtered = trash
         }
-    }
+        let selected = filtered.first { $0.id == selectedThreadID } ?? filtered.first
 
-    private var selectedThread: EmailThread? {
-        filteredThreads.first { $0.id == selectedThreadID } ?? filteredThreads.first
-    }
+        // Archive / Trash are hidden when empty so the sidebar never
+        // advertises dead mailboxes; Inbox + Flagged are always present.
+        var visibleMailboxes: [EmailMailbox] = [.inbox, .flagged]
+        if !archive.isEmpty { visibleMailboxes.append(.archive) }
+        if !trash.isEmpty { visibleMailboxes.append(.trash) }
 
-    /// Archive / Trash are hidden when empty so the sidebar never advertises
-    /// dead mailboxes; Inbox + Flagged are always present.
-    private var visibleMailboxes: [EmailMailbox] {
-        var visible: [EmailMailbox] = [.inbox, .flagged]
-        if !archiveThreads.isEmpty { visible.append(.archive) }
-        if !trashThreads.isEmpty { visible.append(.trash) }
-        return visible
-    }
+        // True when the account has *any* mail anywhere (Inbox / Archive /
+        // Trash). Gates the full-screen empty state — the per-mailbox "no
+        // messages" placeholder lives inside `threadLayout` so the sidebar
+        // stays reachable when the selected mailbox is empty (e.g. Flagged
+        // with nothing flagged). Otherwise switching to an empty mailbox
+        // replaces the whole pane with a centered placeholder and strands
+        // the user with no way back to Inbox without leaving the Email tab.
+        let hasAnyMail = !inbox.isEmpty || !archive.isEmpty || !trash.isEmpty
 
-    /// True when the account has *any* mail anywhere (Inbox / Archive /
-    /// Trash). Used as the gate for the full-screen empty state — the
-    /// per-mailbox "no messages" placeholder lives inside `threadLayout`
-    /// so the sidebar stays reachable when the selected mailbox is empty
-    /// (e.g. Flagged with nothing flagged). Otherwise switching to an
-    /// empty mailbox replaces the whole pane with a centered placeholder
-    /// and strands the user with no way back to Inbox without leaving
-    /// the Email tab.
-    private var hasAnyMail: Bool {
-        !inboxThreads.isEmpty || !archiveThreads.isEmpty || !trashThreads.isEmpty
-    }
-
-    var body: some View {
-        Group {
+        return Group {
             if !isConfigured {
                 unconfiguredState
             } else if !hasAnyMail {
                 emptyState
             } else {
-                threadLayout
+                threadLayout(
+                    filtered: filtered,
+                    selected: selected,
+                    visibleMailboxes: visibleMailboxes
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -130,9 +133,9 @@ struct EmailView: View {
                     .padding()
             }
         }
-        .onChange(of: filteredThreads.first?.id) { _, _ in
+        .onChange(of: filtered.first?.id) { _, _ in
             if selectedThreadID == nil {
-                selectedThreadID = filteredThreads.first?.id
+                selectedThreadID = filtered.first?.id
             }
         }
         .onAppear {
@@ -148,7 +151,11 @@ struct EmailView: View {
         }
     }
 
-    private var threadLayout: some View {
+    private func threadLayout(
+        filtered: [EmailThread],
+        selected: EmailThread?,
+        visibleMailboxes: [EmailMailbox]
+    ) -> some View {
         HStack(spacing: 0) {
             EmailMailboxSidebar(
                 selectedMailbox: $selectedMailbox,
@@ -164,9 +171,9 @@ struct EmailView: View {
             Divider()
 
             EmailThreadListView(
-                threads: filteredThreads,
+                threads: filtered,
                 selectedThreadID: Binding(
-                    get: { selectedThread?.id },
+                    get: { selected?.id },
                     set: { selectedThreadID = $0 }
                 )
             )
@@ -174,9 +181,9 @@ struct EmailView: View {
 
             Divider()
 
-            if let selectedThread {
+            if let selected {
                 EmailThreadDetailView(
-                    thread: selectedThread,
+                    thread: selected,
                     onReply: { email in composingReplyFor = email }
                 )
             } else {
@@ -407,16 +414,21 @@ private struct EmailThreadRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        // Bind these once per row — `latestMessage` sorts the thread's
+        // messages and `unreadCount` scans them, and both were read several
+        // times across this body (header, subject, unread badge, background).
+        let latest = thread.latestMessage
+        let unread = thread.unreadCount
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if thread.isFlagged {
                     Image(systemName: "flag.fill")
                         .foregroundStyle(.yellow)
                         .font(.caption)
                 }
-                Text(thread.latestMessage?.fromAddress ?? "Unknown")
+                Text(latest?.fromAddress ?? "Unknown")
                     .font(.subheadline)
-                    .fontWeight(thread.unreadCount > 0 ? .semibold : .regular)
+                    .fontWeight(unread > 0 ? .semibold : .regular)
                     .lineLimit(1)
                 Spacer()
                 Text(EmailDisplayDateFormatter.label(for: thread.lastDate))
@@ -437,16 +449,16 @@ private struct EmailThreadRow: View {
                     }
                 }
             }
-            Text(thread.latestMessage?.subject ?? "(no subject)")
+            Text(latest?.subject ?? "(no subject)")
                 .font(.callout)
-                .fontWeight(thread.unreadCount > 0 ? .semibold : .regular)
+                .fontWeight(unread > 0 ? .semibold : .regular)
                 .lineLimit(1)
-            Text(thread.latestMessage?.snippet ?? "")
+            Text(latest?.snippet ?? "")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
-            if thread.unreadCount > 0 {
-                Text("\(thread.unreadCount) unread")
+            if unread > 0 {
+                Text("\(unread) unread")
                     .font(.caption2)
                     .foregroundStyle(.tint)
             }
@@ -457,14 +469,14 @@ private struct EmailThreadRow: View {
         .contentShape(Rectangle())
         .background {
             RoundedRectangle(cornerRadius: 8)
-                .fill(rowBackground)
+                .fill(rowBackground(unread: unread))
         }
         .onTapGesture(perform: select)
     }
 
-    private var rowBackground: Color {
+    private func rowBackground(unread: Int) -> Color {
         if isSelected { return Color.accentColor.opacity(0.18) }
-        if thread.unreadCount > 0 { return Color.accentColor.opacity(0.07) }
+        if unread > 0 { return Color.accentColor.opacity(0.07) }
         return .clear
     }
 }
@@ -966,9 +978,11 @@ private struct EmailReplyComposerView: View {
     private func prefill() {
         toAddresses = email.fromAddress
         ccAddresses = email.ccAddresses.joined(separator: ", ")
-        subject = email.subject.lowercased().hasPrefix("re:")
-            ? email.subject
-            : "Re: \(email.subject)"
+        // Recognize the full reply/forward marker set (re/fw/fwd/aw/wg) so
+        // non-English or forwarded subjects don't get a doubled "Re: " prefix.
+        subject = ThreadResolver.replyMarker(email.subject).isEmpty
+            ? "Re: \(email.subject)"
+            : email.subject
         bodyText = Self.replyQuote(for: email)
     }
 

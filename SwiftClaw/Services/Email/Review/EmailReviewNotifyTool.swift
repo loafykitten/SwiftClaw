@@ -110,16 +110,19 @@ final class EmailReviewNotifyTool: Tool {
         }
 
         let title = "\(Self.reviewChatTitlePrefix) \(EmailReviewDateFormatter.string(from: .now))"
-        let createdChatID: UUID? = await MainActor.run {
+        let outcome: CreationOutcome = await MainActor.run {
             // Idempotency guard: a single review pass must produce at most one
             // review chat. `InferenceService.complete(...)` runs up to 8
             // tool-calling rounds; without this guard the model could call
             // `notify_user_about_emails` repeatedly and create duplicate
-            // "Inbox review — …" chats in one pass.
+            // "Inbox review — …" chats in one pass. The latch is only stamped
+            // *after* a confirmed save below, so a failed attempt leaves it
+            // false and a later round can retry — while a successful create
+            // blocks every subsequent round, preserving the at-most-one
+            // guarantee.
             if self.hasCreatedChatForRun {
-                return nil
+                return .skippedIdempotent
             }
-            self.hasCreatedChatForRun = true
 
             // Use the container's main context (we're on MainActor) so mutations
             // to an existing chat — collapsing a prior card into its label — land
@@ -157,25 +160,44 @@ final class EmailReviewNotifyTool: Tool {
             }
 
             let payload = ReviewCardPayload(reviewType: .email, items: reviewItems)
-            if let targetChatID {
-                return self.appendReview(
+            let createdChatID: UUID? = if let targetChatID {
+                self.appendReview(
                     to: targetChatID,
                     in: context,
                     payload: payload,
                     message: message
                 )
             } else {
-                return self.createReviewChat(
+                self.createReviewChat(
                     in: context,
                     title: title,
                     payload: payload,
                     message: message
                 )
             }
+
+            // Only latch *after* a confirmed save. A nil result means the save
+            // threw or the target chat was missing — nothing was persisted, so
+            // leave the latch clear and report the failure honestly instead of
+            // masquerading as the idempotency no-op.
+            guard let createdChatID else {
+                return .failed
+            }
+            self.hasCreatedChatForRun = true
+            return .created(createdChatID)
         }
 
-        if createdChatID == nil {
+        switch outcome {
+        case .skippedIdempotent:
             return "Already created a review chat for this pass — additional `notify_user_about_emails` call ignored."
+        case .failed:
+            // Honest failure: the review chat could NOT be saved and was not
+            // created. Surfacing this (rather than a success string) keeps the
+            // model from telling the user their review is ready when nothing
+            // exists, and the unset latch lets a later round retry.
+            throw ToolError.executionFailed("the review chat could not be saved and was NOT created")
+        case .created:
+            break
         }
 
         // Surface the model's summary so a conversational refresh can relay it
@@ -190,6 +212,15 @@ final class EmailReviewNotifyTool: Tool {
         }
     }
 
+    /// Outcome of a single `notify_user_about_emails` invocation, distinguishing
+    /// the idempotency no-op from a genuine save failure so the two are never
+    /// conflated into one ambiguous `nil`.
+    private enum CreationOutcome {
+        case skippedIdempotent
+        case created(UUID)
+        case failed
+    }
+
     @MainActor
     @discardableResult
     private func createReviewChat(
@@ -200,7 +231,7 @@ final class EmailReviewNotifyTool: Tool {
     ) -> UUID? {
         let chat = Chat(
             title: title,
-            modelSelection: UserDefaults.standard.string(forKey: SettingsKeys.clawModel) ?? ""
+            modelSelection: SettingsStorage.loadModelSelection(forKey: SettingsKeys.clawModel)
         )
         context.insert(chat)
 

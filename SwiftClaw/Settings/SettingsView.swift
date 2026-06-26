@@ -1221,11 +1221,10 @@ private struct ModelCapabilitySelector: View {
 }
 
 private struct BehaviorSettingsView: View {
+    @State private var availableModels = SettingsStorage.loadAvailableModels()
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
     @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
     @AppStorage(SettingsKeys.deepResearchModel) private var deepResearchModel = ""
-
-    @State private var availableModels = SettingsStorage.loadAvailableModels()
 
     var body: some View {
         Form {

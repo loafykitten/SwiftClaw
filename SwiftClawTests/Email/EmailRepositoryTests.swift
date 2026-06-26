@@ -7,6 +7,37 @@ import SwiftData
 struct EmailRepositoryTests {
     private static let accountID = UUID()
 
+    @Test func archiveUpsertReclaimsSoftDeletedInboxRow() throws {
+        let container = try Self.inMemoryContainer()
+        let repository = EmailRepository(modelContext: ModelContext(container))
+
+        // A message arrives in INBOX, then is archived from another client —
+        // the INBOX deletion pass soft-deletes the local row.
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 1, messageID: "<a@example.com>", subject: "Hi")],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+        repository.reconcileDeletions(serverUIDs: [], mailbox: "INBOX", accountID: Self.accountID)
+
+        // The Archive-folder sync brings the same message back under a new UID.
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 99, messageID: "<a@example.com>", subject: "Hi")],
+            mailbox: "Archive",
+            accountID: Self.accountID,
+            isArchiveMailbox: true
+        )
+
+        let context = ModelContext(container)
+        let matches = ((try? context.fetch(FetchDescriptor<Email>())) ?? [])
+            .filter { $0.messageID == "<a@example.com>" }
+        #expect(matches.count == 1, "reclaim must not leave a duplicate row")
+        #expect(matches.first?.isArchived == true)
+        #expect(matches.first?.isDeleted == false)
+        #expect(matches.first?.mailbox == "Archive")
+        #expect(matches.first?.uid == 99)
+    }
+
     @Test func upsertInsertsNewMessages() async throws {
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)

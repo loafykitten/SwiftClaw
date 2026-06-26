@@ -85,6 +85,48 @@ struct MailSyncWorkerDeletionReconciliationTests {
         #expect(byUID[2]?.isDeleted == false, "uid 2 stays active")
     }
 
+    @Test func messageArchivedOnAnotherClientIsReclaimedAsArchived() async throws {
+        let container = try Self.inMemoryContainer()
+        let mock = MockMailClient()
+        let accountID = UUID()
+        // The account already resolved its `\Archive` SPECIAL-USE folder, so
+        // the worker syncs Archive alongside INBOX/Sent/Trash.
+        let account = Self.completeAccount(
+            id: accountID,
+            trashMailbox: "Trash",
+            sentMailbox: "Sent",
+            archiveMailbox: "Archive"
+        )
+        await mock.setUIDValidity(7)
+        await mock.setMailbox("INBOX", messages: [Self.message(uid: 1, accountID: accountID)])
+
+        let worker = Self.makeWorker(mock: mock, account: account, container: container)
+
+        // First sync: uid 1 lands in INBOX.
+        _ = await worker.syncOnce()
+
+        // The user archives it from another client: it leaves INBOX and
+        // reappears in the Archive folder under a fresh server UID. The INBOX
+        // reconcile soft-deletes the local row, then the Archive sync must
+        // reclaim that same row as archived rather than leaving a trashed
+        // duplicate behind.
+        await mock.setMailbox("INBOX", messages: [])
+        await mock.setMailbox("Archive", messages: [
+            Self.simpleMessage(uid: 55, messageID: "<m1@example.com>", subject: "Message 1")
+        ])
+
+        _ = await worker.syncOnce()
+
+        let context = ModelContext(container)
+        let all = (try? context.fetch(FetchDescriptor<Email>())) ?? []
+        let matches = all.filter { $0.messageID == "<m1@example.com>" }
+        #expect(matches.count == 1, "the archived message must not be duplicated")
+        #expect(matches.first?.isArchived == true, "reclaimed as archived, not trashed")
+        #expect(matches.first?.isDeleted == false, "must not stay soft-deleted")
+        #expect(matches.first?.mailbox == "Archive", "row moved into the Archive mailbox")
+        #expect(matches.first?.uid == 55, "row adopts the server Archive UID")
+    }
+
     @Test func newlyArrivedMessageIsNotOrphaned() async throws {
         let container = try Self.inMemoryContainer()
         let mock = MockMailClient()
@@ -279,7 +321,12 @@ struct MailSyncWorkerDeletionReconciliationTests {
 
     private static let noteAccountID = UUID()
 
-    private static func completeAccount(id: UUID, trashMailbox: String? = nil) -> StoredEmailAccount {
+    private static func completeAccount(
+        id: UUID,
+        trashMailbox: String? = nil,
+        sentMailbox: String? = nil,
+        archiveMailbox: String? = nil
+    ) -> StoredEmailAccount {
         StoredEmailAccount(
             id: id,
             displayName: "Test",
@@ -288,7 +335,9 @@ struct MailSyncWorkerDeletionReconciliationTests {
             smtpHost: "smtp.example.com",
             smtpUsername: "me@example.com",
             fromAddress: "me@example.com",
-            trashMailbox: trashMailbox
+            archiveMailbox: archiveMailbox,
+            trashMailbox: trashMailbox,
+            sentMailbox: sentMailbox
         )
     }
 

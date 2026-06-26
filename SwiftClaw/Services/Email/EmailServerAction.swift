@@ -72,11 +72,20 @@ enum EmailServerAction {
     @discardableResult
     static func toggleFlag(email: Email, repository: EmailRepository, mailClient: MailClient?) async -> Bool? {
         guard let newValue = repository.toggleFlag(messageID: email.id) else { return nil }
-        try? await mailClient?.setFlags(
-            uid: email.uid,
-            mailbox: email.mailbox,
-            updates: MailFlagUpdate(isRead: nil, isFlagged: newValue)
-        )
+        guard let mailClient else { return newValue }
+        do {
+            try await mailClient.setFlags(
+                uid: email.uid,
+                mailbox: email.mailbox,
+                updates: MailFlagUpdate(isRead: nil, isFlagged: newValue)
+            )
+            repository.clearFlagSyncPending(messageID: email.id)
+        } catch {
+            MailSyncMonitor.shared.setStatus(
+                "Couldn't update the flag on the server: \(error.localizedDescription)",
+                syncing: false
+            )
+        }
         return newValue
     }
 
@@ -95,10 +104,18 @@ enum EmailServerAction {
         if let isRead { repository.setRead(messageID: email.id, isRead: isRead) }
         if let isFlagged { repository.setFlag(messageID: email.id, isFlagged: isFlagged) }
         guard let mailClient else { return }
-        try? await mailClient.setFlags(
-            uid: email.uid,
-            mailbox: email.mailbox,
-            updates: MailFlagUpdate(isRead: isRead, isFlagged: isFlagged)
-        )
+        do {
+            try await mailClient.setFlags(
+                uid: email.uid,
+                mailbox: email.mailbox,
+                updates: MailFlagUpdate(isRead: isRead, isFlagged: isFlagged)
+            )
+            repository.clearFlagSyncPending(messageID: email.id)
+        } catch {
+            MailSyncMonitor.shared.setStatus(
+                "Couldn't update flags on the server: \(error.localizedDescription)",
+                syncing: false
+            )
+        }
     }
 }

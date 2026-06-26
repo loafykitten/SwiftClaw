@@ -109,6 +109,7 @@ enum SettingsKeys {
     static let clawModel = "settings.behaviors.clawModel"
     static let deepResearchModel = "settings.behaviors.deepResearchModel"
     static let homeModel = "settings.home.model"
+    static let homeReasoningEffort = "settings.home.reasoningEffort"
     static let personaDisplayName = "settings.persona.displayName"
     static let personaAvatarData = "settings.persona.avatarData"
     static let assistantDisplayName = "settings.assistant.displayName"
@@ -133,8 +134,6 @@ enum SettingsKeys {
     static let emailReviewDailyTimes = "settings.email.reviewDailyTimes"
     static let emailLastReviewCompletedAt = "settings.email.lastReviewCompletedAt"
     static let emailReviewMaxThreads = "settings.email.reviewMaxThreads"
-    static let emailReviewMaxThreadsDefaultMigrated = "settings.email.reviewMaxThreads.defaultMigrated"
-    static let emailReviewMaxThreadsDefaultTenMigrated = "settings.email.reviewMaxThreads.defaultTenMigrated"
     static let emailReviewDefaultMaxAgeEnabled = "settings.email.reviewDefaultMaxAge.enabled"
     static let emailReviewDefaultMaxAgeDays = "settings.email.reviewDefaultMaxAge.days"
     static let emailReviewDefaultIncludeFlagged = "settings.email.reviewDefaultInclude.flagged"
@@ -323,6 +322,39 @@ private extension ClosedRange where Bound == Int {
 }
 
 enum SettingsStorage {
+    static func loadModelSelection(
+        forKey key: String,
+        userDefaults: UserDefaults = .standard
+    ) -> String {
+        userDefaults.string(forKey: key) ?? ""
+    }
+
+    /// Canonical Codable ⇄ `UserDefaults` helpers: persist a `Codable` value as
+    /// JSON under a settings key, decoding with a fallback when the key is
+    /// missing or unreadable. Centralizes the encode/decode dance that several
+    /// stores otherwise hand-roll.
+    static func loadCodable<T: Decodable>(
+        _ type: T.Type,
+        forKey key: String,
+        default fallback: T,
+        userDefaults: UserDefaults = .standard
+    ) -> T {
+        guard let data = userDefaults.data(forKey: key),
+              let decoded = try? JSONDecoder().decode(T.self, from: data) else {
+            return fallback
+        }
+        return decoded
+    }
+
+    static func saveCodable(
+        _ value: some Encodable,
+        forKey key: String,
+        userDefaults: UserDefaults = .standard
+    ) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        userDefaults.set(data, forKey: key)
+    }
+
     static func loadAvailableModels(userDefaults: UserDefaults = .standard) -> [String] {
         availableModels(
             azureDeployments: loadDeployments(userDefaults: userDefaults),
@@ -373,19 +405,11 @@ enum SettingsStorage {
     }
 
     static func loadDeployments(userDefaults: UserDefaults = .standard) -> [AzureDeployment] {
-        guard let data = userDefaults.data(forKey: SettingsKeys.azureDeployments) else {
-            return []
-        }
-
-        return (try? JSONDecoder().decode([AzureDeployment].self, from: data)) ?? []
+        loadCodable([AzureDeployment].self, forKey: SettingsKeys.azureDeployments, default: [], userDefaults: userDefaults)
     }
 
     static func saveDeployments(_ deployments: [AzureDeployment], userDefaults: UserDefaults = .standard) {
-        guard let data = try? JSONEncoder().encode(deployments) else {
-            return
-        }
-
-        userDefaults.set(data, forKey: SettingsKeys.azureDeployments)
+        saveCodable(deployments, forKey: SettingsKeys.azureDeployments, userDefaults: userDefaults)
     }
 
     static func loadProviderModels(
@@ -407,11 +431,7 @@ enum SettingsStorage {
         forKey key: String,
         userDefaults: UserDefaults = .standard
     ) {
-        guard let data = try? JSONEncoder().encode(models) else {
-            return
-        }
-
-        userDefaults.set(data, forKey: key)
+        saveCodable(models, forKey: key, userDefaults: userDefaults)
     }
 
     static let defaultBraveSearchRequestsPerSecond = 1.0
@@ -463,8 +483,6 @@ enum SettingsStorage {
     static let defaultEmailReviewScheduleMode = EmailReviewScheduleMode.interval
     static let defaultEmailReviewDailyTimes = [9 * 60]
     static let emailReviewDailyTimeRange: ClosedRange<Int> = 0...1439
-    private static let legacyDefaultEmailReviewMaxThreads = 40
-    private static let previousDefaultEmailReviewMaxThreads = 15
     static let defaultEmailReviewMaxThreads = 10
     static let emailReviewMaxThreadsRange: ClosedRange<Int> = 5...100
     static let defaultEmailReviewDefaultMaxAgeEnabled = false
@@ -630,25 +648,6 @@ enum SettingsStorage {
             return defaultEmailReviewMaxThreads
         }
         return emailReviewMaxThreadsRange.clamping(stored)
-    }
-
-    static func migrateEmailReviewMaxThreadsDefaultIfNeeded(userDefaults: UserDefaults = .standard) {
-        guard !userDefaults.bool(forKey: SettingsKeys.emailReviewMaxThreadsDefaultTenMigrated) else {
-            return
-        }
-        defer {
-            userDefaults.set(true, forKey: SettingsKeys.emailReviewMaxThreadsDefaultMigrated)
-            userDefaults.set(true, forKey: SettingsKeys.emailReviewMaxThreadsDefaultTenMigrated)
-        }
-
-        guard userDefaults.object(forKey: SettingsKeys.emailReviewMaxThreads) != nil else {
-            return
-        }
-        let stored = userDefaults.integer(forKey: SettingsKeys.emailReviewMaxThreads)
-        guard [legacyDefaultEmailReviewMaxThreads, previousDefaultEmailReviewMaxThreads].contains(stored) else {
-            return
-        }
-        userDefaults.set(defaultEmailReviewMaxThreads, forKey: SettingsKeys.emailReviewMaxThreads)
     }
 
     static func loadEmailReviewFetchDefaults(userDefaults: UserDefaults = .standard) -> EmailReviewFetchDefaults {

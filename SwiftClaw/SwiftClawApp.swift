@@ -40,7 +40,6 @@ struct SwiftClawApp: App {
     init() {
         Keychain.migrateAPIKeysFromUserDefaults()
         AccentColor.migrateStoredLightnessIfNeeded()
-        SettingsStorage.migrateEmailReviewMaxThreadsDefaultIfNeeded()
         EmailAccountStore.shared.migrateLegacyIfNeeded()
         EmailWorkflowManager.shared.start(modelContainer: sharedModelContainer)
     }

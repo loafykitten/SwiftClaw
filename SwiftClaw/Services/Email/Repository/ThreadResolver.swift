@@ -11,6 +11,10 @@ import Foundation
 ///     reply chain. Without the reply-marker guard we would cluster unrelated
 ///     "Lunch?" messages.
 enum ThreadResolver {
+    /// Reply-marker prefixes recognized by both `replyMarker` and
+    /// `normalizedSubject`. Single source of truth so the two stay in lockstep.
+    private static let replyPrefixes = ["re:", "fw:", "fwd:", "aw:", "wg:"]
+
     /// Clusters the supplied messages into threads. Idempotent: running it
     /// twice on the same input produces the same output.
     static func cluster(_ messages: [Email]) -> [EmailThread] {
@@ -91,9 +95,8 @@ enum ThreadResolver {
             let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
             let lower = trimmed.lowercased()
 
-            let prefixes = ["re:", "fw:", "fwd:", "aw:", "wg:"]
             var didStrip = false
-            for prefix in prefixes {
+            for prefix in ThreadResolver.replyPrefixes {
                 if lower.hasPrefix(prefix) {
                     current = String(trimmed.dropFirst(prefix.count))
                     didStrip = true
@@ -119,8 +122,7 @@ enum ThreadResolver {
     /// carries one; empty string otherwise.
     static func replyMarker(_ subject: String) -> String {
         let lower = subject.lowercased()
-        let prefixes = ["re:", "fw:", "fwd:", "aw:", "wg:"]
-        for prefix in prefixes {
+        for prefix in ThreadResolver.replyPrefixes {
             if lower.hasPrefix(prefix) {
                 return prefix
             }

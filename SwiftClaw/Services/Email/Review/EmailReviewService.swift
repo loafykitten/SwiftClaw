@@ -117,7 +117,7 @@ final class EmailReviewService {
             return false
         }
 
-        let modelSelection = UserDefaults.standard.string(forKey: SettingsKeys.clawModel) ?? ""
+        let modelSelection = SettingsStorage.loadModelSelection(forKey: SettingsKeys.clawModel)
         guard !modelSelection.isEmpty else {
             Self.logger.warning("review skipped — clawModel not configured")
             lastStatusMessage = "Review needs a model in Settings"

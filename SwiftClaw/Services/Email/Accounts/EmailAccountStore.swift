@@ -123,12 +123,12 @@ final class EmailAccountStore {
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
-        if let data = userDefaults.data(forKey: SettingsKeys.emailAccounts),
-           let decoded = try? JSONDecoder().decode([StoredEmailAccount].self, from: data) {
-            self.accounts = decoded
-        } else {
-            self.accounts = []
-        }
+        self.accounts = SettingsStorage.loadCodable(
+            [StoredEmailAccount].self,
+            forKey: SettingsKeys.emailAccounts,
+            default: [],
+            userDefaults: userDefaults
+        )
     }
 
     /// Returns a `Sendable` async closure that snapshots the current account
@@ -256,9 +256,7 @@ final class EmailAccountStore {
     // MARK: - Internals
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(accounts) {
-            userDefaults.set(data, forKey: SettingsKeys.emailAccounts)
-        }
+        SettingsStorage.saveCodable(accounts, forKey: SettingsKeys.emailAccounts, userDefaults: userDefaults)
     }
 }
 

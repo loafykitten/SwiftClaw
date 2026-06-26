@@ -28,7 +28,8 @@ final class EmailRepository {
         _ fetched: [FetchedMessage],
         mailbox: String,
         accountID: UUID,
-        isDeletedMailbox: Bool = false
+        isDeletedMailbox: Bool = false,
+        isArchiveMailbox: Bool = false
     ) -> Int {
         guard !fetched.isEmpty else { return 0 }
         var inserted = 0
@@ -54,6 +55,19 @@ final class EmailRepository {
             mailbox: mailbox,
             accountID: accountID
         )
+        // When syncing a real `\Archive` folder, a message archived from
+        // another client has left INBOX (the deletion pass may have already
+        // soft-deleted its local row earlier in this very sync). Match it back
+        // by `messageID` across mailboxes and reclaim that row as archived,
+        // rather than inserting a duplicate Archive copy and leaving a
+        // wrongly-trashed INBOX row behind.
+        let reclaimable = isArchiveMailbox
+            ? fetchArchiveReclaimCandidates(
+                messageIDs: Array(messageIDsToFetched.keys),
+                archiveMailbox: mailbox,
+                accountID: accountID
+            )
+            : [:]
 
         for message in fetched {
             if let existingEmail = existing[message.uid] {
@@ -66,12 +80,23 @@ final class EmailRepository {
                 synthetic.uid = message.uid
                 synthetic.isLocallySynthetic = false
                 reconcileFlags(existing: synthetic, fetched: message)
+            } else if let mid = message.messageID, !mid.isEmpty,
+                      let reclaimed = reclaimable[mid] {
+                // Server-side archive of a message we still hold under INBOX
+                // (or had just soft-deleted this pass): move the existing row
+                // into the Archive mailbox instead of inserting a second copy.
+                reclaimed.uid = message.uid
+                reclaimed.mailbox = mailbox
+                reclaimed.isArchived = true
+                reclaimed.isDeleted = false
+                reconcileFlags(existing: reclaimed, fetched: message)
             } else {
                 insert(
                     message: message,
                     mailbox: mailbox,
                     accountID: accountID,
-                    isDeletedMailbox: isDeletedMailbox
+                    isDeletedMailbox: isDeletedMailbox,
+                    isArchiveMailbox: isArchiveMailbox
                 )
                 inserted += 1
             }
@@ -126,6 +151,9 @@ final class EmailRepository {
         guard let email = fetchEmail(by: messageID) else { return }
         guard email.isRead != isRead else { return }
         email.isRead = isRead
+        // Mark unsynced so a stale server snapshot can't revert this before
+        // `EmailServerAction` confirms the change server-side.
+        email.needsFlagSync = true
         save()
     }
 
@@ -135,6 +163,7 @@ final class EmailRepository {
     func toggleFlag(messageID: UUID) -> Bool? {
         guard let email = fetchEmail(by: messageID) else { return nil }
         email.isFlagged.toggle()
+        email.needsFlagSync = true
         save()
         return email.isFlagged
     }
@@ -147,8 +176,19 @@ final class EmailRepository {
         guard let email = fetchEmail(by: messageID) else { return nil }
         guard email.isFlagged != isFlagged else { return email.isFlagged }
         email.isFlagged = isFlagged
+        email.needsFlagSync = true
         save()
         return email.isFlagged
+    }
+
+    /// Clears the pending-flag-sync marker once `EmailServerAction` has
+    /// confirmed the local `isRead`/`isFlagged` change landed on the server.
+    /// After this the row is fair game for `reconcileFlagsFromSnapshot` again.
+    func clearFlagSyncPending(messageID: UUID) {
+        guard let email = fetchEmail(by: messageID) else { return }
+        guard email.needsFlagSync else { return }
+        email.needsFlagSync = false
+        save()
     }
 
     // MARK: - Notes
@@ -702,6 +742,10 @@ final class EmailRepository {
         var changed = 0
         for email in locals {
             guard let snap = snapshot.flagsByUID[UInt32(email.uid)] else { continue }
+            // Don't clobber a local flag/read change that hasn't synced yet —
+            // the snapshot predates it. `EmailServerAction` clears the marker
+            // once the server confirms, releasing the row to refresh again.
+            if email.needsFlagSync { continue }
             if email.isRead != snap.isRead {
                 email.isRead = snap.isRead
                 changed += 1
@@ -770,11 +814,50 @@ final class EmailRepository {
         )
     }
 
+    /// Indexes rows that a server-side archive should reclaim: an active INBOX
+    /// row (or one the deletion pass just soft-deleted this sync) that shares a
+    /// `messageID` with a message now arriving in the Archive folder. Scoped to
+    /// one account and keyed by `messageID`. Excludes locally-synthetic Sent
+    /// echoes and anything already filed in the Archive mailbox, so only a
+    /// genuine "left INBOX → now in Archive" move reclaims its row.
+    private func fetchArchiveReclaimCandidates(
+        messageIDs: [String],
+        archiveMailbox: String,
+        accountID: UUID
+    ) -> [String: Email] {
+        guard !messageIDs.isEmpty else { return [:] }
+        // `#Predicate` can't thread `messageID ?? ""` through `contains`, so
+        // narrow to the account's INBOX + soft-deleted rows and match the
+        // `messageID` in Swift (a small per-call set).
+        let descriptor = FetchDescriptor<Email>(
+            predicate: #Predicate { email in
+                email.accountID == accountID
+                    && email.mailbox != archiveMailbox
+                    && !email.isLocallySynthetic
+                    && (email.mailbox == "INBOX" || email.isDeleted)
+            }
+        )
+        guard let results = try? modelContext.fetch(descriptor) else {
+            return [:]
+        }
+        let messageIDSet = Set(messageIDs)
+        return Dictionary(
+            results.compactMap { email in
+                guard let mid = email.messageID, !mid.isEmpty, messageIDSet.contains(mid) else {
+                    return nil
+                }
+                return (mid, email)
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
     private func insert(
         message: FetchedMessage,
         mailbox: String,
         accountID: UUID,
-        isDeletedMailbox: Bool
+        isDeletedMailbox: Bool,
+        isArchiveMailbox: Bool = false
     ) {
         let email = Email(
             messageID: message.messageID,
@@ -790,7 +873,7 @@ final class EmailRepository {
             mailbox: mailbox,
             isRead: message.isRead,
             isFlagged: message.isFlagged,
-            isArchived: false,
+            isArchived: isArchiveMailbox,
             isDeleted: isDeletedMailbox,
             inReplyTo: message.inReplyTo,
             referencesRaw: message.references,

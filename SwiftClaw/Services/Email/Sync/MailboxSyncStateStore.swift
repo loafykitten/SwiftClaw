@@ -36,12 +36,12 @@ final class MailboxSyncStateStore {
 
     init(userDefaults: UserDefaults = .standard) {
         self.userDefaults = userDefaults
-        if let data = userDefaults.data(forKey: SettingsKeys.emailMailboxSyncStates),
-           let decoded = try? JSONDecoder().decode([String: MailboxSyncState].self, from: data) {
-            self.states = decoded
-        } else {
-            self.states = [:]
-        }
+        self.states = SettingsStorage.loadCodable(
+            [String: MailboxSyncState].self,
+            forKey: SettingsKeys.emailMailboxSyncStates,
+            default: [:],
+            userDefaults: userDefaults
+        )
     }
 
     func state(for accountID: UUID, mailbox: String) -> MailboxSyncState? {
@@ -91,8 +91,6 @@ final class MailboxSyncStateStore {
     }
 
     private func persist() {
-        if let data = try? JSONEncoder().encode(states) {
-            userDefaults.set(data, forKey: SettingsKeys.emailMailboxSyncStates)
-        }
+        SettingsStorage.saveCodable(states, forKey: SettingsKeys.emailMailboxSyncStates, userDefaults: userDefaults)
     }
 }
