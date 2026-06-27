@@ -530,12 +530,33 @@ private enum ChatScrollTarget {
 private struct ChatHeaderView: View {
     let chat: Chat
 
+    @Environment(\.modelContext) private var modelContext
+
+    @State private var isHovering = false
+    @State private var isEditingTitle = false
+    @State private var draftTitle = ""
+    @State private var isGeneratingTitle = false
+    @FocusState private var isTitleFieldFocused: Bool
+
+    private var isEmailReviewChat: Bool {
+        chat.title.hasPrefix(EmailReviewNotifyTool.reviewChatTitlePrefix)
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(chat.title)
-                    .font(.headline)
-                    .lineLimit(1)
+                if isEditingTitle {
+                    TextField("Chat title", text: $draftTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .focused($isTitleFieldFocused)
+                        .onSubmit { commitTitleEdit() }
+                        .onExitCommand { cancelTitleEdit() }
+                } else {
+                    Text(chat.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                }
 
                 Text(chat.modelSelection)
                     .font(.caption)
@@ -545,6 +566,31 @@ private struct ChatHeaderView: View {
 
             Spacer()
 
+            HStack(spacing: 2) {
+                if !isEmailReviewChat {
+                    if isGeneratingTitle {
+                        ProgressView()
+                            .controlSize(.small)
+                            .help("Generating title")
+                    } else {
+                        ChatHistoryActionButton(
+                            systemName: "sparkles",
+                            label: "Regenerate title",
+                            action: { Task { await regenerateTitle() } }
+                        )
+                        .disabled(chat.isGenerating)
+                    }
+                }
+
+                ChatHistoryActionButton(
+                    systemName: "square.and.pencil",
+                    label: "Rename chat",
+                    action: { beginTitleEdit() }
+                )
+                .disabled(chat.isGenerating)
+                .opacity(isHovering && !isEditingTitle ? 1 : 0)
+            }
+
             if chat.isGenerating {
                 ProgressView()
                     .controlSize(.small)
@@ -552,6 +598,41 @@ private struct ChatHeaderView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
+        .onHover { isHovering = $0 }
+        .onChange(of: isEditingTitle) { _, isEditing in
+            if isEditing {
+                isTitleFieldFocused = true
+            }
+        }
+    }
+
+    private func beginTitleEdit() {
+        draftTitle = chat.title
+        isEditingTitle = true
+    }
+
+    private func commitTitleEdit() {
+        let trimmed = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            cancelTitleEdit()
+            return
+        }
+
+        chat.title = trimmed
+        try? modelContext.save()
+        isEditingTitle = false
+    }
+
+    private func cancelTitleEdit() {
+        isEditingTitle = false
+    }
+
+    private func regenerateTitle() async {
+        guard !isGeneratingTitle else { return }
+        isGeneratingTitle = true
+        defer { isGeneratingTitle = false }
+
+        await ChatTitleService.regenerateTitle(for: chat, in: modelContext)
     }
 }
 

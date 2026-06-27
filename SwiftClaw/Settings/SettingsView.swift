@@ -9,7 +9,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     case persona = "Persona"
     case personality = "Personality"
     case providers = "Providers"
-    case behaviors = "Behaviors"
+    case behaviors = "Model Behaviors"
     case email = "Email"
 
     var id: String { rawValue }
@@ -1224,36 +1224,55 @@ private struct BehaviorSettingsView: View {
     @State private var availableModels = SettingsStorage.loadAvailableModels()
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
     @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
+    @AppStorage(SettingsKeys.clawReasoningEffort)
+    private var clawReasoningEffortRaw = SettingsStorage.defaultClawReasoningEffort.rawValue
     @AppStorage(SettingsKeys.deepResearchModel) private var deepResearchModel = ""
+
+    /// Non-reasoning models offered for the Swift (lightweight/title-gen) picker.
+    private var swiftModels: [String] {
+        availableModels.filter {
+            !SettingsStorage.capabilities(for: $0).contains(.reasoning)
+        }
+    }
+
+    /// Reasoning-capable models offered for the Claw (companion) picker.
+    private var clawModels: [String] {
+        availableModels.filter {
+            SettingsStorage.capabilities(for: $0).contains(.reasoning)
+        }
+    }
+
+    private var clawModelIsUnset: Bool {
+        clawModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         Form {
             Section {
-                ModelPicker(
-                    title: "Swift Model",
-                    description: "Title gen, non-reasoning tasks",
-                    selection: $swiftModel,
-                    models: availableModels
-                )
-                ModelPicker(
-                    title: "Claw Model",
-                    description: "Companion model, reasoning tasks",
-                    selection: $clawModel,
-                    models: availableModels
-                )
-                ModelPicker(
-                    title: "Deep Research Model",
-                    description: "Long-running research tasks",
-                    selection: $deepResearchModel,
-                    models: availableModels
-                )
+                ModelSelectionRow(selection: $swiftModel, models: swiftModels)
             } header: {
-                Text("Model Configuration")
+                ModelSectionHeader(title: "Swift Model", subtitle: "Title gen, non-reasoning tasks")
             } footer: {
                 if availableModels.isEmpty {
                     Text("No models available. Add deployments or models in the Providers section.")
                         .foregroundStyle(.secondary)
                 }
+            }
+
+            Section {
+                ModelSelectionRow(selection: $clawModel, models: clawModels)
+                ReasoningEffortRow(
+                    selection: $clawReasoningEffortRaw,
+                    isDisabled: clawModelIsUnset
+                )
+            } header: {
+                ModelSectionHeader(title: "Claw Model", subtitle: "Bigger tasks, reasoning tasks")
+            }
+
+            Section {
+                ModelSelectionRow(selection: $deepResearchModel, models: availableModels)
+            } header: {
+                ModelSectionHeader(title: "Research Model", subtitle: "Investigation, Deep Research tasks")
             }
         }
         .formStyle(.grouped)
@@ -1268,9 +1287,23 @@ private struct BehaviorSettingsView: View {
     }
 }
 
-private struct ModelPicker: View {
+private struct ModelSectionHeader: View {
     let title: String
-    let description: String?
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.headline)
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+        }
+    }
+}
+
+private struct ModelSelectionRow: View {
     @Binding var selection: String
     let models: [String]
 
@@ -1281,7 +1314,7 @@ private struct ModelPicker: View {
 
     var body: some View {
         LabeledContent {
-            Picker(title, selection: $selection) {
+            Picker(selection: $selection) {
                 Text("None").tag("")
                 if isSelectionMissing {
                     Text("\(selection) (unavailable)").tag(selection)
@@ -1289,19 +1322,38 @@ private struct ModelPicker: View {
                 ForEach(models, id: \.self) { model in
                     Text(model).tag(model)
                 }
+            } label: {
+                Text("Model")
             }
             .labelsHidden()
-            .frame(maxWidth: 320)
+            .frame(maxWidth: 360, alignment: .trailing)
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                if let description {
-                    Text(description)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            Text("Model")
+        }
+    }
+}
+
+private struct ReasoningEffortRow: View {
+    @Binding var selection: String
+    var isDisabled: Bool = false
+
+    var body: some View {
+        LabeledContent {
+            Picker("Reasoning Effort", selection: $selection) {
+                ForEach(ModelReasoningEffort.selectableCases) { effort in
+                    Text(effort.displayName).tag(effort.rawValue)
                 }
             }
+            .labelsHidden()
+            .frame(maxWidth: 360, alignment: .trailing)
+            .disabled(isDisabled)
+            .help("Reasoning effort sent for the Claw model")
+        } label: {
+            Text("Reasoning Effort")
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Claw reasoning effort")
+        .accessibilityValue(ModelReasoningEffort(rawValue: selection)?.displayName ?? "Off")
     }
 }
 

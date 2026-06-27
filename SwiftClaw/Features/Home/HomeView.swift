@@ -122,6 +122,14 @@ struct HomeView: View {
             )
         }
 
+        Task {
+            await ChatTitleService.generateInitialTitle(
+                for: chat,
+                userInput: input,
+                in: modelContext
+            )
+        }
+
         return true
     }
 

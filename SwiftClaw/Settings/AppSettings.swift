@@ -107,6 +107,7 @@ enum SettingsKeys {
     static let openRouterModels = "settings.openRouter.models"
     static let swiftModel = "settings.behaviors.swiftModel"
     static let clawModel = "settings.behaviors.clawModel"
+    static let clawReasoningEffort = "settings.behaviors.clawReasoningEffort"
     static let deepResearchModel = "settings.behaviors.deepResearchModel"
     static let homeModel = "settings.home.model"
     static let homeReasoningEffort = "settings.home.reasoningEffort"
@@ -388,6 +389,15 @@ enum SettingsStorage {
         userDefaults.string(forKey: key) ?? ""
     }
 
+    /// Default reasoning effort for the Claw model — the companion model is
+    /// designated for reasoning tasks, so it defaults to a non-`.off` effort.
+    static let defaultClawReasoningEffort: ModelReasoningEffort = .medium
+
+    static func loadClawReasoningEffort(userDefaults: UserDefaults = .standard) -> ModelReasoningEffort {
+        let raw = userDefaults.string(forKey: SettingsKeys.clawReasoningEffort)
+        return raw.flatMap(ModelReasoningEffort.init(rawValue:)) ?? defaultClawReasoningEffort
+    }
+
     /// Canonical Codable ⇄ `UserDefaults` helpers: persist a `Codable` value as
     /// JSON under a settings key, decoding with a fallback when the key is
     /// missing or unreadable. Centralizes the encode/decode dance that several
@@ -414,12 +424,26 @@ enum SettingsStorage {
         userDefaults.set(data, forKey: key)
     }
 
-    static func loadAvailableModels(userDefaults: UserDefaults = .standard) -> [String] {
-        availableModels(
+    static func loadAvailableModels(
+        requiresReasoning: Bool? = nil,
+        userDefaults: UserDefaults = .standard
+    ) -> [String] {
+        let models = availableModels(
             azureDeployments: loadDeployments(userDefaults: userDefaults),
             neuralwattModels: loadProviderModels(forKey: SettingsKeys.neuralwattModels, userDefaults: userDefaults),
             openRouterModels: loadProviderModels(forKey: SettingsKeys.openRouterModels, userDefaults: userDefaults)
         )
+
+        guard let requiresReasoning else {
+            return models
+        }
+
+        return models.filter { selection in
+            let capabilities = capabilities(for: selection, userDefaults: userDefaults)
+            return requiresReasoning
+                ? capabilities.contains(.reasoning)
+                : !capabilities.contains(.reasoning)
+        }
     }
 
     static func availableModels(

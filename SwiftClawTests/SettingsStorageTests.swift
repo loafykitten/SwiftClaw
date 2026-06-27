@@ -162,4 +162,74 @@ struct SettingsStorageTests {
 
         #expect(SettingsStorage.loadEmailReviewMaxThreads(userDefaults: fixture.defaults) == 15)
     }
+
+    @Test func clawReasoningEffortDefaultsToMedium() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        #expect(SettingsStorage.defaultClawReasoningEffort == .medium)
+        #expect(SettingsStorage.loadClawReasoningEffort(userDefaults: fixture.defaults) == .medium)
+    }
+
+    @Test func clawReasoningEffortPersistsExplicitStoredValue() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(ModelReasoningEffort.high.rawValue, forKey: SettingsKeys.clawReasoningEffort)
+
+        #expect(SettingsStorage.loadClawReasoningEffort(userDefaults: fixture.defaults) == .high)
+    }
+
+    @Test func clawReasoningEffortRecoversFromInvalidRawValueAsMedium() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set("bogus", forKey: SettingsKeys.clawReasoningEffort)
+
+        #expect(SettingsStorage.loadClawReasoningEffort(userDefaults: fixture.defaults) == .medium)
+    }
+
+    @Test func availableModelsPartitionsByReasoningCapability() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        SettingsStorage.saveDeployments(
+            [
+                AzureDeployment(
+                    deploymentName: "reasoning-deploy",
+                    displayName: "Reasoning",
+                    capabilities: [.reasoning, .tools]
+                ),
+                AzureDeployment(
+                    deploymentName: "plain-deploy",
+                    displayName: "Plain",
+                    capabilities: [.json, .vision]
+                ),
+            ],
+            userDefaults: fixture.defaults
+        )
+        SettingsStorage.saveProviderModels(
+            [
+                ProviderModel(name: "reasoning-model", capabilities: [.reasoning]),
+                ProviderModel(name: "plain-model"),
+            ],
+            forKey: SettingsKeys.neuralwattModels,
+            userDefaults: fixture.defaults
+        )
+
+        let all = SettingsStorage.loadAvailableModels(userDefaults: fixture.defaults)
+        #expect(all.count == 4)
+
+        let reasoning = SettingsStorage.loadAvailableModels(
+            requiresReasoning: true,
+            userDefaults: fixture.defaults
+        )
+        #expect(reasoning == ["Azure: Reasoning", "Neuralwatt: reasoning-model"])
+
+        let nonReasoning = SettingsStorage.loadAvailableModels(
+            requiresReasoning: false,
+            userDefaults: fixture.defaults
+        )
+        #expect(nonReasoning == ["Azure: Plain", "Neuralwatt: plain-model"])
+    }
 }
