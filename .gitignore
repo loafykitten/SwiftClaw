@@ -13,6 +13,26 @@ DerivedData/
 *.dSYM.zip
 *.dSYM
 
+# Swift compiler intermediates (spill from tart VM / in-tree builds)
+*.swiftmodule
+*.swiftdeps
+*.d
+*.dia
+*.d.tmp
+
+# Editor
+.vscode/
+
+# Harness workflow artifacts (ephemeral, regenerated each run)
+PLAN.md
+REPRO.md
+IMPLEMENTATION.md
+TESTS.md
+REVIEW.md
+REPAIR.md
+FINAL_GATE.md
+SUMMARY.md
+
 # macOS
 .DS_Store
 

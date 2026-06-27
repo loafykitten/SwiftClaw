@@ -11,8 +11,10 @@ depth. The shared CLI toolset (rg, fd, ast-grep, …) lives in `~/.claude/CLAUDE
 ```bash
 # Run a suite
 xcodebuild -scheme SwiftClaw -destination 'platform=macOS' test \
+  -derivedDataPath /tmp/DerivedData \
   -only-testing:SwiftClawTests/EmailReviewServiceTests
 
 # Build check
-xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build
+xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build \
+  -derivedDataPath /tmp/DerivedData
 ```
