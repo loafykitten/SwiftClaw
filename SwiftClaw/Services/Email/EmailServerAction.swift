@@ -65,6 +65,32 @@ enum EmailServerAction {
         }
     }
 
+    /// Irreversibly deletes the email: expunges the server copy (best-effort)
+    /// AND hard-deletes the local row + its notes + on-disk attachment bytes.
+    /// Only the Trash-mailbox "Delete Permanently" affordance should call this;
+    /// the local row already being in Trash implies a prior `delete`, so the
+    /// server call here is the expunge on the Trash mailbox.
+    ///
+    /// Server expunge runs first; if it fails the error surfaces through
+    /// `MailSyncMonitor` but the local hard-delete still proceeds — losing
+    /// local-only state because the server call failed would be worse than
+    /// leaving the server copy to be re-synced. If the account has been removed
+    /// (`mailClient == nil`) the server call is skipped and the local
+    /// hard-delete still runs.
+    static func deletePermanently(email: Email, repository: EmailRepository, mailClient: MailClient?) async {
+        if let mailClient {
+            do {
+                try await mailClient.deletePermanently(uid: email.uid, in: email.mailbox)
+            } catch {
+                MailSyncMonitor.shared.setStatus(
+                    "Couldn't expunge from the server: \(error.localizedDescription)",
+                    syncing: false
+                )
+            }
+        }
+        repository.deletePermanently(messageID: email.id)
+    }
+
     /// Toggles the flag locally + mirrors the new value to the server. Returns
     /// the new flag state so review-card / detail-view callers can use it
     /// without re-reading the model (matches `EmailRepository.toggleFlag`'s

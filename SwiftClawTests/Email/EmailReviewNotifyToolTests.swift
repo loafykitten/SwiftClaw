@@ -226,6 +226,65 @@ struct EmailReviewNotifyToolTests {
         #expect(messages[2].content == "Updated analysis found one item.")
     }
 
+    /// Conversational refresh path: `suppressInlineSummary: true` posts just
+    /// the card (no inline summary `ChatMessage`), so the chat assistant
+    /// delivers the summary as its single closing reply — no duplicate
+    /// "card posted above" follow-up.
+    @Test func suppressInlineSummaryOmitsSummaryMessage() async throws {
+        let container = try Self.inMemoryContainer()
+        let setupContext = ModelContext(container)
+        let email = Email(
+            messageID: "<suppress@example.com>",
+            subject: "Conversational refresh",
+            fromAddress: "sender@example.com",
+            toAddresses: ["me@example.com"],
+            date: .now,
+            bodyText: "Needs a fresh look."
+        )
+        let chat = Chat(title: "Inbox review — existing", modelSelection: "test")
+        let priorCard = ChatMessage(
+            role: .assistant,
+            content: "",
+            sortIndex: 0,
+            reviewCard: ReviewCardPayload(
+                reviewType: .email,
+                items: [ReviewItem(itemID: email.id, actionToken: .review, actionLabel: "Review")]
+            )
+        )
+        priorCard.chat = chat
+        setupContext.insert(email)
+        setupContext.insert(chat)
+        setupContext.insert(priorCard)
+        try setupContext.save()
+
+        let tool = EmailReviewNotifyTool(
+            modelContainer: container,
+            targetChatID: chat.id,
+            suppressInlineSummary: true
+        )
+        _ = try await tool.execute(arguments: [
+            "message": .string("Updated analysis found one item."),
+            "email_actions": .array([
+                .object([
+                    "email_guid": .string(email.id.uuidString),
+                    "action": .string("review"),
+                    "summary": .string("Fresh review")
+                ])
+            ])
+        ])
+
+        let readContext = ModelContext(container)
+        let refreshed = try #require(try readContext.fetch(FetchDescriptor<Chat>()).first)
+        let messages = refreshed.sortedMessages
+        // Exactly 2 messages: the prior card collapsed to the label + the
+        // fresh card. No inline summary — the assistant relays it instead.
+        #expect(messages.count == 2)
+        #expect(messages[0].reviewCard == nil)
+        #expect(messages[0].content == "An updated analysis has been requested.")
+        #expect(messages[1].reviewCard?.items.count == 1)
+        #expect(messages[1].content.isEmpty)
+    }
+
     @Test func executeRejectsMissingArguments() async throws {
         let container = try Self.inMemoryContainer()
         let tool = EmailReviewNotifyTool(modelContainer: container)

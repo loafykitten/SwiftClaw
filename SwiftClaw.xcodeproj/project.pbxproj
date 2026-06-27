@@ -11,6 +11,16 @@
 		3731CD0E2FDBE3D90052AE22 /* SwiftMail in Frameworks */ = {isa = PBXBuildFile; productRef = 3731CD0F2FDBE3D90052AE22 /* SwiftMail */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		D0000000000000000000A007 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3731CCF22FDBDB110052AE22 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3731CCF92FDBDB110052AE22;
+			remoteInfo = SwiftClaw;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		3731CCFA2FDBDB110052AE22 /* SwiftClaw.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SwiftClaw.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3731CD0A2FDBE3D90052AE22 /* Package.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Package.swift; sourceTree = "<group>"; };
@@ -40,10 +50,8 @@
 		};
 		D0000000000000000000A004 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
@@ -109,8 +117,6 @@
 				D0000000000000000000A001 /* SwiftClawTests */,
 			);
 			name = SwiftClawTests;
-			packageProductDependencies = (
-			);
 			productName = SwiftClawTests;
 			productReference = D0000000000000000000A008 /* SwiftClawTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -158,16 +164,6 @@
 		};
 /* End PBXProject section */
 
-/* Begin PBXContainerItemProxy section */
-		D0000000000000000000A007 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 3731CCF22FDBDB110052AE22 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 3731CCF92FDBDB110052AE22;
-			remoteInfo = SwiftClaw;
-		};
-/* End PBXContainerItemProxy section */
-
 /* Begin PBXResourcesBuildPhase section */
 		3731CCF82FDBDB110052AE22 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
@@ -176,10 +172,8 @@
 		};
 		D0000000000000000000A005 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
@@ -191,10 +185,8 @@
 		};
 		D0000000000000000000A003 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
 			files = (
 			);
-			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
@@ -399,7 +391,7 @@
 			};
 			name = Release;
 		};
-		D0000000000000000000A00A /* Debug */ = {
+		D0000000000000000000A00A /* Debug configuration for PBXNativeTarget "SwiftClawTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -420,7 +412,7 @@
 			};
 			name = Debug;
 		};
-		D0000000000000000000A00B /* Release */ = {
+		D0000000000000000000A00B /* Release configuration for PBXNativeTarget "SwiftClawTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -463,8 +455,8 @@
 		D0000000000000000000A009 /* Build configuration list for PBXNativeTarget "SwiftClawTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				D0000000000000000000A00A /* Debug */,
-				D0000000000000000000A00B /* Release */,
+				D0000000000000000000A00A /* Debug configuration for PBXNativeTarget "SwiftClawTests" */,
+				D0000000000000000000A00B /* Release configuration for PBXNativeTarget "SwiftClawTests" */,
 			);
 			defaultConfigurationName = Release;
 		};

@@ -163,18 +163,3 @@ struct SettingsStorageTests {
         #expect(SettingsStorage.loadEmailReviewMaxThreads(userDefaults: fixture.defaults) == 15)
     }
 }
-
-private struct UserDefaultsFixture {
-    let suiteName: String
-    let defaults: UserDefaults
-
-    init() throws {
-        suiteName = "SwiftClawTests-\(UUID().uuidString)"
-        defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-    }
-
-    func cleanup() {
-        defaults.removePersistentDomain(forName: suiteName)
-    }
-}

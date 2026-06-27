@@ -358,7 +358,11 @@ struct MailSyncWorkerDeletionReconciliationTests {
             modelContainer: container,
             clientFactory: { _ in mock },
             syncStateProvider: provider,
-            syncStateUpdater: updater
+            syncStateUpdater: updater,
+            // This suite exercises deletion reconciliation directly, so force
+            // the full UID-set scan on every pass rather than the throttled
+            // production cadence.
+            reconcileEveryNPasses: 1
         )
     }
 

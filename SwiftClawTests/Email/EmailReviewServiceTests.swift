@@ -36,10 +36,9 @@ struct EmailReviewServiceTests {
         // Confirm the thread is eligible for review before the pass.
         #expect(repository.fetchNonArchivedThreadsForReview().count == 1)
 
-        UserDefaults.standard.set("test-claw-model", forKey: SettingsKeys.clawModel)
-        defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
-
-        let service = EmailReviewService(modelContainer: container)
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
         // Inject a failing inference path — simulates a network blip, auth
         // error, rate limit, or context-overflow throw.
         service.completeProvider = { _, _, _, _ in
@@ -75,10 +74,9 @@ struct EmailReviewServiceTests {
 
         #expect(repository.fetchNonArchivedThreadsForReview().count == 1)
 
-        UserDefaults.standard.set("test-claw-model", forKey: SettingsKeys.clawModel)
-        defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
-
-        let service = EmailReviewService(modelContainer: container)
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
         // A successful pass where the model fetched the inbox (so the threads
         // are recorded for stamping) but surfaced nothing — the legitimate
         // "looked, nothing to do" case.
@@ -109,10 +107,9 @@ struct EmailReviewServiceTests {
         repository.upsertMessages([message], mailbox: "INBOX", accountID: UUID())
         repository.resolveThreads()
 
-        UserDefaults.standard.set("test-claw-model", forKey: SettingsKeys.clawModel)
-        defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
-
-        let service = EmailReviewService(modelContainer: container)
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
         // First pass fetches (recording the thread) + stamps, so the
         // default-arg path now skips it.
         service.completeProvider = Self.fetchingProvider()
@@ -173,10 +170,9 @@ struct EmailReviewServiceTests {
         // Sanity: all threads are eligible before the pass.
         #expect(repository.fetchNonArchivedThreadsForReview().count == total)
 
-        UserDefaults.standard.set("test-claw-model", forKey: SettingsKeys.clawModel)
-        defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
-
-        let service = EmailReviewService(modelContainer: container)
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
         let capture = FetchResultCapture()
         service.completeProvider = Self.fetchingProvider(capture: capture)
 
@@ -259,10 +255,9 @@ struct EmailReviewServiceTests {
 
         #expect(repository.fetchNonArchivedThreadsForReview().count == 1)
 
-        UserDefaults.standard.set("test-claw-model", forKey: SettingsKeys.clawModel)
-        defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
-
-        let service = EmailReviewService(modelContainer: container)
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
         let capture = FetchResultCapture()
         service.completeProvider = Self.fetchingProvider(capture: capture)
 
@@ -294,16 +289,14 @@ struct EmailReviewServiceTests {
         repository.upsertMessages([message], mailbox: "INBOX", accountID: accountID)
         repository.resolveThreads()
 
-        let defaults: [String: Any] = [
-            SettingsKeys.clawModel: "test-claw-model",
-            SettingsKeys.assistantDisplayName: "Mittens",
-            SettingsKeys.assistantUsesCustomPersonality: true,
-            SettingsKeys.assistantCustomPersonality: "Speak like a terse pirate captain."
-        ]
-        defaults.forEach { UserDefaults.standard.set($0.value, forKey: $0.key) }
-        defer { defaults.keys.forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        fixture.defaults.set("test-claw-model", forKey: SettingsKeys.clawModel)
+        fixture.defaults.set("Mittens", forKey: SettingsKeys.assistantDisplayName)
+        fixture.defaults.set(true, forKey: SettingsKeys.assistantUsesCustomPersonality)
+        fixture.defaults.set("Speak like a terse pirate captain.", forKey: SettingsKeys.assistantCustomPersonality)
 
-        let service = EmailReviewService(modelContainer: container)
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
         let capture = PromptCapture()
         service.completeProvider = { messages, _, _, _ in
             await capture.record(messages: messages)
@@ -355,10 +348,9 @@ struct EmailReviewServiceTests {
         }
         try context.save()
 
-        UserDefaults.standard.set("test-claw-model", forKey: SettingsKeys.clawModel)
-        defer { UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel) }
-
-        let service = EmailReviewService(modelContainer: container)
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
         let capture = PromptCapture()
         service.completeProvider = { messages, _, _, _ in
             await capture.record(messages: messages)
@@ -375,10 +367,11 @@ struct EmailReviewServiceTests {
             default: return nil
             }
         }
-        // Prior conversation is replayed; the empty card message is not.
+        // Prior conversation is replayed; the empty card message (and any
+        // other whitespace-only content) is filtered out by `chatHistory`.
         #expect(contents.contains("Earlier I flagged the budget thread."))
         #expect(contents.contains("Could you run an additional analysis?"))
-        #expect(!contents.contains(""))
+        #expect(contents.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         // The system prompt asks the model to continue rather than restart, and
         // to honor any steering in the user's latest message for this run.
         let systemPrompt = try #require(await capture.systemPrompt)
@@ -402,8 +395,10 @@ struct EmailReviewServiceTests {
         repository.upsertMessages([message], mailbox: "INBOX", accountID: UUID())
         repository.resolveThreads()
 
-        UserDefaults.standard.removeObject(forKey: SettingsKeys.clawModel)
-        let service = EmailReviewService(modelContainer: container)
+        // Isolated defaults with NO clawModel set.
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
         service.completeProvider = { _, _, _, _ in
             Issue.record("inference must not be called when no model is configured")
             return ""
@@ -418,6 +413,15 @@ struct EmailReviewServiceTests {
     }
 
     // MARK: - Helpers
+
+    /// Builds an isolated `UserDefaults` fixture pre-seeded with a `clawModel`
+    /// value so the model-configured guard in `EmailReviewService.runOnce`
+    /// doesn't short-circuit. Caller owns the cleanup (`fixture.cleanup()`).
+    private static func fixtureWithClawModel() throws -> UserDefaultsFixture {
+        let fixture = try UserDefaultsFixture()
+        fixture.defaults.set("test-claw-model", forKey: SettingsKeys.clawModel)
+        return fixture
+    }
 
     private actor PromptCapture {
         private(set) var userPrompt: String? = nil

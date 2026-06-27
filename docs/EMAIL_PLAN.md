@@ -4,11 +4,11 @@ The email feature is code-complete for the current macOS MVP. The only active
 remaining work is live end-to-end verification against a real mail account.
 
 Current local verification, June 25, 2026:
-- `swift test` passes: 149 tests across 22 suites.
+- `xcodebuild ... test` passes: 167 tests across 22 suites.
   (The `SwiftClawTests` unit-test target and a shared test
   scheme are wired into the project; the test folder is attached as a
   synchronized group, so new test files are picked up automatically.)
-- `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build` passes.
+- `xcodebuild ... build` passes.
 
 ## Shipped Scope
 
@@ -166,6 +166,50 @@ return.
 - Memory-backed email review context, such as sender-level preferences.
 - More review follow-up tools, such as reply/delete, after the note/flag loop
   is used live.
+
+### Low-priority cleanup (post-merge)
+
+- `MailSyncWorker.reconcile` uses `preserveSynthetic = (mailbox != "INBOX")`
+  as a heuristic for the Sent-folder synthetic-row preservation flag. Compare
+  against `account.resolvedSentMailbox` instead — functionally correct today
+  (synthetics only land in Sent) but fragile if other mailboxes ever carry
+  synthetics.
+- `SwiftMailClient`'s three `resolved*Mailbox` accessors each redundantly
+  call `resolveSpecialUseMailboxes()`; consolidate into one shared
+  `resolveSpecialUseFoldersIfNeeded()` helper.
+- `EmailAccountStore.update(_:)` silently re-adds a deleted account if it
+  races a mid-sync special-use-folder resolution. Guard against missing index
+  (or narrow to `updateCachedMailboxes(for:)` that no-ops on missing account).
+- `EmailReviewDescriptors` allocates a fresh `DateFormatter` per call (per
+  message in a tight loop). Cache as `static let` or use `Date.FormatStyle`.
+- `ThreadResolver` doc comment overstates the case-sensitivity gap — the
+  prefix comparison lower-cases, only the subject body is case-sensitive.
+- `Email.stripHTML` comment claims "excessive" blank lines collapsed; the
+  implementation collapses all blank lines. Fix the comment or the behavior.
+- `EmailReviewService.systemPrompt` embeds persona with `.standalone` mode
+  (inverse of the AGENTS.md `.prependPersona` convention). Intentional to
+  avoid double-stamping — add a comment noting the exemption so a future
+  reader doesn't "fix" it by switching to `.prependPersona`.
+- `MockMailClient` uses `@preconcurrency MailClient` — likely unnecessary
+  now that `MailClient` is cleanly `Sendable`.
+- `EmailView.swift:1066` (now in `EmailReplyComposerView.swift`) has a
+  redundant `at < address.endIndex` bound check (always true when
+  `lastIndex(of: "@")` returns non-nil). Drop it.
+- `EmailHTMLView` uses string-KVC `setValue(false, forKey: "drawsBackground")`
+  on WKWebView. Migrate to `isOpaque = false` + `underPageBackgroundColor =
+  .clear` when convenient.
+- Tests: consolidate the three private `UserDefaultsFixture` copies — already
+  done; one shared fixture lives in `SwiftClawTests/Fixtures/`. Remaining test
+  cleanup: tighten brittle substring/`"threadID"`-count assertions in
+  `EmailReviewFetchTests`; the under-discriminating stale-resurface test in
+  `EmailRepositoryTests`; the `||` singular/plural assertion in
+  `EmailReviewNotifyToolTests`.
+- `EmailServerAction.delete` reads `EmailAccountStore.shared` directly (no
+  injection seam), so the "repoint local row to the resolved Trash mailbox
+  when it differs from the optimistic fallback" branch is uncovered by tests.
+  Add an `accountStore:` parameter to `EmailServerAction`'s methods (or
+  thread one through `EmailReviewActionDispatcher`) so the repoint path can
+  be exercised without mutating process-wide state under parallel execution.
 
 ## Known By-Design Behaviors
 

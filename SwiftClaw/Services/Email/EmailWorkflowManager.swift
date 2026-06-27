@@ -17,6 +17,7 @@ final class EmailWorkflowManager {
     static let shared = EmailWorkflowManager()
 
     private var schedulers: [MailSyncScheduler] = []
+    private var syncWorker: MailSyncWorker?
     private var reviewTask: Task<Void, Never>?
     private var reviewService: EmailReviewService?
     private var lastReviewRun: Date?
@@ -37,6 +38,7 @@ final class EmailWorkflowManager {
             accountsProvider: EmailAccountStore.shared.accountsProvider(),
             modelContainer: modelContainer
         )
+        self.syncWorker = worker
 
         schedulers = MailSyncSchedulerFactory.make(
             worker: worker,
@@ -79,6 +81,7 @@ final class EmailWorkflowManager {
     func stop() {
         schedulers.forEach { $0.stop() }
         schedulers.removeAll()
+        syncWorker = nil
         reviewTask?.cancel()
         reviewTask = nil
         reviewService = nil
@@ -96,8 +99,15 @@ final class EmailWorkflowManager {
 
     /// Kicks an immediate sync + review pass.
     func refreshNow() async {
-        for scheduler in schedulers {
-            await scheduler.refreshNow()
+        // Drive a single `worker.syncOnce()` directly rather than fanning
+        // `refreshNow()` out to every scheduler. On macOS the scheduler list
+        // contains both the foreground loop and `NSBackgroundActivityScheduler`,
+        // so the per-scheduler fan-out would run two full back-to-back syncs
+        // (the worker is an actor, so they serialize rather than race — but
+        // the user-tapped "Sync Now" only needs one). Scheduled cadence stays
+        // driven by the schedulers themselves.
+        if let worker = syncWorker {
+            _ = await worker.syncOnce()
         }
         await runReviewOnce()
     }

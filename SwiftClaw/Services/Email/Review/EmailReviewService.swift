@@ -21,6 +21,7 @@ final class EmailReviewService {
     private static let logger = AppLog.make("mail.review")
 
     private let modelContainer: ModelContainer
+    private let userDefaults: UserDefaults
 
     /// Closure invoked when a review chat is created, so the caller can route
     /// the user to it (or fire a dock badge / toast).
@@ -48,8 +49,13 @@ final class EmailReviewService {
         )
     }
 
-    init(modelContainer: ModelContainer) {
+    /// `userDefaults` is injected (defaulting to `.standard`) so tests can run
+    /// against an isolated `UserDefaultsFixture` rather than mutating
+    /// `UserDefaults.standard` for `clawModel`/persona keys — which would
+    /// leak across parallel test suites.
+    init(modelContainer: ModelContainer, userDefaults: UserDefaults = .standard) {
         self.modelContainer = modelContainer
+        self.userDefaults = userDefaults
     }
 
     /// Maximum number of threads handed to the LLM in a single pass. Caps
@@ -117,7 +123,10 @@ final class EmailReviewService {
             return false
         }
 
-        let modelSelection = SettingsStorage.loadModelSelection(forKey: SettingsKeys.clawModel)
+        let modelSelection = SettingsStorage.loadModelSelection(
+            forKey: SettingsKeys.clawModel,
+            userDefaults: userDefaults
+        )
         guard !modelSelection.isEmpty else {
             Self.logger.warning("review skipped — clawModel not configured")
             lastStatusMessage = "Review needs a model in Settings"
@@ -127,7 +136,10 @@ final class EmailReviewService {
 
         Self.logger.info("review: starting pass (force: \(force, privacy: .public))")
 
-        let systemPrompt = Self.systemPrompt(isContinuation: targetChatID != nil)
+        let systemPrompt = Self.systemPrompt(
+            isContinuation: targetChatID != nil,
+            userDefaults: userDefaults
+        )
         let userPrompt = Self.userPrompt()
 
         // When appending to an existing review chat, replay that chat's history
@@ -147,7 +159,7 @@ final class EmailReviewService {
         let fetchTool = EmailReviewFetchTool(
             modelContainer: modelContainer,
             applySuppression: !force,
-            defaults: SettingsStorage.loadEmailReviewFetchDefaults(),
+            defaults: SettingsStorage.loadEmailReviewFetchDefaults(userDefaults: userDefaults),
             onThreadsFetched: { [collector] ids in collector.add(ids) }
         )
         let notifyTool = EmailReviewNotifyTool(
@@ -222,9 +234,10 @@ final class EmailReviewService {
     // MARK: - Prompt construction
 
     private static func systemPrompt(
-        persona: String = AssistantPersona.personaPrompt(),
-        isContinuation: Bool = false
+        isContinuation: Bool = false,
+        userDefaults: UserDefaults
     ) -> String {
+        let resolvedPersona = AssistantPersona.personaPrompt(userDefaults: userDefaults)
         // When re-running inside an existing review chat the prior conversation
         // is sent as message history, so the model should pick up the thread
         // rather than greet the user from scratch.
@@ -242,9 +255,9 @@ final class EmailReviewService {
         usual caution around `delete`) for this pass only. Apply it just to this run; don't treat \
         it as a standing rule.
         """ : ""
-        let defaults = SettingsStorage.loadEmailReviewFetchDefaults()
+        let defaults = SettingsStorage.loadEmailReviewFetchDefaults(userDefaults: userDefaults)
         return """
-        \(persona)
+        \(resolvedPersona)
 
         \(EmailReviewDateContext.currentString())
 

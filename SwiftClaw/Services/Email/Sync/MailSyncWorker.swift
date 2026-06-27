@@ -30,6 +30,20 @@ actor MailSyncWorker {
 
     private static let logger = AppLog.make("mail.sync")
 
+    /// Run the expensive full-UID-set deletion reconciliation only every Nth
+    /// `syncOnce`. The incremental fetch + flag sync still runs every pass; only
+    /// the extra uncapped `fetchMailboxUIDSet` round-trip per mailbox (which
+    /// exists to catch deletions made from *other* clients) is throttled.
+    /// App-initiated deletes are already reflected optimistically, so up to N
+    /// intervals of latency on an externally-deleted message is an acceptable
+    /// trade for cutting steady-state IMAP traffic by ~Nx on a quiet inbox.
+    /// Injectable so reconciliation tests can force it on every pass.
+    private let reconcileEveryNPasses: Int
+
+    /// Counts `syncOnce` invocations so deletion reconciliation can run on a
+    /// slower cadence than the incremental fetch (see `reconcileEveryNPasses`).
+    private var passCount = 0
+
     private let accountsProvider: @Sendable () async -> [StoredEmailAccount]
     private let modelContainer: ModelContainer
     private let clientFactory: @Sendable (StoredEmailAccount) -> MailClient
@@ -45,13 +59,15 @@ actor MailSyncWorker {
         },
         syncStateUpdater: @escaping @Sendable (MailboxSyncState, UUID, String) async -> Void = { state, accountID, mailbox in
             await MainActor.run { MailboxSyncStateStore.shared.update(state, for: accountID, mailbox: mailbox) }
-        }
+        },
+        reconcileEveryNPasses: Int = 4
     ) {
         self.accountsProvider = accountsProvider
         self.modelContainer = modelContainer
         self.clientFactory = clientFactory
         self.syncStateProvider = syncStateProvider
         self.syncStateUpdater = syncStateUpdater
+        self.reconcileEveryNPasses = reconcileEveryNPasses
     }
 
     /// Returns the total number of newly-inserted messages across all
@@ -71,42 +87,28 @@ actor MailSyncWorker {
             MailSyncMonitor.shared.setStatus("Syncing mail…", syncing: true)
         }
 
+        passCount += 1
+        // Run on the first pass and every Nth pass thereafter so a freshly
+        // started worker reconciles immediately, then settles into the cheaper
+        // cadence. (`passCount` starts at 1, so subtract 1 before the modulo —
+        // this also makes N == 1 reconcile every pass.)
+        let shouldReconcile = (passCount - 1) % reconcileEveryNPasses == 0
+
+        // Accounts use independent `MailClient`s / IMAP connections, so their
+        // network round-trips can overlap — run them concurrently and sum the
+        // results. (Mailboxes within an account still sync sequentially; they
+        // share one connection.)
         var totalInserted = 0
         var totalRemoved = 0
-        for account in accounts {
-            let client = clientFactory(account)
-            // Sync INBOX + the account's resolved Sent/Trash folders. INBOX
-            // is always attempted; Sent/Trash are skipped when the account can't
-            // resolve one (a brand-new install + the user hasn't taken a
-            // delete/archive/send action yet to cache the special-use name).
-            let mailboxes = await Self.mailboxesToSync(for: account, client: client)
-            for mailbox in mailboxes {
-                do {
-                    let inserted = try await syncMailbox(
-                        mailbox,
-                        account: account,
-                        client: client
-                    )
-                    totalInserted += inserted
-                    // Reconcile per mailbox.
-                    totalRemoved += await reconcile(
-                        client: client,
-                        mailbox: mailbox.name,
-                        accountID: account.id
-                    )
-                } catch {
-                    // EffectiveDisplayName resolves to the IMAP username /
-                    // from address (PII), and `error` payloads can include
-                    // server hostnames/usernames echoed back from the
-                    // provider. Keep both at default privacy — only mailbox
-                    // *names* and counts/booleans are non-sensitive enough
-                    // for `.public`.
-                    Self.logger.error("""
-                        syncOnce failed for \(mailbox.name, privacy: .public) on \
-                        \(account.effectiveDisplayName): \
-                        \(String(describing: error))
-                        """)
+        await withTaskGroup(of: (inserted: Int, removed: Int).self) { group in
+            for account in accounts {
+                group.addTask {
+                    await self.syncAccount(account, reconcile: shouldReconcile)
                 }
+            }
+            for await counts in group {
+                totalInserted += counts.inserted
+                totalRemoved += counts.removed
             }
         }
 
@@ -117,6 +119,54 @@ actor MailSyncWorker {
             )
         }
         return totalInserted
+    }
+
+    /// Syncs one account's mailboxes in sequence (they share a single IMAP
+    /// connection, so mailbox-level parallelism isn't safe) and returns the
+    /// per-account inserted + soft-deleted counts. `syncOnce` runs these
+    /// concurrently across accounts.
+    private func syncAccount(
+        _ account: StoredEmailAccount,
+        reconcile shouldReconcile: Bool
+    ) async -> (inserted: Int, removed: Int) {
+        let client = clientFactory(account)
+        // Sync INBOX + the account's resolved Sent/Trash folders. INBOX
+        // is always attempted; Sent/Trash are skipped when the account can't
+        // resolve one (a brand-new install + the user hasn't taken a
+        // delete/archive/send action yet to cache the special-use name).
+        let mailboxes = await Self.mailboxesToSync(for: account, client: client)
+        var inserted = 0
+        var removed = 0
+        for mailbox in mailboxes {
+            do {
+                inserted += try await syncMailbox(
+                    mailbox,
+                    account: account,
+                    client: client
+                )
+                // Reconcile per mailbox, throttled to every Nth pass.
+                if shouldReconcile {
+                    removed += await reconcile(
+                        client: client,
+                        mailbox: mailbox.name,
+                        accountID: account.id
+                    )
+                }
+            } catch {
+                // EffectiveDisplayName resolves to the IMAP username /
+                // from address (PII), and `error` payloads can include
+                // server hostnames/usernames echoed back from the
+                // provider. Keep both at default privacy — only mailbox
+                // *names* and counts/booleans are non-sensitive enough
+                // for `.public`.
+                Self.logger.error("""
+                    syncOnce failed for \(mailbox.name, privacy: .public) on \
+                    \(account.effectiveDisplayName): \
+                    \(String(describing: error))
+                    """)
+            }
+        }
+        return (inserted, removed)
     }
 
     /// Returns INBOX (always) plus the account's resolved Sent/Trash folders
@@ -196,16 +246,37 @@ actor MailSyncWorker {
         // whose new UID lands at or below the stale high-water are silently
         // lost, and a brand-new message landing on a recycled low UID
         // reconciles flags onto a stale local row instead of inserting.
-        if didHavePriorState, stored?.uidValidity != result.uidValidity {
+        let didReset = didHavePriorState && stored?.uidValidity != result.uidValidity
+        if didReset {
             Self.logger.notice("""
                 UIDVALIDITY changed for \(mailbox, privacy: .public) \
                 (\(stored?.uidValidity ?? 0, privacy: .public) → \
                 \(result.uidValidity, privacy: .public)); refetching full mailbox.
                 """)
-            result = try await client.fetchMailbox(name: mailbox, sinceUID: nil)
+            // Refetch the WHOLE mailbox uncapped. The first-sync cap is
+            // deliberately NOT reused here: a reset reassigns every UID, so the
+            // local rows now carry dead uids that match no current server uid.
+            // The reconcile pass (`fetchMailboxUIDSet` + `reconcileDeletions`)
+            // runs against the full *live* UID set, so any message we hold but
+            // don't re-fetch this pass looks server-absent and gets wrongly
+            // soft-deleted. Pulling everything lets upsert re-key each row by
+            // Message-ID (preserving notes/flags) and keeps deletion
+            // reconciliation honest. A reset is rare, so the one-time full pull
+            // is an acceptable cost for not silently dropping the user's mail.
+            result = try await client.fetchMailbox(
+                name: mailbox,
+                sinceUID: nil,
+                maxMessages: nil
+            )
         }
 
-        let nextLastSeen: UInt32 = result.maxUID ?? (sinceUID ?? 0)
+        // On a UIDVALIDITY-reset refetch into an empty/rebuilt folder,
+        // `result.maxUID` is nil; falling back to the stale `sinceUID` from
+        // the dead UIDVALIDITY would record a high-water higher than any real
+        // UID in the rebuilt folder, so the next incremental pass would skip
+        // everything that arrived. Use 0 instead — the rebuild resets the
+        // position, and the next fetch pulls `> 0` correctly.
+        let nextLastSeen: UInt32 = result.maxUID ?? (didReset ? 0 : (sinceUID ?? 0))
         let newState = MailboxSyncState(
             uidValidity: result.uidValidity,
             lastSeenUID: nextLastSeen

@@ -333,18 +333,3 @@ struct EmailSettingsStorageTests {
         #expect(next == expected)
     }
 }
-
-private struct UserDefaultsFixture {
-    let suiteName: String
-    let defaults: UserDefaults
-
-    init() throws {
-        suiteName = "SwiftClawTests-EmailStorage-\(UUID().uuidString)"
-        defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-    }
-
-    func cleanup() {
-        defaults.removePersistentDomain(forName: suiteName)
-    }
-}

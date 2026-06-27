@@ -119,18 +119,3 @@ struct MailboxSyncStateStoreTests {
         try UserDefaultsFixture()
     }
 }
-
-private struct UserDefaultsFixture {
-    let suiteName: String
-    let defaults: UserDefaults
-
-    init() throws {
-        suiteName = "SwiftClawTests-MailboxSyncState-\(UUID().uuidString)"
-        defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-    }
-
-    func cleanup() {
-        defaults.removePersistentDomain(forName: suiteName)
-    }
-}

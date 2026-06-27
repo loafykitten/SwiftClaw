@@ -2,9 +2,11 @@
 
 ## Build & Test
 
-- `swift build --scratch-path /tmp/build` — debug build (SPM).
-- `swift test --scratch-path /tmp/build` — runs all `SwiftClawTests` suites (Swift Testing).
-- `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build -derivedDataPath /tmp/DerivedData` — app bundle build. The Xcode project uses `PBXFileSystemSynchronizedRootGroup`, so new files under `SwiftClaw/` are picked up automatically.
+- `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build -derivedDataPath /tmp/DerivedData` — app bundle build. Run from the repo root.
+- `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' test -derivedDataPath /tmp/DerivedData` — runs all `SwiftClawTests` suites (Swift Testing). Run from the repo root.
+- To run a single suite: `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' test -derivedDataPath /tmp/DerivedData -only-testing:SwiftClawTests/<SuiteName>`.
+- The Xcode project uses `PBXFileSystemSynchronizedRootGroup`, so new files under `SwiftClaw/` are picked up automatically.
+- Piping through `xcbeautify --quiet` makes the `xcodebuild` output readable.
 - macOS only today (`Package.swift` declares `.macOS("27.0")`); iOS target is planned (Phase 0.5).
 - No linter — the Swift 6 strict-concurrency checker (`-swift-version 6`) is the static-analysis gate.
 

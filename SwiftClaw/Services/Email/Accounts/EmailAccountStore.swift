@@ -129,6 +129,24 @@ final class EmailAccountStore {
             default: [],
             userDefaults: userDefaults
         )
+        // Enforce the completeness invariant at the data layer, not just when
+        // Settings happens to be on screen: a partial row (a migration edge or
+        // external UserDefaults tampering) must never be visible to sync /
+        // MailClient code. Editor-created accounts are always complete
+        // (`EmailAccountEditorSheet.canConfirm`), so this only ever removes
+        // genuinely-unusable rows.
+        pruneIncompleteAccounts()
+    }
+
+    /// Drops any persisted account that fails `isComplete`, scrubbing its
+    /// Keychain passwords + sync state. Runs on load so the invariant holds
+    /// regardless of UI navigation. Skipped in previews so the preview host
+    /// doesn't nuke real Keychain / UserDefaults entries.
+    private func pruneIncompleteAccounts() {
+        guard !ProcessInfo.processInfo.isRunningInPreview else { return }
+        let incomplete = accounts.filter { !$0.isComplete }
+        guard !incomplete.isEmpty else { return }
+        incomplete.forEach { remove($0) }
     }
 
     /// Returns a `Sendable` async closure that snapshots the current account
@@ -203,28 +221,45 @@ final class EmailAccountStore {
     /// etc.) and synthesizes a single `StoredEmailAccount` with the same
     /// values. Copies any Keychain passwords to per-account keys, then clears
     /// the legacy keys. Idempotent: a no-op if `accounts` is already non-empty
-    /// or no legacy host was stored.
+    /// or the legacy state is incomplete (a partial legacy config won't
+    /// produce an incomplete account — `EmailAccountEditorSheet.canConfirm`
+    /// enforces completeness + Test Connection for new accounts; the migration
+    /// path keeps the same invariant so the editor never opens with stale
+    /// partial data on disk).
     func migrateLegacyIfNeeded() {
         guard accounts.isEmpty else { return }
         let legacyHost = userDefaults.string(forKey: SettingsKeys.emailImapHost) ?? ""
         guard !legacyHost.isEmpty else { return }
 
+        let smtpHost = userDefaults.string(forKey: SettingsKeys.emailSmtpHost) ?? ""
+        let imapUsername = userDefaults.string(forKey: SettingsKeys.emailImapUsername) ?? ""
+        let smtpUsername = userDefaults.string(forKey: SettingsKeys.emailSmtpUsername) ?? ""
+        let fromAddress = userDefaults.string(forKey: SettingsKeys.emailFromAddress) ?? ""
+        // Don't synthesize an incomplete account — a partial legacy state would
+        // otherwise land a row the editor can't make usable without re-entering
+        // everything. Leave it untouched; the user will add an account through
+        // the editor when ready.
+        guard !smtpHost.isEmpty,
+              !imapUsername.isEmpty,
+              !smtpUsername.isEmpty,
+              !fromAddress.isEmpty else { return }
+
         let account = StoredEmailAccount(
             id: UUID(),
-            displayName: userDefaults.string(forKey: SettingsKeys.emailImapUsername) ?? "",
+            displayName: imapUsername,
             imapHost: legacyHost,
             imapPort: {
                 let stored = userDefaults.integer(forKey: SettingsKeys.emailImapPort)
                 return stored > 0 ? stored : SettingsStorage.defaultEmailImapPort
             }(),
-            imapUsername: userDefaults.string(forKey: SettingsKeys.emailImapUsername) ?? "",
-            smtpHost: userDefaults.string(forKey: SettingsKeys.emailSmtpHost) ?? "",
+            imapUsername: imapUsername,
+            smtpHost: smtpHost,
             smtpPort: {
                 let stored = userDefaults.integer(forKey: SettingsKeys.emailSmtpPort)
                 return stored > 0 ? stored : SettingsStorage.defaultEmailSmtpPort
             }(),
-            smtpUsername: userDefaults.string(forKey: SettingsKeys.emailSmtpUsername) ?? "",
-            fromAddress: userDefaults.string(forKey: SettingsKeys.emailFromAddress) ?? ""
+            smtpUsername: smtpUsername,
+            fromAddress: fromAddress
         )
         accounts = [account]
 

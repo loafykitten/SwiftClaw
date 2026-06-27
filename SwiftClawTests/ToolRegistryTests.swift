@@ -24,6 +24,24 @@ struct ToolRegistryTests {
             "explicit",
         ])
     }
+
+    /// Email review tools are system-only: they're constructed per-pass against
+    /// a scoped `ToolRegistry(tools:)` at the call site so the assistant can't
+    /// invoke them during a normal user chat. `ToolRegistry.shared` (offered
+    /// on every chat) must NOT register any of them — that's the one
+    /// regression class the static strict-concurrency checker can't catch on
+    /// its own.
+    @Test func systemOnlyEmailReviewToolsAreNotOnSharedRegistry() {
+        let sharedToolNames = Set(ToolRegistry.shared.tools.map(\.name))
+        let systemOnlyTools: Set<String> = [
+            "fetch_inbox_emails",
+            "notify_user_about_emails",
+            "add_email_note",
+            "set_email_flag",
+            "refresh_email_review",
+        ]
+        #expect(sharedToolNames.isDisjoint(with: systemOnlyTools))
+    }
 }
 
 private struct TestTool: Tool {
