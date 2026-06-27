@@ -41,23 +41,20 @@ struct EmailSettingsView: View {
         )
     }
 
-    private var reviewIntervalMinutesBinding: Binding<Double> {
-        Binding(
-            get: { Double(reviewIntervalSeconds) / 60.0 },
-            set: { reviewIntervalSeconds = Int(($0 * 60).rounded()) }
-        )
-    }
-
     private var pollRangeMinutes: ClosedRange<Double> {
         let lower = Double(SettingsStorage.emailPollIntervalSecondsRange.lowerBound) / 60.0
         let upper = Double(SettingsStorage.emailPollIntervalSecondsRange.upperBound) / 60.0
         return lower...upper
     }
 
-    private var reviewRangeMinutes: ClosedRange<Double> {
-        let lower = Double(SettingsStorage.emailReviewIntervalSecondsRange.lowerBound) / 60.0
-        let upper = Double(SettingsStorage.emailReviewIntervalSecondsRange.upperBound) / 60.0
-        return lower...upper
+    /// Picker selection binding. Reads the nearest offered option to the
+    /// stored seconds (so a stale value still shows a real selection) and
+    /// writes the chosen option's exact seconds.
+    private var reviewIntervalSecondsBinding: Binding<Int> {
+        Binding(
+            get: { SettingsStorage.nearestEmailReviewIntervalSeconds(reviewIntervalSeconds) },
+            set: { reviewIntervalSeconds = $0 }
+        )
     }
 
     private var reviewMaxThreadsBinding: Binding<Double> {
@@ -155,18 +152,12 @@ struct EmailSettingsView: View {
                 .pickerStyle(.segmented)
 
                 if usesIntervalReviewSchedule {
-                    HStack {
-                        Text("Review Interval")
-                        Spacer()
-                        Text(reviewIntervalLabel)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
+                    Picker("Review Interval", selection: reviewIntervalSecondsBinding) {
+                        ForEach(EmailReviewIntervalOption.allCases) { option in
+                            Text(option.displayName).tag(option.rawValue)
+                        }
                     }
-                    Slider(
-                        value: reviewIntervalMinutesBinding,
-                        in: reviewRangeMinutes,
-                        step: 5
-                    )
+                    .pickerStyle(.menu)
                     Text("How often the assistant reviews the inbox and creates a review chat when needed.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -269,14 +260,6 @@ struct EmailSettingsView: View {
             SettingsStorage.saveEmailReviewDailyTimes(newValue)
             notifyReviewScheduleChanged()
         }
-    }
-
-    private var reviewIntervalLabel: String {
-        let minutes = Int(reviewIntervalMinutesBinding.wrappedValue)
-        if minutes >= 60, minutes.isMultiple(of: 60) {
-            return "\(minutes / 60) hr"
-        }
-        return "\(minutes) min"
     }
 
     private var dailyTimesEditor: some View {

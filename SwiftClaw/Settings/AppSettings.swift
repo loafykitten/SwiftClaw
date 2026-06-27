@@ -287,6 +287,41 @@ enum EmailReviewScheduleMode: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// Discrete choices offered for the Inbox review interval in Settings > Email.
+/// `rawValue` is the interval in seconds. Declared in ascending order so
+/// `CaseIterable.allCases` yields the menu order.
+enum EmailReviewIntervalOption: Int, CaseIterable, Sendable, Hashable, Identifiable {
+    case minutes5 = 300
+    case minutes10 = 600
+    case minutes20 = 1_200
+    case minutes30 = 1_800
+    case minutes45 = 2_700
+    case hour1 = 3_600
+    case hour2 = 7_200
+    case hour3 = 10_800
+    case hour4 = 14_400
+    case hour5 = 18_000
+    case hour6 = 21_600
+    case hour8 = 28_800
+    case hour10 = 36_000
+    case hour12 = 43_200
+    case hour16 = 57_600
+    case hour19 = 68_400
+    case hour21 = 75_600
+    case hour24 = 86_400
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        let totalMinutes = rawValue / 60
+        if totalMinutes.isMultiple(of: 60) {
+            let hours = totalMinutes / 60
+            return "\(hours) hr"
+        }
+        return "\(totalMinutes) min"
+    }
+}
+
 struct EmailReviewFetchDefaults: Equatable, Sendable {
     var maxAgeDays: Int?
     var limit: Int
@@ -517,7 +552,19 @@ enum SettingsStorage {
         guard stored > 0 else {
             return defaultEmailReviewIntervalSeconds
         }
-        return emailReviewIntervalSecondsRange.clamping(stored)
+        // Snap any stale value (e.g. a fine-grained slider setting from before
+        // the discrete picker shipped) to the closest offered option so the
+        // runtime always agrees with what Settings can show.
+        return nearestEmailReviewIntervalSeconds(stored)
+    }
+
+    /// Clamps `seconds` to the configured range, then snaps it to the closest
+    /// `EmailReviewIntervalOption`. Used both by the loader and the Settings
+    /// binding so a stored custom value always resolves to a real option.
+    static func nearestEmailReviewIntervalSeconds(_ seconds: Int) -> Int {
+        let clamped = emailReviewIntervalSecondsRange.clamping(seconds)
+        let options = EmailReviewIntervalOption.allCases.map(\.rawValue)
+        return options.min(by: { abs($0 - clamped) < abs($1 - clamped) }) ?? clamped
     }
 
     static func loadEmailReviewScheduleMode(userDefaults: UserDefaults = .standard) -> EmailReviewScheduleMode {

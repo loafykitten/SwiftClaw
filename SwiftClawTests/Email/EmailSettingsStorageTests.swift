@@ -76,6 +76,74 @@ struct EmailSettingsStorageTests {
         #expect(SettingsStorage.emailReviewIntervalSecondsRange.upperBound == 86_400)
     }
 
+
+    @Test func reviewIntervalOptionsMatchRequestedList() throws {
+        let expected: [Int] = [
+            300, 600, 1_200, 1_800, 2_700,
+            3_600, 7_200, 10_800, 14_400, 18_000, 21_600,
+            28_800, 36_000, 43_200, 57_600, 68_400, 75_600, 86_400
+        ]
+        let actual = EmailReviewIntervalOption.allCases.map(\.rawValue)
+
+        #expect(actual == expected)
+        #expect(Set(actual).count == actual.count)  // no duplicates
+        #expect(actual == actual.sorted())          // ascending (menu order)
+    }
+
+    @Test func reviewIntervalOptionsAreWithinConfiguredRange() throws {
+        for option in EmailReviewIntervalOption.allCases {
+            #expect(SettingsStorage.emailReviewIntervalSecondsRange.contains(option.rawValue))
+        }
+    }
+
+    @Test func reviewIntervalDefaultIsAnOfferedOption() throws {
+        #expect(
+            EmailReviewIntervalOption.allCases.map(\.rawValue)
+                .contains(SettingsStorage.defaultEmailReviewIntervalSeconds)
+        )
+    }
+
+    @Test func nearestReviewIntervalSnapsStaleValueDown() throws {
+        // 7 min (420s) sits between 5m and 10m, closer to 5m.
+        #expect(SettingsStorage.nearestEmailReviewIntervalSeconds(420) == 300)
+    }
+
+    @Test func nearestReviewIntervalSnapsStaleValueUp() throws {
+        // 90 min (5400s) sits between 1h (3600) and 2h (7200), closer to 1h.
+        #expect(SettingsStorage.nearestEmailReviewIntervalSeconds(5_400) == 3_600)
+    }
+
+    @Test func nearestReviewIntervalClampsOutOfRange() throws {
+        #expect(
+            SettingsStorage.nearestEmailReviewIntervalSeconds(1)
+                == SettingsStorage.emailReviewIntervalSecondsRange.lowerBound
+        )
+        #expect(
+            SettingsStorage.nearestEmailReviewIntervalSeconds(1_000_000)
+                == SettingsStorage.emailReviewIntervalSecondsRange.upperBound
+        )
+    }
+
+    @Test func loadReviewIntervalSnapsStaleStoredValueToOption() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(420, forKey: SettingsKeys.emailReviewIntervalSeconds)
+
+        #expect(SettingsStorage.loadEmailReviewInterval(userDefaults: fixture.defaults) == 300)
+        #expect(
+            EmailReviewIntervalOption.allCases.map(\.rawValue)
+                .contains(SettingsStorage.loadEmailReviewInterval(userDefaults: fixture.defaults))
+        )
+    }
+
+    @Test func reviewIntervalOptionDisplayNameFormatsWholeHours() throws {
+        #expect(EmailReviewIntervalOption.minutes5.displayName == "5 min")
+        #expect(EmailReviewIntervalOption.minutes45.displayName == "45 min")
+        #expect(EmailReviewIntervalOption.hour1.displayName == "1 hr")
+        #expect(EmailReviewIntervalOption.hour24.displayName == "24 hr")
+    }
+
     @Test func reviewFetchDefaultsUseConfiguredValues() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
