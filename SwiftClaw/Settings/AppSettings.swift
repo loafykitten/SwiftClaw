@@ -322,6 +322,30 @@ enum EmailReviewIntervalOption: Int, CaseIterable, Sendable, Hashable, Identifia
     }
 }
 
+/// Discrete choices offered for the mail sync (poll) interval in Settings > Email.
+/// `rawValue` is the interval in seconds. Declared in ascending order so
+/// `CaseIterable.allCases` yields the menu order.
+enum EmailSyncIntervalOption: Int, CaseIterable, Sendable, Hashable, Identifiable {
+    case minute1 = 60
+    case minutes2 = 120
+    case minutes5 = 300
+    case minutes10 = 600
+    case minutes15 = 900
+    case minutes30 = 1_800
+    case hour1 = 3_600
+
+    var id: Int { rawValue }
+
+    var displayName: String {
+        let totalMinutes = rawValue / 60
+        if totalMinutes.isMultiple(of: 60) {
+            let hours = totalMinutes / 60
+            return "\(hours) hr"
+        }
+        return "\(totalMinutes) min"
+    }
+}
+
 struct EmailReviewFetchDefaults: Equatable, Sendable {
     var maxAgeDays: Int?
     var limit: Int
@@ -564,6 +588,15 @@ enum SettingsStorage {
     static func nearestEmailReviewIntervalSeconds(_ seconds: Int) -> Int {
         let clamped = emailReviewIntervalSecondsRange.clamping(seconds)
         let options = EmailReviewIntervalOption.allCases.map(\.rawValue)
+        return options.min(by: { abs($0 - clamped) < abs($1 - clamped) }) ?? clamped
+    }
+
+    /// Clamps `seconds` to the configured range, then snaps it to the closest
+    /// `EmailSyncIntervalOption`. Used both by the loader and the Settings
+    /// binding so a stored custom value always resolves to a real option.
+    static func nearestEmailSyncIntervalSeconds(_ seconds: Int) -> Int {
+        let clamped = emailPollIntervalSecondsRange.clamping(seconds)
+        let options = EmailSyncIntervalOption.allCases.map(\.rawValue)
         return options.min(by: { abs($0 - clamped) < abs($1 - clamped) }) ?? clamped
     }
 

@@ -144,6 +144,62 @@ struct EmailSettingsStorageTests {
         #expect(EmailReviewIntervalOption.hour24.displayName == "24 hr")
     }
 
+    // MARK: - Sync interval option tests
+
+    @Test func syncIntervalOptionsMatchRequestedList() throws {
+        let expected: [Int] = [60, 120, 300, 600, 900, 1_800, 3_600]
+        let actual = EmailSyncIntervalOption.allCases.map(\.rawValue)
+
+        #expect(actual == expected)
+        #expect(Set(actual).count == actual.count)  // no duplicates
+        #expect(actual == actual.sorted())          // ascending (menu order)
+    }
+
+    @Test func syncIntervalOptionsAreWithinConfiguredRange() throws {
+        for option in EmailSyncIntervalOption.allCases {
+            #expect(SettingsStorage.emailPollIntervalSecondsRange.contains(option.rawValue))
+        }
+    }
+
+    @Test func syncIntervalDefaultIsAnOfferedOption() throws {
+        #expect(
+            EmailSyncIntervalOption.allCases.map(\.rawValue)
+                .contains(SettingsStorage.defaultEmailPollIntervalSeconds)
+        )
+    }
+
+    @Test func nearestSyncIntervalSnapsStaleValueDown() throws {
+        // 90s sits between 1 min (60) and 2 min (120), closer to 1 min.
+        #expect(SettingsStorage.nearestEmailSyncIntervalSeconds(90) == 60)
+    }
+
+    @Test func nearestSyncIntervalSnapsStaleValueUp() throws {
+        // 200s sits between 2 min (120) and 5 min (300), closer to 2 min.
+        // 210s sits exactly halfway — tie goes to the lower value via min(by:).
+        // 250s sits between 2 min (120) and 5 min (300), closer to 5 min.
+        #expect(SettingsStorage.nearestEmailSyncIntervalSeconds(250) == 300)
+    }
+
+    @Test func nearestSyncIntervalClampsOutOfRange() throws {
+        #expect(
+            SettingsStorage.nearestEmailSyncIntervalSeconds(1)
+                == SettingsStorage.emailPollIntervalSecondsRange.lowerBound
+        )
+        #expect(
+            SettingsStorage.nearestEmailSyncIntervalSeconds(1_000_000)
+                == SettingsStorage.emailPollIntervalSecondsRange.upperBound
+        )
+    }
+
+    @Test func syncIntervalOptionDisplayNameFormatsCorrectly() throws {
+        #expect(EmailSyncIntervalOption.minute1.displayName == "1 min")
+        #expect(EmailSyncIntervalOption.minutes2.displayName == "2 min")
+        #expect(EmailSyncIntervalOption.minutes15.displayName == "15 min")
+        #expect(EmailSyncIntervalOption.hour1.displayName == "1 hr")
+    }
+
+    // MARK: - Fetch defaults tests
+
     @Test func reviewFetchDefaultsUseConfiguredValues() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }

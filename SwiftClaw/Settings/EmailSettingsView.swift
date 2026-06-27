@@ -33,23 +33,11 @@ struct EmailSettingsView: View {
     @State private var editingAccount: StoredEmailAccount? = nil
     @State private var presentingNewAccount: Bool = false
     @State private var dailyReviewTimes = SettingsStorage.loadEmailReviewDailyTimes()
+    @State private var syncMonitor = MailSyncMonitor.shared
 
-    private var pollIntervalMinutesBinding: Binding<Double> {
-        Binding(
-            get: { Double(pollIntervalSeconds) / 60.0 },
-            set: { pollIntervalSeconds = Int(($0 * 60).rounded()) }
-        )
-    }
-
-    private var pollRangeMinutes: ClosedRange<Double> {
-        let lower = Double(SettingsStorage.emailPollIntervalSecondsRange.lowerBound) / 60.0
-        let upper = Double(SettingsStorage.emailPollIntervalSecondsRange.upperBound) / 60.0
-        return lower...upper
-    }
-
-    /// Picker selection binding. Reads the nearest offered option to the
-    /// stored seconds (so a stale value still shows a real selection) and
-    /// writes the chosen option's exact seconds.
+    /// Picker selection binding for the review interval. Reads the nearest
+    /// offered option to the stored seconds (so a stale value still shows a
+    /// real selection) and writes the chosen option's exact seconds.
     private var reviewIntervalSecondsBinding: Binding<Int> {
         Binding(
             get: { SettingsStorage.nearestEmailReviewIntervalSeconds(reviewIntervalSeconds) },
@@ -57,17 +45,25 @@ struct EmailSettingsView: View {
         )
     }
 
-    private var reviewMaxThreadsBinding: Binding<Double> {
+    /// Picker selection binding for the sync (poll) interval.
+    private var syncIntervalSecondsBinding: Binding<Int> {
         Binding(
-            get: { Double(reviewMaxThreads) },
-            set: { reviewMaxThreads = Int($0.rounded()) }
+            get: { SettingsStorage.nearestEmailSyncIntervalSeconds(pollIntervalSeconds) },
+            set: { pollIntervalSeconds = $0 }
         )
     }
 
-    private var reviewMaxThreadsRange: ClosedRange<Double> {
-        let lower = Double(SettingsStorage.emailReviewMaxThreadsRange.lowerBound)
-        let upper = Double(SettingsStorage.emailReviewMaxThreadsRange.upperBound)
-        return lower...upper
+    /// Picker selection binding for emails-per-review. Snaps any stale stored
+    /// value (e.g. from the old slider) to the nearest multiple of 5.
+    private var reviewMaxThreadsSnappedBinding: Binding<Int> {
+        Binding(
+            get: {
+                let range = SettingsStorage.emailReviewMaxThreadsRange
+                let clamped = max(range.lowerBound, min(range.upperBound, reviewMaxThreads))
+                return (clamped + 2) / 5 * 5
+            },
+            set: { reviewMaxThreads = $0 }
+        )
     }
 
     private var reviewDefaultMaxAgeDaysBinding: Binding<Double> {
@@ -87,8 +83,16 @@ struct EmailSettingsView: View {
         reviewScheduleModeRaw != EmailReviewScheduleMode.daily.rawValue
     }
 
+    /// True when the sync interval is longer than the review interval —
+    /// reviews would fire before fresh mail has been pulled.
+    private var syncExceedsReviewInterval: Bool {
+        pollIntervalSeconds > reviewIntervalSeconds
+    }
+
     var body: some View {
         Form {
+            // MARK: Enable
+
             Section {
                 Toggle("Enable Email", isOn: $isEmailEnabled)
                 Text("When enabled, the Email item appears in the sidebar and mail sync + inbox review run on the intervals below.")
@@ -98,34 +102,19 @@ struct EmailSettingsView: View {
                 Text("Email")
             }
 
+            // MARK: Accounts
+
             Section {
-                if accountStore.accounts.isEmpty {
+                if accountStore.accounts.filter(\.isComplete).isEmpty {
                     Text("No accounts configured.")
                         .foregroundStyle(.secondary)
                         .font(.callout)
                 } else {
-                    ForEach(accountStore.accounts) { account in
-                        Button {
+                    ForEach(accountStore.accounts.filter(\.isComplete)) { account in
+                        AccountRow(account: account) {
                             editingAccount = account
-                        } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(account.effectiveDisplayName)
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                Text(account.imapUsername)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .buttonStyle(.plain)
-                        .swipeActions(edge: .trailing) {
-                            Button(role: .destructive) {
-                                accountStore.remove(account)
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
+                        } onDelete: {
+                            accountStore.remove(account)
                         }
                     }
                 }
@@ -137,11 +126,28 @@ struct EmailSettingsView: View {
             } header: {
                 Text("Accounts")
             } footer: {
-                Text("Tap an account to edit. Swipe to delete. Passwords are stored in the macOS Keychain.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    if syncMonitor.isSyncing {
+                        Label("Syncing…", systemImage: "arrow.triangle.2.circlepath")
+                    } else if let lastSyncDate = syncMonitor.lastSyncDate {
+                        Text("Last synced \(lastSyncDate.formatted(.relative(presentation: .named)))")
+                    }
+                    #if os(iOS)
+                    Text("Tap to edit. Swipe left to delete. Passwords are stored in the iOS Keychain.")
+                    #else
+                    Text("Tap to edit. Swipe left to delete. Passwords are stored in the macOS Keychain.")
+                    #endif
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
             .disabled(!isEmailEnabled)
+            .task {
+                let incomplete = accountStore.accounts.filter { !$0.isComplete }
+                incomplete.forEach { accountStore.remove($0) }
+            }
+
+            // MARK: Schedule
 
             Section {
                 Picker("Review Schedule", selection: $reviewScheduleModeRaw) {
@@ -165,41 +171,40 @@ struct EmailSettingsView: View {
                     dailyTimesEditor
                 }
 
-                HStack {
-                    Text("Sync Interval")
-                    Spacer()
-                    Text("\(Int(pollIntervalMinutesBinding.wrappedValue)) min")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                Picker("Sync Interval", selection: syncIntervalSecondsBinding) {
+                    ForEach(EmailSyncIntervalOption.allCases) { option in
+                        Text(option.displayName).tag(option.rawValue)
+                    }
                 }
-                Slider(
-                    value: pollIntervalMinutesBinding,
-                    in: pollRangeMinutes,
-                    step: 1
-                )
-                Text("How often the inbox is pulled.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                .pickerStyle(.menu)
+                if syncExceedsReviewInterval {
+                    Text("Reviews run more often than the inbox is pulled — they'll see stale mail. Consider a shorter sync interval.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                } else {
+                    Text("How often the inbox is pulled.")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            } header: {
+                Text("Schedule")
+            }
+            .disabled(!isEmailEnabled)
 
-                HStack {
-                    Text("Emails per Review")
-                    Spacer()
-                    Text("\(reviewMaxThreads)")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+            // MARK: Review scope
+
+            Section {
+                Picker("Emails per Review", selection: reviewMaxThreadsSnappedBinding) {
+                    ForEach(Array(stride(from: 5, through: 100, by: 5)), id: \.self) { count in
+                        Text("\(count)").tag(count)
+                    }
                 }
-                Slider(
-                    value: reviewMaxThreadsBinding,
-                    in: reviewMaxThreadsRange,
-                    step: 5
-                )
+                .pickerStyle(.menu)
                 Text("Most emails the inbox review looks at in one pass. Lower keeps each review cheaper and faster.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
 
-                Divider()
-
-                Toggle("Default max age", isOn: $reviewDefaultMaxAgeEnabled)
+                Toggle("Limit by age", isOn: $reviewDefaultMaxAgeEnabled)
                 if reviewDefaultMaxAgeEnabled {
                     HStack {
                         Text("Max Age")
@@ -214,31 +219,42 @@ struct EmailSettingsView: View {
                         step: 1
                     )
                 }
+            } header: {
+                Text("Review scope")
+            }
+            .disabled(!isEmailEnabled)
 
-                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
-                    GridRow {
-                        Toggle("Flagged", isOn: $reviewDefaultIncludeFlagged)
-                        Toggle("Notated", isOn: $reviewDefaultIncludeNotated)
-                    }
-                    GridRow {
-                        Toggle("Read", isOn: $reviewDefaultIncludeRead)
-                        Toggle("Unread", isOn: $reviewDefaultIncludeUnread)
-                    }
-                    GridRow {
-                        Toggle("Archived", isOn: $reviewDefaultIncludeArchived)
-                        Toggle("Trash", isOn: $reviewDefaultIncludeTrashed)
-                    }
-                }
-                Text("These are the default fetch filters. A chat request can still override them for that one review.")
+            // MARK: Default filters
+
+            Section {
+                Toggle("Unread", isOn: $reviewDefaultIncludeUnread)
+                Toggle("Read", isOn: $reviewDefaultIncludeRead)
+                Toggle("Flagged", isOn: $reviewDefaultIncludeFlagged)
+                Toggle("Notated", isOn: $reviewDefaultIncludeNotated)
+
+                Text("Mailboxes")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
+                Toggle("Archived", isOn: $reviewDefaultIncludeArchived)
+                Toggle("Trash", isOn: $reviewDefaultIncludeTrashed)
+            } header: {
+                Text("Filter by status")
+            } footer: {
+                Text("Defines which mail a review pass scans by default. The Inbox is always in scope. A chat request can override these for a single review.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!isEmailEnabled)
 
+            // MARK: Notifications
+
+            Section {
                 Toggle("Auto-navigate to review chat", isOn: $autoNavigateToReviewChat)
                 Text("When off, a dock badge / toast is shown instead of switching to the new review chat.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } header: {
-                Text("Sync & Review")
+                Text("Notifications")
             }
             .disabled(!isEmailEnabled)
         }
@@ -325,6 +341,103 @@ struct EmailSettingsView: View {
             name: SettingsNotifications.emailReviewScheduleDidChange,
             object: nil
         )
+    }
+}
+
+// MARK: - Account row
+
+private struct AccountRow: View {
+    let account: StoredEmailAccount
+    let onEdit: () -> Void
+    let onDelete: () -> Void
+
+    @State private var horizontalOffset: CGFloat = 0
+    @State private var showingDeleteConfirmation = false
+
+    private let actionWidth: CGFloat = 80
+    private var triggerDistance: CGFloat { actionWidth + 16 }
+    private var maxDragDistance: CGFloat { max(actionWidth, triggerDistance) }
+    private var revealProgress: Double {
+        min(Double(abs(horizontalOffset) / triggerDistance), 1)
+    }
+
+    var body: some View {
+        ZStack {
+            swipeBackground
+            rowContent
+                .offset(x: horizontalOffset)
+                .gesture(dragGesture)
+        }
+        .clipShape(Rectangle())
+        .animation(.easeOut(duration: 0.16), value: horizontalOffset)
+        .confirmationDialog(
+            "Delete \(account.effectiveDisplayName)?",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Account", role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This removes the account and its saved password. Mail already synced is kept.")
+        }
+    }
+
+    private var rowContent: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.green)
+                .imageScale(.medium)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(account.effectiveDisplayName)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(account.imapUsername)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .foregroundStyle(.tertiary)
+                .imageScale(.small)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onEdit)
+    }
+
+    private var swipeBackground: some View {
+        HStack {
+            Spacer()
+            HStack(spacing: 6) {
+                Image(systemName: "trash")
+                    .font(.subheadline)
+                Text("Delete")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+            }
+            .foregroundStyle(.white)
+            .frame(width: actionWidth)
+            .frame(maxHeight: .infinity)
+            .background(Color.red.opacity(0.25 + 0.75 * revealProgress))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .opacity(revealProgress == 0 ? 0 : 1)
+        .accessibilityHidden(true)
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                horizontalOffset = max(-maxDragDistance, min(0, value.translation.width))
+            }
+            .onEnded { value in
+                horizontalOffset = 0
+                if value.translation.width <= -triggerDistance {
+                    showingDeleteConfirmation = true
+                }
+            }
     }
 }
 
