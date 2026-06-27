@@ -6,6 +6,7 @@ final class Chat {
     @Attribute(.unique) var id: UUID
     var title: String
     var modelSelection: String
+    var reasoningEffortRaw: String?
     var createdAt: Date
     var updatedAt: Date
     var isGenerating: Bool
@@ -15,10 +16,21 @@ final class Chat {
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.chat)
     var messages: [ChatMessage]
 
+    var reasoningEffort: ModelReasoningEffort {
+        get {
+            guard let raw = reasoningEffortRaw else { return .off }
+            return ModelReasoningEffort(rawValue: raw) ?? .off
+        }
+        set {
+            reasoningEffortRaw = newValue.rawValue
+        }
+    }
+
     init(
         id: UUID = UUID(),
         title: String,
         modelSelection: String,
+        reasoningEffort: ModelReasoningEffort = .off,
         createdAt: Date = .now,
         updatedAt: Date = .now,
         isGenerating: Bool = false,
@@ -29,6 +41,7 @@ final class Chat {
         self.id = id
         self.title = title
         self.modelSelection = modelSelection
+        self.reasoningEffortRaw = reasoningEffort.rawValue
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.isGenerating = isGenerating

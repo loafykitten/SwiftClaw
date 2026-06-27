@@ -22,6 +22,13 @@ struct ChatComposerView: View {
     var submissionError: String?
     var allowsImageAttachments = true
 
+    /// Per-chat reasoning effort source. When non-nil, the composer reads and
+    /// writes the chat's stored value via `onReasoningEffortChange` instead of
+    /// the global `@AppStorage` default (which is only used by the Home
+    /// composer for brand-new chats).
+    var chatReasoningEffort: ModelReasoningEffort? = nil
+    var onReasoningEffortChange: ((ModelReasoningEffort) -> Void)? = nil
+
     /// Called with the message text, model selection, per-message toggles, and
     /// any finalized-ready draft image attachments.
     var onSubmit: (ChatComposerSubmission) -> Bool
@@ -51,8 +58,8 @@ struct ChatComposerView: View {
     }
 
     private var selectedReasoningEffort: ModelReasoningEffort {
-        guard selectedModelSupportsReasoning else {
-            return .off
+        if let chatReasoningEffort {
+            return chatReasoningEffort
         }
 
         return ModelReasoningEffort(rawValue: selectedReasoningEffortRaw) ?? .off
@@ -472,7 +479,11 @@ struct ChatComposerView: View {
             return
         }
 
-        selectedReasoningEffortRaw = effort.rawValue
+        if let onReasoningEffortChange {
+            onReasoningEffortChange(effort)
+        } else {
+            selectedReasoningEffortRaw = effort.rawValue
+        }
 
         if !canEnableInvestigation {
             setInvestigation(false)

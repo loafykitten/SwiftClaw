@@ -309,6 +309,43 @@ private struct ChatHistoryActionButton: View {
     }
 }
 
+private enum ChatTranscriptItem: Identifiable {
+    case daySeparator(Date)
+    case message(ChatMessage)
+
+    var id: String {
+        switch self {
+        case .daySeparator(let date):
+            return "day-\(Int(date.timeIntervalSince1970))"
+        case .message(let message):
+            return message.id.uuidString
+        }
+    }
+}
+
+private struct ChatDaySeparator: View {
+    let date: Date
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.25))
+                .frame(height: 0.5)
+
+            Text(ChatDaySeparatorFormatter.label(for: date))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Rectangle()
+                .fill(Color.secondary.opacity(0.25))
+                .frame(height: 0.5)
+        }
+        .padding(.vertical, 2)
+        .accessibilityLabel("Date separator")
+        .accessibilityValue(ChatDaySeparatorFormatter.label(for: date))
+    }
+}
+
 private struct ChatTranscriptView: View {
     @Environment(\.modelContext) private var modelContext
 
@@ -325,6 +362,28 @@ private struct ChatTranscriptView: View {
         return "\(chat.id.uuidString)|\(messages)|\(chat.isGenerating)|\(error.count)"
     }
 
+    private var transcriptItems: [ChatTranscriptItem] {
+        let messages = chat.visibleMessages
+        var separatorDays = ChatDaySeparatorFormatter
+            .separatorDays(for: messages.map(\.createdAt))
+            .makeIterator()
+        var nextSeparator = separatorDays.next()
+        var items: [ChatTranscriptItem] = []
+
+        for message in messages {
+            let day = Calendar.current.startOfDay(for: message.createdAt)
+
+            if day == nextSeparator {
+                items.append(.daySeparator(day))
+                nextSeparator = separatorDays.next()
+            }
+
+            items.append(.message(message))
+        }
+
+        return items
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ChatHeaderView(chat: chat)
@@ -334,13 +393,18 @@ private struct ChatTranscriptView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 14) {
-                        ForEach(chat.visibleMessages) { message in
-                            ChatMessageRow(
-                                message: message,
-                                emailDispatcher: emailDispatcherProvider(),
-                                showImagePreview: showImagePreview
-                            )
-                                .id(message.id.uuidString)
+                        ForEach(transcriptItems) { item in
+                            switch item {
+                            case .daySeparator(let day):
+                                ChatDaySeparator(date: day)
+                            case .message(let message):
+                                ChatMessageRow(
+                                    message: message,
+                                    emailDispatcher: emailDispatcherProvider(),
+                                    showImagePreview: showImagePreview
+                                )
+                                    .id(message.id.uuidString)
+                            }
                         }
 
                         if chat.isGenerating {
@@ -368,7 +432,14 @@ private struct ChatTranscriptView: View {
                 }
             }
 
-            ChatComposerView(isBusy: chat.isGenerating) { submission in
+            ChatComposerView(
+                isBusy: chat.isGenerating,
+                chatReasoningEffort: chat.reasoningEffort,
+                onReasoningEffortChange: { effort in
+                    chat.reasoningEffort = effort
+                    try? modelContext.save()
+                }
+            ) { submission in
                 submitMessage(submission)
             }
             .padding(.horizontal, 24)
@@ -569,6 +640,14 @@ private struct ChatMessageRow: View {
                             .fill(isUser ? accent : Color.secondary.opacity(0.12))
                     }
                 }
+
+                Text(
+                    message.createdAt,
+                    format: Date.FormatStyle(date: .omitted, time: .shortened)
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Sent at \(message.createdAt.formatted(date: .omitted, time: .shortened))")
             }
                 .frame(maxWidth: ChatBubbleLayout.maxWidth, alignment: isUser ? .trailing : .leading)
                 .padding(isUser ? .trailing : .leading, ChatBubbleLayout.avatarSpacing)

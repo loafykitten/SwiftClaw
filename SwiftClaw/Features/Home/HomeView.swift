@@ -70,6 +70,7 @@ struct HomeView: View {
         let chat = Chat(
             title: ChatDefaults.title(for: input),
             modelSelection: submission.model,
+            reasoningEffort: submission.reasoningEffort ?? .off,
             isGenerating: true
         )
 
