@@ -232,4 +232,58 @@ struct SettingsStorageTests {
         )
         #expect(nonReasoning == ["Azure: Plain", "Neuralwatt: plain-model"])
     }
+
+    // MARK: - Chat composer model-change reasoning default
+
+    @Test func composerReasoningDefaultReturnsNilForNonReasoningModel() {
+        #expect(
+            SettingsStorage.composerDefaultReasoningEffort(
+                isClawModel: false,
+                supportsReasoning: false,
+                clawReasoningEffort: .medium
+            ) == nil
+        )
+
+        // Even a Claw selection yields no default when the model lacks the
+        // reasoning capability — the reasoning menu is hidden for it.
+        #expect(
+            SettingsStorage.composerDefaultReasoningEffort(
+                isClawModel: true,
+                supportsReasoning: false,
+                clawReasoningEffort: .high
+            ) == nil
+        )
+    }
+
+    @Test func composerReasoningDefaultUsesClawConfiguredEffortForClawModel() {
+        #expect(
+            SettingsStorage.composerDefaultReasoningEffort(
+                isClawModel: true,
+                supportsReasoning: true,
+                clawReasoningEffort: .medium
+            ) == .medium
+        )
+
+        // The Claw's configured effort is honored verbatim — whatever the
+        // user picked in Settings > Model Behaviors, not a hardcoded value.
+        #expect(
+            SettingsStorage.composerDefaultReasoningEffort(
+                isClawModel: true,
+                supportsReasoning: true,
+                clawReasoningEffort: .high
+            ) == .high
+        )
+    }
+
+    @Test func composerReasoningDefaultReturnsLowForOtherReasoningModel() {
+        // A reasoning-capable model that isn't the Claw preset defaults to Low —
+        // regardless of the Claw's configured effort, which must not leak in.
+        #expect(
+            SettingsStorage.composerDefaultReasoningEffort(
+                isClawModel: false,
+                supportsReasoning: true,
+                clawReasoningEffort: .high
+            ) == .low
+        )
+    }
 }

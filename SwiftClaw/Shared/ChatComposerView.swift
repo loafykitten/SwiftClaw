@@ -89,6 +89,38 @@ struct ChatComposerView: View {
         selectedModelSupportsReasoning ? selectedReasoningEffort : nil
     }
 
+    /// Whether the composer's current selection is the Claw model. True when the
+    /// user picked the "Claw Model" quick-pick preset, or — as a fallback — when
+    /// the resolved selection happens to be the exact model configured as the
+    /// Claw in Settings > Model Behaviors.
+    private var isClawModelSelected: Bool {
+        if activeModelSelection == ComposerModelSelection.clawModel {
+            return true
+        }
+
+        guard let effectiveModel, !clawModel.isEmpty, isClawModelAvailable else {
+            return false
+        }
+
+        return effectiveModel == clawModel
+    }
+
+    /// The reasoning effort applied as a default whenever the model selection
+    /// changes (see `applyReasoningDefaultForModelChange`).
+    ///
+    /// - Claw model → the Claw's configured effort (Settings > Model
+    ///   Behaviors), so the composer mirrors the companion preset.
+    /// - Any other reasoning-capable model → Low.
+    /// - Non-reasoning models → `nil`: the reasoning menu is hidden for those
+    ///   models, and any previously chosen effort is left untouched until the
+    ///   next reasoning-capable selection.
+    private var reasoningDefaultForModelChange: ModelReasoningEffort? {
+        SettingsStorage.composerDefaultReasoningEffort(
+            isClawModel: isClawModelSelected,
+            supportsReasoning: selectedModelSupportsReasoning
+        )
+    }
+
     private var selectedModelTitle: String {
         guard !availableModels.isEmpty else {
             return "(N/A)"
@@ -409,6 +441,9 @@ struct ChatComposerView: View {
         .onChange(of: effectiveModel) { _, _ in
             syncCapabilityState()
         }
+        .onChange(of: activeModelSelection) { _, _ in
+            applyReasoningDefaultForModelChange()
+        }
         .onChange(of: webSearchEnabled) { _, _ in
             syncCapabilityState()
         }
@@ -488,6 +523,21 @@ struct ChatComposerView: View {
         if !canEnableInvestigation {
             setInvestigation(false)
         }
+    }
+
+    /// Re-applies the model-change reasoning default. SwiftUI only fires this
+    /// on actual model-selection changes (never on appear/refresh), so it never
+    /// clobbers a chat's stored effort on entry, and re-selecting the same
+    /// model is a no-op. A manual effort edit sticks until the model is changed
+    /// again, at which point a fresh default is computed here. Per-chat mode
+    /// persists via `onReasoningEffortChange`; the Home composer writes the
+    /// global home default.
+    private func applyReasoningDefaultForModelChange() {
+        guard let effort = reasoningDefaultForModelChange else {
+            return
+        }
+
+        setReasoningEffort(effort)
     }
 
     private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {

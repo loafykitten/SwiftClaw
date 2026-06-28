@@ -398,6 +398,25 @@ enum SettingsStorage {
         return raw.flatMap(ModelReasoningEffort.init(rawValue:)) ?? defaultClawReasoningEffort
     }
 
+    /// Default reasoning effort the chat composer applies when the model
+    /// selection changes (its `onChange(of: modelSelection)` hook). Keeps the
+    /// rule in one place, testable without a SwiftUI host.
+    ///
+    /// - Claw model → the Claw's configured effort (Settings > Model
+    ///   Behaviors), so the composer mirrors the companion preset.
+    /// - Any other reasoning-capable model → Low.
+    /// - Non-reasoning models → `nil`: the reasoning menu is hidden for those
+    ///   models, and any previously chosen effort is left untouched until the
+    ///   next reasoning-capable selection.
+    static func composerDefaultReasoningEffort(
+        isClawModel: Bool,
+        supportsReasoning: Bool,
+        clawReasoningEffort: ModelReasoningEffort = SettingsStorage.loadClawReasoningEffort()
+    ) -> ModelReasoningEffort? {
+        guard supportsReasoning else { return nil }
+        return isClawModel ? clawReasoningEffort : .low
+    }
+
     /// Canonical Codable ⇄ `UserDefaults` helpers: persist a `Codable` value as
     /// JSON under a settings key, decoding with a fallback when the key is
     /// missing or unreadable. Centralizes the encode/decode dance that several
