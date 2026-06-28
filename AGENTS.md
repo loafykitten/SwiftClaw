@@ -62,5 +62,23 @@ Rule of thumb: `rg`/`fd` to locate, `ast-grep` for surgical multi-file edits, `d
 3. Add a `NavigationItem.foo` case + `destination` branch; filter in `ContentView.visibleNavigationItems` if gated — see `docs/architecture/OVERVIEW.md`.
 4. For system-only AI work, add a dedicated `*ReviewService` + `*ReviewNotifyTool` invoked from the scheduler/loop — see `docs/conventions/TOOLS.md`. Do NOT register the tool on `ToolRegistry.shared`.
 
+## Token economy
+
+Locate before you read. Reading a large source file in full is the most
+expensive thing you'll do in a session, and most of it is usually irrelevant
+to the task at hand.
+
+- Prefer `rg`/`fd` to pin down the file and line range first, then `read`
+  with `offset`/`limit` to pull only the relevant slice. Expand with further
+  `rg`/`read` calls as the picture sharpens — several small reads beat one
+  full-file read.
+- Don't re-derive architecture or conventions from source when a focused
+  doc exists. Read `docs/architecture/OVERVIEW.md` or the relevant
+  `docs/conventions/*.md` instead of pawing through a 1k+ line view file.
+- Reserve full-file reads for genuinely small files or when you must edit
+  across most of the file in one pass.
+- Scope `xcodebuild` test runs with `-only-testing:` and pipe through
+  `xcbeautify --quiet` to keep the returned output small.
+
 ## Side Note
 When doing this work, it's okay if you make mistakes. If you encounter any issues unrelated to the task at hand, let me know about them at the end rather than trying to address them in your thought process. If you don't know a solution to a problem, it's okay to ask me for clarification.
