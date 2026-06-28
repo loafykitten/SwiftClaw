@@ -61,3 +61,6 @@ Rule of thumb: `rg`/`fd` to locate, `ast-grep` for surgical multi-file edits, `d
 2. Add a `SettingsSection.foo` case + a `FooSettingsView` (Form / Section / `.formStyle(.grouped)`).
 3. Add a `NavigationItem.foo` case + `destination` branch; filter in `ContentView.visibleNavigationItems` if gated — see `docs/architecture/OVERVIEW.md`.
 4. For system-only AI work, add a dedicated `*ReviewService` + `*ReviewNotifyTool` invoked from the scheduler/loop — see `docs/conventions/TOOLS.md`. Do NOT register the tool on `ToolRegistry.shared`.
+
+## Side Note
+When doing this work, it's okay if you make mistakes. If you encounter any issues unrelated to the task at hand, let me know about them at the end rather than trying to address them in your thought process. If you don't know a solution to a problem, it's okay to ask me for clarification.
