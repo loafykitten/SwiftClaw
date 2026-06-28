@@ -14,7 +14,7 @@ import os
 /// are accepted for source compatibility but the rendered message is logged
 /// as `.public` (this is a personal app), so values are never `<private>` in
 /// either channel.
-enum AppLog {
+nonisolated enum AppLog {
     static let subsystem = Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw"
 
     static func make(_ category: String) -> AppLogger {
@@ -43,7 +43,7 @@ enum AppLog {
     #endif
 }
 
-struct AppLogger: Sendable {
+nonisolated struct AppLogger: Sendable {
     let category: String
     private let logger: Logger
 
@@ -88,7 +88,7 @@ struct AppLogger: Sendable {
 /// API closely enough that existing call sites — including
 /// `\(x, privacy: .public)` — compile unchanged, while also capturing the
 /// rendered text so DEBUG builds can mirror it to stdout.
-struct AppLogMessage: ExpressibleByStringInterpolation {
+nonisolated struct AppLogMessage: ExpressibleByStringInterpolation {
     let text: String
 
     init(stringLiteral value: String) {
@@ -99,7 +99,7 @@ struct AppLogMessage: ExpressibleByStringInterpolation {
         text = stringInterpolation.text
     }
 
-    struct StringInterpolation: StringInterpolationProtocol {
+    nonisolated struct StringInterpolation: StringInterpolationProtocol {
         var text = ""
 
         init(literalCapacity: Int, interpolationCount: Int) {

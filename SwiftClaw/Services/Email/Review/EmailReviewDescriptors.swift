@@ -2,7 +2,7 @@ import Foundation
 
 /// Snapshot of a thread used for building the AI review prompt. Decouples the
 /// `EmailThread` SwiftData model from the prompt construction.
-struct EmailReviewThreadDescriptor: Codable, Sendable {
+nonisolated struct EmailReviewThreadDescriptor: Codable, Sendable {
     let threadID: UUID
     let subject: String
     let latestMessageDate: String
@@ -57,7 +57,7 @@ extension Email {
     }
 }
 
-struct EmailReviewMessageDescriptor: Codable, Sendable {
+nonisolated struct EmailReviewMessageDescriptor: Codable, Sendable {
     let messageID: UUID
     let subject: String
     let fromAddress: String
@@ -68,12 +68,12 @@ struct EmailReviewMessageDescriptor: Codable, Sendable {
     let notes: [EmailReviewNoteDescriptor]
 }
 
-struct EmailReviewNoteDescriptor: Codable, Sendable {
+nonisolated struct EmailReviewNoteDescriptor: Codable, Sendable {
     let author: String
     let content: String
 }
 
-struct EmailReviewAction: Codable, Sendable {
+nonisolated struct EmailReviewAction: Codable, Sendable {
     let emailGUID: String
     let actionToken: String
     let summary: String?
@@ -85,7 +85,7 @@ struct EmailReviewAction: Codable, Sendable {
     }
 }
 
-enum EmailReviewDateFormatter {
+nonisolated enum EmailReviewDateFormatter {
     static func string(from date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
@@ -94,7 +94,7 @@ enum EmailReviewDateFormatter {
     }
 }
 
-enum EmailReviewDateContext {
+nonisolated enum EmailReviewDateContext {
     static func currentString(now: Date = Date(), timeZone: TimeZone = .current) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .full

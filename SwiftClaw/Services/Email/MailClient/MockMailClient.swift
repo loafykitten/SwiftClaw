@@ -2,7 +2,7 @@ import Foundation
 
 /// In-memory `MailClient` used by tests and SwiftUI previews. Maintains
 /// mailbox state keyed by name; never touches the network or Keychain.
-actor MockMailClient: @preconcurrency MailClient {
+actor MockMailClient: MailClient {
     private var mailboxes: [String: [FetchedMessage]] = [:]
     private(set) var sentEmails: [OutgoingEmail] = []
     private(set) var flagUpdates: [(uid: Int, mailbox: String, updates: MailFlagUpdate)] = []
@@ -21,8 +21,8 @@ actor MockMailClient: @preconcurrency MailClient {
     var mockSentMailbox: String? = nil
     private(set) var specialUseResolutionCount: Int = 0
 
-    var isConfigured: Bool = true
-    var supportsIDLE: Bool = false
+    nonisolated let isConfigured: Bool
+    nonisolated let supportsIDLE = false
 
     init(isConfigured: Bool = true) {
         self.isConfigured = isConfigured

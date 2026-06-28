@@ -4,7 +4,7 @@ import Foundation
 /// slice of inbox it wants to review. `EmailReviewFetchTool` fills missing
 /// arguments with the autonomous-review defaults before handing the filter to
 /// `EmailRepository.fetchThreadsForReview`.
-struct EmailReviewFetchFilter: Sendable {
+nonisolated struct EmailReviewFetchFilter: Sendable {
     /// Lookback window (in days) on a thread's latest activity. Threads older
     /// than this are dropped unless they qualify via an override category
     /// (flagged/notated). Default is no hard age cap; the model narrows this

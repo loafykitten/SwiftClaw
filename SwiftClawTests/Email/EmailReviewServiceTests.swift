@@ -364,7 +364,6 @@ struct EmailReviewServiceTests {
             case .user(let content, _): return content
             case .assistant(let content): return content
             case .system(let content): return content
-            default: return nil
             }
         }
         // Prior conversation is replayed; the empty card message (and any
@@ -436,7 +435,7 @@ struct EmailReviewServiceTests {
                     userPrompt = content
                 case .system(let content):
                     systemPrompt = content
-                default:
+                case .assistant:
                     break
                 }
             }

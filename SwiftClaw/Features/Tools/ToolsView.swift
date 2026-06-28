@@ -201,11 +201,11 @@ struct ToolsView: View {
     }
 
     private func refresh() {
-        tools = ToolRegistry.shared.tools.map(ToolListing.init)
+        tools = ToolRegistry.shared.tools.map { ToolListing(tool: $0) }
     }
 }
 
-private struct ToolListing: Identifiable {
+nonisolated private struct ToolListing: Identifiable {
     let id: String
     let displayName: String
     let description: String

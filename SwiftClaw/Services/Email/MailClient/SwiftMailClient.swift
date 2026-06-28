@@ -23,7 +23,7 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     private let imapPasswordOverride: String?
     private let smtpPasswordOverride: String?
 
-    init(
+    nonisolated init(
         account: StoredEmailAccount,
         imapPasswordOverride: String? = nil,
         smtpPasswordOverride: String? = nil
@@ -370,8 +370,9 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             // Persist the resolved names back to `EmailAccountStore` so
             // subsequent archive/delete/send calls hit the cache instead of
             // re-listing mailboxes every time.
+            let accountToUpdate = updated
             await MainActor.run {
-                EmailAccountStore.shared.update(updated)
+                EmailAccountStore.shared.update(accountToUpdate)
             }
         } catch {
             try? await server.disconnect()

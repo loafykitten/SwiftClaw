@@ -13,7 +13,7 @@ actor BraveRateGate {
         let requestsPerSecond = SettingsStorage.loadBraveSearchRequestsPerSecond()
         let spacing = Duration.seconds(1.0 / requestsPerSecond)
         let now = ContinuousClock.now
-        let scheduled = max(now, nextAllowedTime)
+        let scheduled = Swift.max(now, nextAllowedTime)
         nextAllowedTime = scheduled.advanced(by: spacing)
 
         let wait = now.duration(to: scheduled)

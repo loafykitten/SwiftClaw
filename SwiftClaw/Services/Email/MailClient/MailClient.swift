@@ -4,7 +4,7 @@ import Foundation
 /// mailbox's UIDVALIDITY and the highest UID encountered in this batch (so
 /// the caller can record a high-water mark for incremental sync). `maxUID`
 /// is `nil` when the fetch returned no messages.
-struct MailboxFetchResult: Sendable, Hashable {
+nonisolated struct MailboxFetchResult: Sendable, Hashable {
     let messages: [FetchedMessage]
     let uidValidity: UInt32
     let maxUID: UInt32?
@@ -16,7 +16,7 @@ struct MailboxFetchResult: Sendable, Hashable {
 /// per-message payload (UID is always implicit; `FetchMessageInfoOptions`
 /// `.uidFlagsOnly` only pulls `\Seen`/`\Flagged`). Practical to run on every
 /// sync so the local store stays a faithful mirror of server membership.
-struct MailboxUIDSet: Sendable, Hashable {
+nonisolated struct MailboxUIDSet: Sendable, Hashable {
     let uidValidity: UInt32
     let uids: Set<UInt32>
     /// Current `\Seen`/`\Flagged` state per UID, keyed by the UID value.
@@ -29,7 +29,7 @@ struct MailboxUIDSet: Sendable, Hashable {
 /// Minimal flag record carried alongside a `MailboxUIDSet` entry. Mirrors
 /// the subset of IMAP flags SwiftClaw tracks; anything else the server
 /// advertises is ignored.
-struct MailFlagSnapshot: Sendable, Hashable {
+nonisolated struct MailFlagSnapshot: Sendable, Hashable {
     let isRead: Bool
     let isFlagged: Bool
 
@@ -41,7 +41,7 @@ struct MailFlagSnapshot: Sendable, Hashable {
 
 /// Domain-level normalized representation of a fetched email, decoupled from any
 /// IMAP library type. The repository maps this into the SwiftData `Email` model.
-struct FetchedMessage: Sendable, Hashable {
+nonisolated struct FetchedMessage: Sendable, Hashable {
     let uid: Int
     let messageID: String?
     let subject: String
@@ -61,7 +61,7 @@ struct FetchedMessage: Sendable, Hashable {
     let attachmentDescriptors: [FetchedAttachmentDescriptor]
 }
 
-struct FetchedAttachmentDescriptor: Sendable, Hashable {
+nonisolated struct FetchedAttachmentDescriptor: Sendable, Hashable {
     let filename: String
     let mimeType: String
     let sizeBytes: Int
@@ -96,7 +96,7 @@ struct FetchedAttachmentDescriptor: Sendable, Hashable {
 /// so replies correctly thread on the recipient side AND in SwiftClaw.
 /// When set, `SwiftMailClient.send` writes them as `Message-ID` /
 /// `In-Reply-To` / `References` headers on the outgoing message.
-struct OutgoingEmail: Sendable {
+nonisolated struct OutgoingEmail: Sendable {
     let fromAddress: String
     let toAddresses: [String]
     let ccAddresses: [String]
@@ -140,7 +140,7 @@ struct OutgoingEmail: Sendable {
 }
 
 /// Domain-level flag updates applied via the underlying IMAP server.
-struct MailFlagUpdate: Sendable {
+nonisolated struct MailFlagUpdate: Sendable {
     let isRead: Bool?
     let isFlagged: Bool?
 }
@@ -148,7 +148,7 @@ struct MailFlagUpdate: Sendable {
 /// Abstracts IMAP+SMTP capabilities behind a single protocol so the rest of the
 /// codebase can be tested with `MockMailClient` and so we can swap IMAP libraries
 /// without touching the repository/scheduler layer.
-protocol MailClient: Sendable {
+nonisolated protocol MailClient: Sendable {
     /// Whether the underlying account credentials and hosts are configured.
     var isConfigured: Bool { get }
 
@@ -224,7 +224,7 @@ extension MailClient {
     }
 }
 
-enum MailClientError: LocalizedError {
+nonisolated enum MailClientError: LocalizedError {
     case notConfigured
     case connectFailed(String)
     case authenticationFailed(String)

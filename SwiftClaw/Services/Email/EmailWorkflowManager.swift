@@ -62,16 +62,18 @@ final class EmailWorkflowManager {
             forName: .emailReviewChatOpened,
             object: nil,
             queue: nil
-        ) { [weak self] _ in
-            Task { @MainActor in self?.clearDockBadge() }
+        ) { _ in
+            Task { @MainActor in EmailWorkflowManager.shared.clearDockBadge() }
         }
 
         reviewScheduleObserver = NotificationCenter.default.addObserver(
             forName: SettingsNotifications.emailReviewScheduleDidChange,
             object: nil,
             queue: nil
-        ) { [weak self] _ in
-            Task { @MainActor in self?.restartReviewLoop(modelContainer: modelContainer) }
+        ) { _ in
+            Task { @MainActor in
+                EmailWorkflowManager.shared.restartReviewLoop(modelContainer: modelContainer)
+            }
         }
 
         startReviewLoop(modelContainer: modelContainer)

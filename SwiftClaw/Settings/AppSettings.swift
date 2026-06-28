@@ -29,7 +29,7 @@ enum AccentColor {
         let rgb = hslToRGB(
             hue: hue,
             saturation: defaultSaturation,
-            lightness: min(max(lightness, lightnessRange.lowerBound), lightnessRange.upperBound)
+            lightness: Swift.min(Swift.max(lightness, lightnessRange.lowerBound), lightnessRange.upperBound)
         )
 
         return Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
@@ -47,15 +47,15 @@ enum AccentColor {
         let brightness = userDefaults.double(forKey: SettingsKeys.accentBrightness)
         let lightness = brightness * (2 - defaultSaturation) / 2
         userDefaults.set(
-            min(max(lightness, lightnessRange.lowerBound), lightnessRange.upperBound),
+            Swift.min(Swift.max(lightness, lightnessRange.lowerBound), lightnessRange.upperBound),
             forKey: SettingsKeys.accentLightness
         )
     }
 
     private static func hslToRGB(hue: Double, saturation: Double, lightness: Double) -> (red: Double, green: Double, blue: Double) {
-        let hue = min(max(hue, 0), 1)
-        let saturation = min(max(saturation, 0), 1)
-        let lightness = min(max(lightness, 0), 1)
+        let hue = Swift.min(Swift.max(hue, 0), 1)
+        let saturation = Swift.min(Swift.max(saturation, 0), 1)
+        let lightness = Swift.min(Swift.max(lightness, 0), 1)
 
         guard saturation > 0 else {
             return (lightness, lightness, lightness)
@@ -100,10 +100,10 @@ enum SettingsKeys {
     static let neuralwattModels = "settings.neuralwatt.models"
     static let openRouterAPIKey = "settings.openRouter.apiKey"
     static let braveSearchAPIKey = "settings.braveSearch.apiKey"
-    static let braveSearchRequestsPerSecond = "settings.braveSearch.requestsPerSecond"
+    nonisolated static let braveSearchRequestsPerSecond = "settings.braveSearch.requestsPerSecond"
     static let webSearchEnabled = "settings.tools.webSearch.enabled"
     static let investigationEnabled = "settings.tools.investigation.enabled"
-    static let investigationMaxSubAgents = "settings.tools.investigation.maxSubAgents"
+    nonisolated static let investigationMaxSubAgents = "settings.tools.investigation.maxSubAgents"
     static let openRouterModels = "settings.openRouter.models"
     static let swiftModel = "settings.behaviors.swiftModel"
     static let clawModel = "settings.behaviors.clawModel"
@@ -347,7 +347,7 @@ enum EmailSyncIntervalOption: Int, CaseIterable, Sendable, Hashable, Identifiabl
     }
 }
 
-struct EmailReviewFetchDefaults: Equatable, Sendable {
+nonisolated struct EmailReviewFetchDefaults: Equatable, Sendable {
     var maxAgeDays: Int?
     var limit: Int
     var includeFlagged: Bool
@@ -377,7 +377,7 @@ struct EmailReviewFetchDefaults: Equatable, Sendable {
 
 private extension ClosedRange where Bound == Int {
     func clamping(_ value: Int) -> Int {
-        min(max(value, lowerBound), upperBound)
+        Swift.min(Swift.max(value, lowerBound), upperBound)
     }
 }
 
@@ -536,8 +536,8 @@ enum SettingsStorage {
         saveCodable(models, forKey: key, userDefaults: userDefaults)
     }
 
-    static let defaultBraveSearchRequestsPerSecond = 1.0
-    static let braveSearchRequestsPerSecondRange: ClosedRange<Double> = 0.5...20
+    nonisolated static let defaultBraveSearchRequestsPerSecond = 1.0
+    nonisolated static let braveSearchRequestsPerSecondRange: ClosedRange<Double> = 0.5...20
     static let defaultWebSearchEnabled = true
     static let defaultInvestigationEnabled = true
 
@@ -558,25 +558,25 @@ enum SettingsStorage {
             )
     }
 
-    static func loadBraveSearchRequestsPerSecond() -> Double {
-        let stored = UserDefaults.standard.double(forKey: SettingsKeys.braveSearchRequestsPerSecond)
+    nonisolated static func loadBraveSearchRequestsPerSecond(userDefaults: UserDefaults = .standard) -> Double {
+        let stored = userDefaults.double(forKey: SettingsKeys.braveSearchRequestsPerSecond)
 
         guard stored > 0 else {
             return defaultBraveSearchRequestsPerSecond
         }
 
-        return min(
-            max(stored, braveSearchRequestsPerSecondRange.lowerBound),
+        return Swift.min(
+            Swift.max(stored, braveSearchRequestsPerSecondRange.lowerBound),
             braveSearchRequestsPerSecondRange.upperBound
         )
     }
 
-    static let defaultInvestigationMaxSubAgents = 3
-    static let investigationMaxSubAgentsRange: ClosedRange<Int> = 1...5
+    nonisolated static let defaultInvestigationMaxSubAgents = 3
+    nonisolated static let investigationMaxSubAgentsRange: ClosedRange<Int> = 1...5
 
     static let defaultEmailEnabled = false
-    static let defaultEmailImapPort = 993
-    static let defaultEmailSmtpPort = 587
+    nonisolated static let defaultEmailImapPort = 993
+    nonisolated static let defaultEmailSmtpPort = 587
     static let defaultEmailPollIntervalSeconds = 300
     static let emailPollIntervalSecondsRange: ClosedRange<Int> = 60...3600
     static let defaultEmailReviewIntervalSeconds = 1800
@@ -585,7 +585,7 @@ enum SettingsStorage {
     static let defaultEmailReviewScheduleMode = EmailReviewScheduleMode.interval
     static let defaultEmailReviewDailyTimes = [9 * 60]
     static let emailReviewDailyTimeRange: ClosedRange<Int> = 0...1439
-    static let defaultEmailReviewMaxThreads = 10
+    nonisolated static let defaultEmailReviewMaxThreads = 10
     static let emailReviewMaxThreadsRange: ClosedRange<Int> = 5...100
     static let defaultEmailReviewDefaultMaxAgeEnabled = false
     static let defaultEmailReviewDefaultMaxAgeDays = 30
@@ -820,15 +820,15 @@ enum SettingsStorage {
         )
     }
 
-    static func loadInvestigationMaxSubAgents() -> Int {
-        let stored = UserDefaults.standard.integer(forKey: SettingsKeys.investigationMaxSubAgents)
+    nonisolated static func loadInvestigationMaxSubAgents(userDefaults: UserDefaults = .standard) -> Int {
+        let stored = userDefaults.integer(forKey: SettingsKeys.investigationMaxSubAgents)
 
         guard stored > 0 else {
             return defaultInvestigationMaxSubAgents
         }
 
-        return min(
-            max(stored, investigationMaxSubAgentsRange.lowerBound),
+        return Swift.min(
+            Swift.max(stored, investigationMaxSubAgentsRange.lowerBound),
             investigationMaxSubAgentsRange.upperBound
         )
     }

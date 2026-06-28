@@ -14,7 +14,7 @@ import Foundation
 /// use. They're additive Codable fields and stay `nil` until the
 /// first `SwiftMailClient.resolveSpecialUseMailboxes()` call lands them —
 /// calls that pre-date resolution fall back to a per-provider default table.
-struct StoredEmailAccount: Codable, Identifiable, Sendable, Hashable {
+nonisolated struct StoredEmailAccount: Codable, Identifiable, Sendable, Hashable {
     var id: UUID
     var displayName: String
     var imapHost: String
@@ -95,7 +95,7 @@ struct StoredEmailAccount: Codable, Identifiable, Sendable, Hashable {
 
 /// Per-account Keychain key helpers. Passwords are keyed by account UUID so
 /// deleting an account can scrub its credentials cleanly.
-enum EmailAccountKeychainKeys {
+nonisolated enum EmailAccountKeychainKeys {
     static func imapPassword(for accountID: UUID) -> String {
         "settings.email.account.\(accountID.uuidString).imapPassword"
     }
@@ -153,8 +153,9 @@ final class EmailAccountStore {
     /// list on the MainActor. Used by `MailSyncWorker` (an actor) so it can
     /// read the latest accounts each sync without crossing isolation unsafely.
     func accountsProvider() -> @Sendable () async -> [StoredEmailAccount] {
-        { [weak self] in
-            await MainActor.run { self?.accounts ?? [] }
+        let store = self
+        return {
+            await MainActor.run { store.accounts }
         }
     }
 
@@ -295,7 +296,7 @@ final class EmailAccountStore {
     }
 }
 
-enum EmailAccountPasswordKind {
+nonisolated enum EmailAccountPasswordKind {
     case imap
     case smtp
 }

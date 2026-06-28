@@ -1,12 +1,12 @@
 import Foundation
 import Observation
 
-struct ToolActivityScope: Hashable, Sendable {
+nonisolated struct ToolActivityScope: Hashable, Sendable {
     let chatID: UUID
     let generationID: UUID
 }
 
-enum ToolActivityContext {
+nonisolated enum ToolActivityContext {
     @TaskLocal static var currentScope: ToolActivityScope?
 }
 

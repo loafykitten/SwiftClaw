@@ -98,27 +98,28 @@ actor MailSyncWorker {
         // network round-trips can overlap — run them concurrently and sum the
         // results. (Mailboxes within an account still sync sequentially; they
         // share one connection.)
-        var totalInserted = 0
-        var totalRemoved = 0
-        await withTaskGroup(of: (inserted: Int, removed: Int).self) { group in
+        let totals = await withTaskGroup(of: (inserted: Int, removed: Int).self) { group in
             for account in accounts {
                 group.addTask {
                     await self.syncAccount(account, reconcile: shouldReconcile)
                 }
             }
+            var totalInserted = 0
+            var totalRemoved = 0
             for await counts in group {
                 totalInserted += counts.inserted
                 totalRemoved += counts.removed
             }
+            return (inserted: totalInserted, removed: totalRemoved)
         }
 
         await MainActor.run {
             MailSyncMonitor.shared.recordCompleted(
-                newMessageCount: totalInserted,
-                removedCount: totalRemoved
+                newMessageCount: totals.inserted,
+                removedCount: totals.removed
             )
         }
-        return totalInserted
+        return totals.inserted
     }
 
     /// Syncs one account's mailboxes in sequence (they share a single IMAP

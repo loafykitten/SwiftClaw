@@ -1,6 +1,6 @@
 import Foundation
 
-enum WebSearchFormatter {
+nonisolated enum WebSearchFormatter {
     /// Strips HTML tags Brave embeds in descriptions and caps snippet length.
     static func snippet(from description: String, maxLength: Int) -> String {
         var text = description.replacingOccurrences(

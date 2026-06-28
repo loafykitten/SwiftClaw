@@ -91,7 +91,7 @@ final class BackgroundActivityMailSyncScheduler: MailSyncScheduler, @unchecked S
                 completion(.deferred)
                 return
             }
-            Task {
+            Task { @MainActor in
                 _ = await self.worker.syncOnce()
                 self.lastSync = .now
                 completion(.deferred)

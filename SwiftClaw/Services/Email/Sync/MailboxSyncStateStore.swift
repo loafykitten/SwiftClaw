@@ -10,7 +10,7 @@ import Foundation
 /// (validity matches → pass `lastSeenUID` as `sinceUID`) or resets to a full
 /// fetch (validity differs → pass `nil`). After a successful fetch the
 /// worker writes the new high-water back via `update(_:for:mailbox:)`.
-struct MailboxSyncState: Codable, Sendable, Hashable {
+nonisolated struct MailboxSyncState: Codable, Sendable, Hashable {
     var uidValidity: UInt32
     var lastSeenUID: UInt32
 
@@ -72,15 +72,17 @@ final class MailboxSyncStateStore {
     /// the current state for an account+mailbox without crossing MainActor
     /// isolation unsafely.
     func provider() -> @Sendable (UUID, String) async -> MailboxSyncState? {
-        { [weak self] accountID, mailbox in
-            await MainActor.run { self?.state(for: accountID, mailbox: mailbox) }
+        let store = self
+        return { accountID, mailbox in
+            await MainActor.run { store.state(for: accountID, mailbox: mailbox) }
         }
     }
 
     /// A `@Sendable` updater the worker can write through.
     func updater() -> @Sendable (MailboxSyncState, UUID, String) async -> Void {
-        { [weak self] state, accountID, mailbox in
-            await MainActor.run { self?.update(state, for: accountID, mailbox: mailbox) }
+        let store = self
+        return { state, accountID, mailbox in
+            await MainActor.run { store.update(state, for: accountID, mailbox: mailbox) }
         }
     }
 

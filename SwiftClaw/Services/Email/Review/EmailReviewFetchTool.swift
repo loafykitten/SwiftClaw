@@ -60,10 +60,11 @@ final class EmailReviewFetchTool: Tool {
         if let v = Self.boolArgument(arguments["include_archived"]) { filter.includeArchived = v }
         if let v = Self.boolArgument(arguments["include_trashed"]) { filter.includeTrashed = v }
 
+        let filterToFetch = filter
         let (json, count): (String, Int) = await MainActor.run {
             let context = ModelContext(modelContainer)
             let repository = EmailRepository(modelContext: context)
-            let threads = repository.fetchThreadsForReview(filter: filter)
+            let threads = repository.fetchThreadsForReview(filter: filterToFetch)
             onThreadsFetched?(threads.map(\.id))
             let descriptors = threads.map { EmailReviewThreadDescriptor.make(for: $0) }
             return (Self.encode(descriptors), threads.count)

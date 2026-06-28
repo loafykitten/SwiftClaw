@@ -1,7 +1,6 @@
 import Foundation
-import SwiftUI
 
-enum ReviewType: String, Codable, Sendable {
+nonisolated enum ReviewType: String, Codable, Sendable {
     case email
     case calendar
     case reminders
@@ -22,7 +21,7 @@ enum ReviewType: String, Codable, Sendable {
     }
 }
 
-enum ReviewActionToken: String, Codable, Sendable, CaseIterable, Identifiable {
+nonisolated enum ReviewActionToken: String, Codable, Sendable, CaseIterable, Identifiable {
     case review
     case flag
     case reply
@@ -42,16 +41,9 @@ enum ReviewActionToken: String, Codable, Sendable, CaseIterable, Identifiable {
         }
     }
 
-    /// SwiftUI button role — only `delete` is destructive; the rest are plain.
-    var role: ButtonRole? {
-        switch self {
-        case .delete: .destructive
-        default: nil
-        }
-    }
 }
 
-struct ReviewItem: Codable, Sendable, Identifiable, Hashable {
+nonisolated struct ReviewItem: Codable, Sendable, Identifiable, Hashable {
     var id: UUID
     var itemID: UUID
     var actionToken: String
@@ -86,7 +78,7 @@ struct ReviewItem: Codable, Sendable, Identifiable, Hashable {
     }
 }
 
-struct ReviewCardPayload: Codable, Sendable, Hashable {
+nonisolated struct ReviewCardPayload: Codable, Sendable, Hashable {
     var reviewType: ReviewType
     var items: [ReviewItem]
 }

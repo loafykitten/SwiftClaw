@@ -1,7 +1,7 @@
 import Foundation
 
 /// A loosely typed JSON value used for tool arguments and schemas.
-enum JSONValue: Codable, Sendable, Hashable {
+nonisolated enum JSONValue: Codable, Sendable, Hashable {
     case string(String)
     case number(Double)
     case bool(Bool)
@@ -66,8 +66,8 @@ enum JSONValue: Codable, Sendable, Hashable {
 }
 
 /// Describes a single parameter of a tool, mirroring a JSON Schema property.
-struct ToolParameter: Sendable, Hashable {
-    enum ParameterType: String, Sendable {
+nonisolated struct ToolParameter: Sendable, Hashable {
+    nonisolated enum ParameterType: String, Sendable {
         case string
         case number
         case integer
@@ -88,7 +88,7 @@ struct ToolParameter: Sendable, Hashable {
     }
 }
 
-enum ToolError: LocalizedError {
+nonisolated enum ToolError: LocalizedError {
     case notConfigured(toolName: String, reason: String)
     case missingArgument(String)
     case invalidArguments(String)
@@ -113,7 +113,7 @@ enum ToolError: LocalizedError {
 /// Tools take JSON arguments (as produced by a model's tool call) and return
 /// a plain-text result that is fed back into the model's context, so results
 /// should be kept compact.
-protocol Tool: Sendable {
+nonisolated protocol Tool: Sendable {
     /// Unique machine name, e.g. "web_search".
     var name: String { get }
 
