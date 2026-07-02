@@ -3,6 +3,7 @@ import SwiftData
 
 struct ChatsView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(AppRouter.self) private var router
     var emailDispatcher: AnyHashableReviewActionDispatcher?
 
     @Binding private var selectedChatID: UUID?
@@ -37,6 +38,7 @@ struct ChatsView: View {
             ChatHistoryView(
                 chats: orderedChats,
                 selectedChatID: $selectedChatID,
+                hasUnreadMessages: { router.hasUnreadMessages(in: $0) },
                 togglePin: togglePin,
                 deleteChat: deleteChat
             )
@@ -81,6 +83,7 @@ struct ChatsView: View {
 
         ChatTaskCoordinator.shared.cancelTasks(for: chatID)
         modelContext.delete(chat)
+        router.clearUnreadMessages(in: chatID)
         selectedChatID = selectedChatID == chat.id ? fallback : selectedChatID
         if saveChatListChange() {
             ImageAttachmentStore.shared.deleteImages(for: chatID)
@@ -102,6 +105,7 @@ struct ChatsView: View {
 private struct ChatHistoryView: View {
     let chats: [Chat]
     @Binding var selectedChatID: UUID?
+    let hasUnreadMessages: (UUID) -> Bool
     let togglePin: (Chat) -> Void
     let deleteChat: (Chat) -> Void
 
@@ -122,6 +126,7 @@ private struct ChatHistoryView: View {
                     ChatHistoryRow(
                         chat: chat,
                         isSelected: chat.id == selectedChatID,
+                        hasUnreadMessages: hasUnreadMessages(chat.id),
                         togglePin: { togglePin(chat) },
                         deleteChat: { pendingDelete = chat }
                     )
@@ -147,6 +152,7 @@ private struct ChatHistoryView: View {
 private struct ChatHistoryRow: View {
     let chat: Chat
     let isSelected: Bool
+    let hasUnreadMessages: Bool
     let togglePin: () -> Void
     let deleteChat: () -> Void
 
@@ -160,9 +166,16 @@ private struct ChatHistoryRow: View {
         HStack(alignment: .top, spacing: 6) {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
+                    if hasUnreadMessages {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 7, height: 7)
+                            .accessibilityLabel("New messages")
+                    }
+
                     Text(chat.title)
                         .font(.callout)
-                        .fontWeight(isSelected ? .semibold : .regular)
+                        .fontWeight(isSelected || hasUnreadMessages ? .semibold : .regular)
                         .lineLimit(2)
 
                     if chat.isGenerating {
@@ -208,7 +221,7 @@ private struct ChatHistoryRow: View {
             .padding(.vertical, 7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sidebarRowState()
+        .sidebarRowState(isEmphasized: hasUnreadMessages)
         .onHover { isHovering = $0 }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -934,4 +947,5 @@ private struct EmptyChatsView: View {
 
 #Preview {
     ChatsView()
+        .environment(AppRouter.shared)
 }

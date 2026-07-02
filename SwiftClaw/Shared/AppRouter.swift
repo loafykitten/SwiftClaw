@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if os(macOS)
+import AppKit
+#endif
 
 @MainActor
 @Observable
@@ -8,7 +11,7 @@ final class AppRouter {
 
     var selectedNavigationItem: NavigationItem? = .home
     var selectedChatID: UUID?
-    var unreadChatID: UUID?
+    private(set) var unreadChatIDs: Set<UUID> = []
     var pendingEmailViewID: UUID?
 
     @ObservationIgnored private var notificationObservers: [NSObjectProtocol] = []
@@ -73,18 +76,57 @@ final class AppRouter {
         pendingEmailViewID = nil
     }
 
-    func clearUnreadChatIfOpened() {
-        guard selectedNavigationItem == .chats,
-              let unreadChatID,
-              selectedChatID == unreadChatID else { return }
+    var hasUnreadChats: Bool {
+        !unreadChatIDs.isEmpty
+    }
 
-        self.unreadChatID = nil
-        NotificationCenter.default.post(name: .emailReviewChatOpened, object: nil)
+    func hasUnreadMessages(in chatID: UUID) -> Bool {
+        unreadChatIDs.contains(chatID)
+    }
+
+    func noteNewChatMessages(in chatID: UUID) {
+        guard !isViewingChat(chatID) else { return }
+        let inserted = unreadChatIDs.insert(chatID).inserted
+        if inserted {
+            syncDockBadge()
+        }
+    }
+
+    func clearUnreadChatIfOpened() {
+        guard let selectedChatID,
+              isViewingChat(selectedChatID),
+              clearUnreadMessages(in: selectedChatID) else { return }
     }
 
     private func handleEmailReviewChatCreated(chatID: UUID, autoNavigate: Bool) {
-        unreadChatID = chatID
         guard autoNavigate else { return }
         selectChat(chatID)
     }
+
+    @discardableResult
+    func clearUnreadMessages(in chatID: UUID) -> Bool {
+        guard unreadChatIDs.remove(chatID) != nil else { return false }
+        syncDockBadge()
+        return true
+    }
+
+    private func isViewingChat(_ chatID: UUID) -> Bool {
+        selectedNavigationItem == .chats && selectedChatID == chatID
+    }
+
+    private func syncDockBadge() {
+        #if os(macOS)
+        NSApp?.dockTile.badgeLabel = unreadChatIDs.isEmpty ? nil : "\(unreadChatIDs.count)"
+        #endif
+    }
+
+    #if DEBUG
+    func resetForTesting() {
+        selectedNavigationItem = .home
+        selectedChatID = nil
+        unreadChatIDs.removeAll()
+        pendingEmailViewID = nil
+        syncDockBadge()
+    }
+    #endif
 }

@@ -125,6 +125,7 @@ enum ChatCompletionService {
         do {
             guard !Task.isCancelled else { return }
             try modelContext.save()
+            AppRouter.shared.noteNewChatMessages(in: chat.id)
         } catch {
             chat.errorMessage = "Couldn't save the assistant response."
         }

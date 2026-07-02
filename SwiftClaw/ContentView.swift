@@ -77,7 +77,7 @@ struct ContentView: View {
                 ),
                 title: { $0.rawValue },
                 systemImage: { $0.systemImage },
-                showsBadge: { $0 == .chats && router.unreadChatID != nil }
+                showsBadge: { $0 == .chats && router.hasUnreadChats }
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {

@@ -260,6 +260,7 @@ final class EmailReviewNotifyTool: Tool {
                 created review chat \"\(title, privacy: .public)\" \
                 with \(payload.items.count, privacy: .public) items
                 """)
+            AppRouter.shared.noteNewChatMessages(in: chat.id)
             onReviewCreated?(chat.id)
             return chat.id
         } catch {
@@ -326,6 +327,7 @@ final class EmailReviewNotifyTool: Tool {
                 appended updated review to chat \(chatID.uuidString, privacy: .public) \
                 with \(payload.items.count, privacy: .public) items
                 """)
+            AppRouter.shared.noteNewChatMessages(in: chat.id)
             return chat.id
         } catch {
             Self.logger.error("""

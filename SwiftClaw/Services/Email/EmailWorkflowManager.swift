@@ -2,9 +2,6 @@ import Foundation
 import SwiftData
 import Observation
 import os
-#if os(macOS)
-import AppKit
-#endif
 
 /// Owns the mail-sync scheduler and review-service lifecycle. Started in
 /// `SwiftClawApp.init` only when `SettingsStorage.isEmailEnabled()` is true.
@@ -31,7 +28,6 @@ final class EmailWorkflowManager {
     private var reviewTask: Task<Void, Never>?
     private var reviewService: EmailReviewService?
     private var lastReviewRun: Date?
-    private var reviewChatOpenedObserver: NSObjectProtocol?
     private var reviewScheduleObserver: NSObjectProtocol?
     private var userDefaults: UserDefaults = .standard
     private var schedulerFactory: SchedulerFactory = { worker, intervalProvider in
@@ -101,16 +97,6 @@ final class EmailWorkflowManager {
         }
         self.reviewService = reviewService
 
-        // Clear the dock badge once the user actually opens the review chat
-        // (otherwise the badge lingers forever after a review lands).
-        reviewChatOpenedObserver = NotificationCenter.default.addObserver(
-            forName: .emailReviewChatOpened,
-            object: nil,
-            queue: nil
-        ) { _ in
-            Task { @MainActor in EmailWorkflowManager.shared.clearDockBadge() }
-        }
-
         reviewScheduleObserver = NotificationCenter.default.addObserver(
             forName: SettingsNotifications.emailReviewScheduleDidChange,
             object: nil,
@@ -133,15 +119,10 @@ final class EmailWorkflowManager {
         reviewTask = nil
         reviewService = nil
         lastReviewRun = nil
-        if let observer = reviewChatOpenedObserver {
-            NotificationCenter.default.removeObserver(observer)
-            reviewChatOpenedObserver = nil
-        }
         if let observer = reviewScheduleObserver {
             NotificationCenter.default.removeObserver(observer)
             reviewScheduleObserver = nil
         }
-        clearDockBadge()
         Self.logger.info("email workflow stopped")
     }
 
@@ -298,36 +279,11 @@ final class EmailWorkflowManager {
             object: nil,
             userInfo: ["chatID": chatID, "autoNavigate": autoNavigate]
         )
-
-        if !autoNavigate {
-            dockBadge()
-        }
-    }
-
-    private func dockBadge() {
-        #if os(macOS)
-        Task { @MainActor in
-            let count = Int(NSApp.dockTile.badgeLabel ?? "0") ?? 0
-            NSApp.dockTile.badgeLabel = "\(count + 1)"
-        }
-        #endif
-    }
-
-    private func clearDockBadge() {
-        #if os(macOS)
-        Task { @MainActor in
-            NSApp.dockTile.badgeLabel = nil
-        }
-        #endif
     }
 }
 
 extension Notification.Name {
     static let emailReviewChatCreated = Notification.Name("email.review.chatCreated")
-    /// Posted when the user opens the review chat — `EmailWorkflowManager`
-    /// listens to clear the macOS dock badge so the badge doesn't linger
-    /// indefinitely after the user has acknowledged the review.
-    static let emailReviewChatOpened = Notification.Name("email.review.chatOpened")
     /// Posted when the user taps a review-card email row to view it in
     /// EmailView. `userInfo: ["emailID": UUID]` — the `Email.id` to select.
     static let emailReviewViewEmail = Notification.Name("email.review.viewEmail")
