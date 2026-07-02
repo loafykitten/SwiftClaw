@@ -8,10 +8,10 @@ struct APIKeyField: View {
     var body: some View {
         HStack(spacing: 8) {
             if isRevealed {
-                TextField(title, text: $text)
+                TextField("", text: $text, prompt: Text(title))
                     .autocorrectionDisabled()
             } else {
-                SecureField(title, text: $text)
+                SecureField("", text: $text, prompt: Text(title))
             }
             Button {
                 isRevealed.toggle()

@@ -27,7 +27,7 @@ struct ProviderSettingsView: View {
         Form {
             Section(isExpanded: $azureExpanded) {
                 LabeledContent("Resource Name") {
-                    TextField("Resource Name", text: $azureResourceName)
+                    TextField("", text: $azureResourceName, prompt: Text("Resource name"))
                         .autocorrectionDisabled()
                         .frame(maxWidth: 360)
                 }
@@ -44,22 +44,14 @@ struct ProviderSettingsView: View {
 
             Section(isExpanded: $neuralwattExpanded) {
                 SecretKeyRow(title: "API Key", text: $neuralwattAPIKey)
-                ProviderModelListEditor(
-                    title: "Models",
-                    placeholder: "Model name",
-                    models: $neuralwattModels
-                )
+                ProviderModelListEditor(models: $neuralwattModels)
             } header: {
                 Text("Neuralwatt")
             }
 
             Section(isExpanded: $openRouterExpanded) {
                 SecretKeyRow(title: "API Key", text: $openRouterAPIKey)
-                ProviderModelListEditor(
-                    title: "Models",
-                    placeholder: "Model name",
-                    models: $openRouterModels
-                )
+                ProviderModelListEditor(models: $openRouterModels)
             } header: {
                 Text("OpenRouter")
             }
@@ -104,30 +96,38 @@ struct ProviderSettingsView: View {
 private struct AzureDeploymentListEditor: View {
     @Binding var deployments: [AzureDeployment]
 
-    @State private var deploymentName = ""
-    @State private var displayName = ""
-    @State private var capabilities = ModelCapability.defaultCapabilities
-
-    private var canAddDeployment: Bool {
-        !deploymentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
     var body: some View {
         ProviderListEditor(
             title: "Deployments",
             emptyMessage: "No Azure deployments configured.",
             addButtonTitle: "Add Deployment",
             items: $deployments,
-            canAdd: canAddDeployment,
-            addAction: addDeployment
-        ) { $deployment, remove in
+            makeItem: { AzureDeployment(deploymentName: "", displayName: "") }
+        ) { $deployment, isExpanded, remove in
+            AzureDeploymentEditor(deployment: $deployment, isExpanded: isExpanded, remove: remove)
+        }
+    }
+}
+
+private struct AzureDeploymentEditor: View {
+    @Binding var deployment: AzureDeployment
+    @Binding var isExpanded: Bool
+    let remove: () -> Void
+
+    private var title: String {
+        let trimmedTitle = deployment.modelPickerTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTitle.isEmpty ? "New Deployment" : trimmedTitle
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
             LabeledContent("Deployment Name") {
-                TextField("Deployment Name", text: $deployment.deploymentName)
+                TextField("", text: $deployment.deploymentName, prompt: Text("Deployment name"))
                     .autocorrectionDisabled()
                     .frame(maxWidth: 360)
             }
             LabeledContent("Display Name") {
-                TextField("Optional", text: $deployment.displayName)
+                TextField("", text: $deployment.displayName, prompt: Text("Optional"))
                     .autocorrectionDisabled()
                     .frame(maxWidth: 360)
             }
@@ -138,71 +138,43 @@ private struct AzureDeploymentListEditor: View {
                 Label("Remove Deployment", systemImage: "minus.circle")
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("Remove deployment \(deployment.deploymentName)")
-        } addContent: { add in
-            LabeledContent("Deployment Name") {
-                TextField("Deployment Name", text: $deploymentName)
-                    .autocorrectionDisabled()
-                    .onSubmit(add)
-                    .frame(maxWidth: 360)
-            }
-            LabeledContent("Display Name") {
-                TextField("Optional", text: $displayName)
-                    .autocorrectionDisabled()
-                    .onSubmit(add)
-                    .frame(maxWidth: 360)
-            }
-            LabeledContent("Capabilities") {
-                ModelCapabilitySelector(capabilities: $capabilities)
-            }
+            .accessibilityLabel("Remove deployment \(title)")
+        } label: {
+            ProviderItemLabel(title: title, capabilities: deployment.capabilities)
         }
-    }
-
-    private func addDeployment() {
-        let trimmedDeployment = deploymentName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedDisplay = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard !trimmedDeployment.isEmpty else {
-            return
-        }
-
-        deployments.append(
-            AzureDeployment(
-                deploymentName: trimmedDeployment,
-                displayName: trimmedDisplay,
-                capabilities: capabilities
-            )
-        )
-        deploymentName = ""
-        displayName = ""
-        capabilities = ModelCapability.defaultCapabilities
     }
 }
 
 private struct ProviderModelListEditor: View {
-    let title: String
-    let placeholder: String
     @Binding var models: [ProviderModel]
-
-    @State private var newValue = ""
-    @State private var capabilities = ModelCapability.defaultCapabilities
-
-    private var canAddValue: Bool {
-        let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmedValue.isEmpty && !models.contains { $0.name == trimmedValue }
-    }
 
     var body: some View {
         ProviderListEditor(
-            title: title,
+            title: "Models",
             emptyMessage: "No models configured.",
             addButtonTitle: "Add Model",
             items: $models,
-            canAdd: canAddValue,
-            addAction: addValue
-        ) { $model, remove in
-            LabeledContent("Model Name") {
-                TextField("Model Name", text: $model.name)
+            makeItem: { ProviderModel(name: "") }
+        ) { $model, isExpanded, remove in
+            ProviderModelEditor(model: $model, isExpanded: isExpanded, remove: remove)
+        }
+    }
+}
+
+private struct ProviderModelEditor: View {
+    @Binding var model: ProviderModel
+    @Binding var isExpanded: Bool
+    let remove: () -> Void
+
+    private var title: String {
+        let trimmedName = model.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedName.isEmpty ? "New Model" : trimmedName
+    }
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            LabeledContent("Name") {
+                TextField("", text: $model.name, prompt: Text("Model name"))
                     .autocorrectionDisabled()
                     .frame(maxWidth: 360)
             }
@@ -213,29 +185,9 @@ private struct ProviderModelListEditor: View {
                 Label("Remove Model", systemImage: "minus.circle")
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel("Remove model \(model.name)")
-        } addContent: { add in
-            LabeledContent("Model Name") {
-                TextField(placeholder, text: $newValue)
-                    .autocorrectionDisabled()
-                    .onSubmit(add)
-                    .frame(maxWidth: 360)
-            }
-            LabeledContent("Capabilities") {
-                ModelCapabilitySelector(capabilities: $capabilities)
-            }
+            .accessibilityLabel("Remove model \(title)")
+        } label: {
+            ProviderItemLabel(title: title, capabilities: model.capabilities)
         }
-    }
-
-    private func addValue() {
-        let trimmedValue = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        guard canAddValue else {
-            return
-        }
-
-        models.append(ProviderModel(name: trimmedValue, capabilities: capabilities))
-        newValue = ""
-        capabilities = ModelCapability.defaultCapabilities
     }
 }

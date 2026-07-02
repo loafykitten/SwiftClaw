@@ -708,11 +708,19 @@ enum SettingsStorage {
         neuralwattModels: [ProviderModel],
         openRouterModels: [ProviderModel]
     ) -> [String] {
-        let azureModels = azureDeployments.map { deployment in
-            InferenceProviderID.azure.modelPrefix + deployment.modelPickerTitle
+        func isNamed(_ name: String) -> Bool {
+            !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
-        let neuralwatt = neuralwattModels.map { InferenceProviderID.neuralwatt.modelPrefix + $0.name }
-        let openRouter = openRouterModels.map { InferenceProviderID.openRouter.modelPrefix + $0.name }
+
+        let azureModels = azureDeployments
+            .filter { isNamed($0.modelPickerTitle) }
+            .map { InferenceProviderID.azure.modelPrefix + $0.modelPickerTitle }
+        let neuralwatt = neuralwattModels
+            .filter { isNamed($0.name) }
+            .map { InferenceProviderID.neuralwatt.modelPrefix + $0.name }
+        let openRouter = openRouterModels
+            .filter { isNamed($0.name) }
+            .map { InferenceProviderID.openRouter.modelPrefix + $0.name }
 
         return azureModels + neuralwatt + openRouter
     }
