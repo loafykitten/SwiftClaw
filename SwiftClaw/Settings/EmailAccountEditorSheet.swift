@@ -126,19 +126,51 @@ struct EmailAccountEditorSheet: View {
     @State private var testResult: TestResult?
 
     @State private var testTask: Task<Void, Never>?
+    @State private var successfulTestFingerprint: EmailAccountConnectionFingerprint?
+
+    private var validation: EmailAccountValidation {
+        EmailAccountValidator.validate(
+            imapHost: imapHost,
+            imapPort: imapPort,
+            smtpHost: smtpHost,
+            smtpPort: smtpPort,
+            fromAddress: fromAddress
+        )
+    }
 
     private var canConfirm: Bool {
-        fieldsComplete && testResult?.isSuccess == true
+        fieldsComplete
+            && validation.isValid
+            && testResult?.isSuccess == true
+            && successfulTestFingerprint == currentConnectionFingerprint
+    }
+
+    private var canTest: Bool {
+        fieldsComplete && validation.isValid && !isTesting
     }
 
     private var fieldsComplete: Bool {
-        !imapHost.isEmpty
-            && !imapUsername.isEmpty
+        !imapHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !imapUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !imapPassword.isEmpty
-            && !smtpHost.isEmpty
-            && !smtpUsername.isEmpty
+            && !smtpHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !smtpUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !smtpPassword.isEmpty
-            && !fromAddress.isEmpty
+            && !fromAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var currentConnectionFingerprint: EmailAccountConnectionFingerprint {
+        EmailAccountConnectionFingerprint(
+            imapHost: imapHost,
+            imapPort: imapPort,
+            imapUsername: imapUsername,
+            imapPassword: imapPassword,
+            smtpHost: smtpHost,
+            smtpPort: smtpPort,
+            smtpUsername: smtpUsername,
+            smtpPassword: smtpPassword,
+            fromAddress: fromAddress
+        )
     }
 
     var body: some View {
@@ -154,12 +186,14 @@ struct EmailAccountEditorSheet: View {
                         .autocorrectionDisabled()
                     TextField("From Address", text: $fromAddress)
                         .autocorrectionDisabled()
+                    FieldErrorText(message: validation.fromAddress)
                 }
 
                 Section {
                     TextField("IMAP Host", text: $imapHost)
                         .autocorrectionDisabled()
-                    SettingsIntegerField(label: "IMAP Port", value: $imapPort)
+                    FieldErrorText(message: validation.imapHost)
+                    SettingsIntegerField(label: "IMAP Port", value: $imapPort, error: validation.imapPort)
                     TextField("IMAP Username", text: $imapUsername)
                         .autocorrectionDisabled()
                     APIKeyField(title: "IMAP Password", text: $imapPassword)
@@ -174,7 +208,8 @@ struct EmailAccountEditorSheet: View {
                 Section {
                     TextField("SMTP Host", text: $smtpHost)
                         .autocorrectionDisabled()
-                    SettingsIntegerField(label: "SMTP Port", value: $smtpPort)
+                    FieldErrorText(message: validation.smtpHost)
+                    SettingsIntegerField(label: "SMTP Port", value: $smtpPort, error: validation.smtpPort)
                     TextField("SMTP Username", text: $smtpUsername)
                         .autocorrectionDisabled()
                     APIKeyField(title: "SMTP Password", text: $smtpPassword)
@@ -193,7 +228,7 @@ struct EmailAccountEditorSheet: View {
                             Text(isTesting ? "Testing…" : "Test Connection")
                         }
                     }
-                    .disabled(!fieldsComplete || isTesting)
+                    .disabled(!canTest)
 
                     if let testResult {
                         switch testResult {
@@ -218,6 +253,12 @@ struct EmailAccountEditorSheet: View {
         }
         .frame(minWidth: 520, minHeight: 560)
         .onAppear(perform: hydrate)
+        .onChange(of: currentConnectionFingerprint) { _, _ in
+            successfulTestFingerprint = nil
+            if testResult?.isSuccess == true {
+                testResult = nil
+            }
+        }
     }
 
     private func hydrate() {
@@ -235,10 +276,16 @@ struct EmailAccountEditorSheet: View {
     }
 
     private func runTest() {
+        guard canTest else {
+            testResult = .failure(validation.firstMessage ?? "Complete every required connection field.")
+            return
+        }
+
         testTask?.cancel()
         testResult = nil
         isTesting = true
         let account = currentSnapshot()
+        let fingerprint = currentConnectionFingerprint
         // In-memory password overrides let us validate the credentials BEFORE
         // persisting them to the Keychain (which only happens on confirm).
         // Without this, `SwiftMailClient.isConfigured` would read nil from
@@ -255,11 +302,18 @@ struct EmailAccountEditorSheet: View {
                 ).testConnection()
                 await MainActor.run {
                     isTesting = false
-                    testResult = .success
+                    if currentConnectionFingerprint == fingerprint {
+                        successfulTestFingerprint = fingerprint
+                        testResult = .success
+                    } else {
+                        successfulTestFingerprint = nil
+                        testResult = .failure("Settings changed. Test the connection again.")
+                    }
                 }
             } catch {
                 await MainActor.run {
                     isTesting = false
+                    successfulTestFingerprint = nil
                     testResult = .failure(error.localizedDescription)
                 }
             }
@@ -267,6 +321,10 @@ struct EmailAccountEditorSheet: View {
     }
 
     private func confirm() {
+        guard canConfirm else {
+            return
+        }
+
         let account = currentSnapshot()
         switch mode {
         case .create:
@@ -319,19 +377,155 @@ private extension EmailAccountEditorSheet.Mode {
     }
 }
 
+private struct EmailAccountValidation: Equatable {
+    var imapHost: String?
+    var imapPort: String?
+    var smtpHost: String?
+    var smtpPort: String?
+    var fromAddress: String?
+
+    var isValid: Bool {
+        firstMessage == nil
+    }
+
+    var firstMessage: String? {
+        imapHost ?? imapPort ?? smtpHost ?? smtpPort ?? fromAddress
+    }
+}
+
+private struct EmailAccountConnectionFingerprint: Equatable, Sendable {
+    var imapHost: String
+    var imapPort: Int
+    var imapUsername: String
+    var imapPassword: String
+    var smtpHost: String
+    var smtpPort: Int
+    var smtpUsername: String
+    var smtpPassword: String
+    var fromAddress: String
+}
+
+private enum EmailAccountValidator {
+    nonisolated static func validate(
+        imapHost: String,
+        imapPort: Int,
+        smtpHost: String,
+        smtpPort: Int,
+        fromAddress: String
+    ) -> EmailAccountValidation {
+        EmailAccountValidation(
+            imapHost: hostError(imapHost, label: "IMAP host"),
+            imapPort: portError(imapPort, label: "IMAP port"),
+            smtpHost: hostError(smtpHost, label: "SMTP host"),
+            smtpPort: portError(smtpPort, label: "SMTP port"),
+            fromAddress: emailAddressError(fromAddress)
+        )
+    }
+
+    nonisolated private static func hostError(_ value: String, label: String) -> String? {
+        let host = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else {
+            return "\(label) is required."
+        }
+
+        if host.contains("://") || host.contains("/") {
+            return "Enter a host name, not a URL."
+        }
+
+        if host.rangeOfCharacter(from: .whitespacesAndNewlines) != nil {
+            return "Host names can't contain spaces."
+        }
+
+        if host.caseInsensitiveCompare("localhost") == .orderedSame || isIPv4Address(host) {
+            return nil
+        }
+
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.allSatisfy(isValidHostLabel) else {
+            return "Enter a valid host name."
+        }
+
+        return nil
+    }
+
+    nonisolated private static func portError(_ value: Int, label: String) -> String? {
+        (1...65_535).contains(value) ? nil : "\(label) must be between 1 and 65535."
+    }
+
+    nonisolated private static func emailAddressError(_ value: String) -> String? {
+        let address = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !address.isEmpty else {
+            return "From address is required."
+        }
+
+        let parts = address.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let localPart = parts.first,
+              let domain = parts.last,
+              !localPart.isEmpty,
+              !domain.isEmpty,
+              String(localPart).rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+              hostError(String(domain), label: "Email domain") == nil else {
+            return "Enter a valid email address."
+        }
+
+        return nil
+    }
+
+    nonisolated private static func isValidHostLabel(_ label: Substring) -> Bool {
+        guard !label.isEmpty,
+              label.count <= 63,
+              label.first != "-",
+              label.last != "-" else {
+            return false
+        }
+
+        return label.unicodeScalars.allSatisfy { scalar in
+            CharacterSet.alphanumerics.contains(scalar) || scalar == UnicodeScalar("-")
+        }
+    }
+
+    nonisolated private static func isIPv4Address(_ host: String) -> Bool {
+        let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard octets.count == 4 else {
+            return false
+        }
+
+        return octets.allSatisfy { octet in
+            guard let value = Int(octet) else {
+                return false
+            }
+            return (0...255).contains(value)
+        }
+    }
+}
+
+private struct FieldErrorText: View {
+    let message: String?
+
+    var body: some View {
+        if let message {
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+}
+
 /// Port input used by the IMAP/SMTP sections of the account editor sheet.
 /// File-private (no other consumer).
 fileprivate struct SettingsIntegerField: View {
     let label: String
     @Binding var value: Int
+    var error: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        LabeledContent(label) {
             TextField(label, value: $value, format: .number)
                 .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 96)
         }
+
+        FieldErrorText(message: error)
     }
 }

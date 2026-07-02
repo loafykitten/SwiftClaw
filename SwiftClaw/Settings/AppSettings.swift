@@ -1,4 +1,5 @@
 import SwiftUI
+import Observation
 
 enum AppTheme: String, CaseIterable, Identifiable {
     case system = "System"
@@ -86,31 +87,55 @@ enum AccentColor {
     }
 }
 
-enum SettingsKeys {
+enum SettingsKeys { }
+
+// MARK: - Appearance keys
+
+extension SettingsKeys {
     static let theme = "settings.appearance.theme"
     static let accentHue = "settings.appearance.accentHue"
     static let accentLightness = "settings.appearance.accentLightness"
     static let accentBrightness = "settings.appearance.accentBrightness"
     static let quoteAccentHue = "settings.appearance.quoteAccentHue"
     static let quoteAccentLightness = "settings.appearance.quoteAccentLightness"
+}
+
+// MARK: - Provider keys
+
+extension SettingsKeys {
     static let azureResourceName = "settings.azure.resourceName"
     static let azureAPIKey = "settings.azure.apiKey"
     static let azureDeployments = "settings.azure.deployments"
     static let neuralwattAPIKey = "settings.neuralwatt.apiKey"
     static let neuralwattModels = "settings.neuralwatt.models"
     static let openRouterAPIKey = "settings.openRouter.apiKey"
+    static let openRouterModels = "settings.openRouter.models"
     static let braveSearchAPIKey = "settings.braveSearch.apiKey"
     nonisolated static let braveSearchRequestsPerSecond = "settings.braveSearch.requestsPerSecond"
+}
+
+// MARK: - Tool keys
+
+extension SettingsKeys {
     static let webSearchEnabled = "settings.tools.webSearch.enabled"
     static let investigationEnabled = "settings.tools.investigation.enabled"
     nonisolated static let investigationMaxSubAgents = "settings.tools.investigation.maxSubAgents"
-    static let openRouterModels = "settings.openRouter.models"
+}
+
+// MARK: - Model behavior keys
+
+extension SettingsKeys {
     static let swiftModel = "settings.behaviors.swiftModel"
     static let clawModel = "settings.behaviors.clawModel"
     static let clawReasoningEffort = "settings.behaviors.clawReasoningEffort"
     static let deepResearchModel = "settings.behaviors.deepResearchModel"
     static let homeModel = "settings.home.model"
     static let homeReasoningEffort = "settings.home.reasoningEffort"
+}
+
+// MARK: - Persona keys
+
+extension SettingsKeys {
     static let personaDisplayName = "settings.persona.displayName"
     static let personaAvatarData = "settings.persona.avatarData"
     static let assistantDisplayName = "settings.assistant.displayName"
@@ -118,6 +143,11 @@ enum SettingsKeys {
     static let assistantPersonalityPreset = "settings.assistant.personalityPreset"
     static let assistantUsesCustomPersonality = "settings.assistant.usesCustomPersonality"
     static let assistantCustomPersonality = "settings.assistant.customPersonality"
+}
+
+// MARK: - Email keys
+
+extension SettingsKeys {
     static let emailEnabled = "settings.email.enabled"
     static let emailAccounts = "settings.email.accounts"
     static let emailImapHost = "settings.email.imapHost"
@@ -155,7 +185,7 @@ enum SettingsNotifications {
     static let changedKey = "changedKey"
 }
 
-struct AzureDeployment: Identifiable, Codable, Hashable {
+struct AzureDeployment: Identifiable, Codable, Hashable, Sendable {
     var id = UUID()
     var deploymentName: String
     var displayName: String
@@ -198,7 +228,7 @@ struct AzureDeployment: Identifiable, Codable, Hashable {
     }
 }
 
-enum ModelCapability: String, CaseIterable, Codable, Hashable, Identifiable {
+enum ModelCapability: String, CaseIterable, Codable, Hashable, Identifiable, Sendable {
     case reasoning
     case tools
     case vision
@@ -218,7 +248,7 @@ enum ModelCapability: String, CaseIterable, Codable, Hashable, Identifiable {
     static let defaultCapabilities: Set<ModelCapability> = [.vision, .json]
 }
 
-struct ProviderModel: Identifiable, Codable, Hashable {
+struct ProviderModel: Identifiable, Codable, Hashable, Sendable {
     var id = UUID()
     var name: String
     var capabilities = ModelCapability.defaultCapabilities
@@ -375,6 +405,238 @@ nonisolated struct EmailReviewFetchDefaults: Equatable, Sendable {
     }
 }
 
+struct ModelAvailabilityLoadFailure: Equatable, Identifiable, Sendable {
+    let providerName: String
+    let reason: String
+
+    var id: String {
+        "\(providerName):\(reason)"
+    }
+
+    var message: String {
+        "\(providerName): \(reason)"
+    }
+}
+
+struct ModelAvailabilitySnapshot: Equatable, Sendable {
+    let azureDeployments: [AzureDeployment]
+    let neuralwattModels: [ProviderModel]
+    let openRouterModels: [ProviderModel]
+    let loadFailures: [ModelAvailabilityLoadFailure]
+
+    var availableModels: [String] {
+        SettingsStorage.availableModels(
+            azureDeployments: azureDeployments,
+            neuralwattModels: neuralwattModels,
+            openRouterModels: openRouterModels
+        )
+    }
+
+    func availableModels(requiresReasoning: Bool?) -> [String] {
+        guard let requiresReasoning else {
+            return availableModels
+        }
+
+        return availableModels.filter { selection in
+            let capabilities = capabilities(for: selection)
+            return requiresReasoning
+                ? capabilities.contains(.reasoning)
+                : !capabilities.contains(.reasoning)
+        }
+    }
+
+    func capabilities(for modelSelection: String) -> Set<ModelCapability> {
+        let selection = modelSelection.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let title = selection.removingPrefix(InferenceProviderID.azure.modelPrefix) {
+            return azureDeployments
+                .first { $0.modelPickerTitle == title }?
+                .capabilities ?? ModelCapability.defaultCapabilities
+        }
+
+        if let model = selection.removingPrefix(InferenceProviderID.neuralwatt.modelPrefix) {
+            return neuralwattModels
+                .first { $0.name == model }?
+                .capabilities ?? ModelCapability.defaultCapabilities
+        }
+
+        if let model = selection.removingPrefix(InferenceProviderID.openRouter.modelPrefix) {
+            return openRouterModels
+                .first { $0.name == model }?
+                .capabilities ?? ModelCapability.defaultCapabilities
+        }
+
+        return ModelCapability.defaultCapabilities
+    }
+}
+
+@MainActor
+@Observable
+final class ModelAvailabilityStore {
+    static let shared = ModelAvailabilityStore()
+
+    private let userDefaults: UserDefaults
+    private(set) var snapshot: ModelAvailabilitySnapshot
+
+    init(userDefaults: UserDefaults = .standard) {
+        self.userDefaults = userDefaults
+        snapshot = SettingsStorage.modelAvailabilitySnapshot(userDefaults: userDefaults)
+    }
+
+    var availableModels: [String] {
+        snapshot.availableModels
+    }
+
+    var loadFailures: [ModelAvailabilityLoadFailure] {
+        snapshot.loadFailures
+    }
+
+    func availableModels(requiresReasoning: Bool?) -> [String] {
+        snapshot.availableModels(requiresReasoning: requiresReasoning)
+    }
+
+    func capabilities(for modelSelection: String) -> Set<ModelCapability> {
+        snapshot.capabilities(for: modelSelection)
+    }
+
+    func refresh() {
+        SettingsStorage.invalidateModelAvailabilityCache(userDefaults: userDefaults)
+        snapshot = SettingsStorage.modelAvailabilitySnapshot(userDefaults: userDefaults)
+    }
+}
+
+private struct ModelAvailabilityFingerprint: Equatable, Sendable {
+    let azureDeploymentsData: Data?
+    let neuralwattModelsData: Data?
+    let neuralwattLegacyModels: [String]?
+    let openRouterModelsData: Data?
+    let openRouterLegacyModels: [String]?
+
+    init(userDefaults: UserDefaults) {
+        azureDeploymentsData = userDefaults.data(forKey: SettingsKeys.azureDeployments)
+        neuralwattModelsData = userDefaults.data(forKey: SettingsKeys.neuralwattModels)
+        neuralwattLegacyModels = userDefaults.stringArray(forKey: SettingsKeys.neuralwattModels)
+        openRouterModelsData = userDefaults.data(forKey: SettingsKeys.openRouterModels)
+        openRouterLegacyModels = userDefaults.stringArray(forKey: SettingsKeys.openRouterModels)
+    }
+}
+
+private struct CachedModelAvailability: Sendable {
+    let fingerprint: ModelAvailabilityFingerprint
+    let snapshot: ModelAvailabilitySnapshot
+}
+
+private final class ModelAvailabilityCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cachedByDefaults: [ObjectIdentifier: CachedModelAvailability] = [:]
+
+    func snapshot(userDefaults: UserDefaults) -> ModelAvailabilitySnapshot {
+        let defaultsID = ObjectIdentifier(userDefaults)
+        let fingerprint = ModelAvailabilityFingerprint(userDefaults: userDefaults)
+
+        lock.lock()
+        if let cached = cachedByDefaults[defaultsID], cached.fingerprint == fingerprint {
+            lock.unlock()
+            return cached.snapshot
+        }
+        lock.unlock()
+
+        let snapshot = Self.decodeSnapshot(from: fingerprint)
+
+        lock.lock()
+        cachedByDefaults[defaultsID] = CachedModelAvailability(
+            fingerprint: fingerprint,
+            snapshot: snapshot
+        )
+        lock.unlock()
+
+        return snapshot
+    }
+
+    func invalidate(userDefaults: UserDefaults) {
+        let defaultsID = ObjectIdentifier(userDefaults)
+        lock.lock()
+        cachedByDefaults.removeValue(forKey: defaultsID)
+        lock.unlock()
+    }
+
+    private static func decodeSnapshot(from fingerprint: ModelAvailabilityFingerprint) -> ModelAvailabilitySnapshot {
+        var failures: [ModelAvailabilityLoadFailure] = []
+        let azureDeployments: [AzureDeployment] = decodeJSONList(
+            from: fingerprint.azureDeploymentsData,
+            providerName: "Azure",
+            valueDescription: "deployments",
+            failures: &failures
+        )
+        let neuralwattModels = decodeProviderModels(
+            from: fingerprint.neuralwattModelsData,
+            legacyModels: fingerprint.neuralwattLegacyModels,
+            providerName: "Neuralwatt",
+            failures: &failures
+        )
+        let openRouterModels = decodeProviderModels(
+            from: fingerprint.openRouterModelsData,
+            legacyModels: fingerprint.openRouterLegacyModels,
+            providerName: "OpenRouter",
+            failures: &failures
+        )
+
+        return ModelAvailabilitySnapshot(
+            azureDeployments: azureDeployments,
+            neuralwattModels: neuralwattModels,
+            openRouterModels: openRouterModels,
+            loadFailures: failures
+        )
+    }
+
+    private static func decodeProviderModels(
+        from data: Data?,
+        legacyModels: [String]?,
+        providerName: String,
+        failures: inout [ModelAvailabilityLoadFailure]
+    ) -> [ProviderModel] {
+        if let data {
+            do {
+                return try JSONDecoder().decode([ProviderModel].self, from: data)
+            } catch {
+                failures.append(
+                    ModelAvailabilityLoadFailure(
+                        providerName: providerName,
+                        reason: "Saved models could not be decoded. Re-save this provider to restore model pickers."
+                    )
+                )
+            }
+        }
+
+        return legacyModels?.map {
+            ProviderModel(name: $0)
+        } ?? []
+    }
+
+    private static func decodeJSONList<T: Decodable>(
+        from data: Data?,
+        providerName: String,
+        valueDescription: String,
+        failures: inout [ModelAvailabilityLoadFailure]
+    ) -> [T] {
+        guard let data else {
+            return []
+        }
+
+        do {
+            return try JSONDecoder().decode([T].self, from: data)
+        } catch {
+            failures.append(
+                ModelAvailabilityLoadFailure(
+                    providerName: providerName,
+                    reason: "Saved \(valueDescription) could not be decoded. Re-save this provider to restore model pickers."
+                )
+            )
+            return []
+        }
+    }
+}
+
 private extension ClosedRange where Bound == Int {
     func clamping(_ value: Int) -> Int {
         Swift.min(Swift.max(value, lowerBound), upperBound)
@@ -382,6 +644,8 @@ private extension ClosedRange where Bound == Int {
 }
 
 enum SettingsStorage {
+    private static let modelAvailabilityCache = ModelAvailabilityCache()
+
     static func loadModelSelection(
         forKey key: String,
         userDefaults: UserDefaults = .standard
@@ -447,22 +711,16 @@ enum SettingsStorage {
         requiresReasoning: Bool? = nil,
         userDefaults: UserDefaults = .standard
     ) -> [String] {
-        let models = availableModels(
-            azureDeployments: loadDeployments(userDefaults: userDefaults),
-            neuralwattModels: loadProviderModels(forKey: SettingsKeys.neuralwattModels, userDefaults: userDefaults),
-            openRouterModels: loadProviderModels(forKey: SettingsKeys.openRouterModels, userDefaults: userDefaults)
-        )
+        modelAvailabilitySnapshot(userDefaults: userDefaults)
+            .availableModels(requiresReasoning: requiresReasoning)
+    }
 
-        guard let requiresReasoning else {
-            return models
-        }
+    static func modelAvailabilitySnapshot(userDefaults: UserDefaults = .standard) -> ModelAvailabilitySnapshot {
+        modelAvailabilityCache.snapshot(userDefaults: userDefaults)
+    }
 
-        return models.filter { selection in
-            let capabilities = capabilities(for: selection, userDefaults: userDefaults)
-            return requiresReasoning
-                ? capabilities.contains(.reasoning)
-                : !capabilities.contains(.reasoning)
-        }
+    static func invalidateModelAvailabilityCache(userDefaults: UserDefaults = .standard) {
+        modelAvailabilityCache.invalidate(userDefaults: userDefaults)
     }
 
     static func availableModels(
@@ -483,41 +741,31 @@ enum SettingsStorage {
         for modelSelection: String,
         userDefaults: UserDefaults = .standard
     ) -> Set<ModelCapability> {
-        let selection = modelSelection.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if let title = selection.removingPrefix(InferenceProviderID.azure.modelPrefix) {
-            return loadDeployments(userDefaults: userDefaults)
-                .first { $0.modelPickerTitle == title }?
-                .capabilities ?? ModelCapability.defaultCapabilities
-        }
-
-        if let model = selection.removingPrefix(InferenceProviderID.neuralwatt.modelPrefix) {
-            return loadProviderModels(forKey: SettingsKeys.neuralwattModels, userDefaults: userDefaults)
-                .first { $0.name == model }?
-                .capabilities ?? ModelCapability.defaultCapabilities
-        }
-
-        if let model = selection.removingPrefix(InferenceProviderID.openRouter.modelPrefix) {
-            return loadProviderModels(forKey: SettingsKeys.openRouterModels, userDefaults: userDefaults)
-                .first { $0.name == model }?
-                .capabilities ?? ModelCapability.defaultCapabilities
-        }
-
-        return ModelCapability.defaultCapabilities
+        modelAvailabilitySnapshot(userDefaults: userDefaults)
+            .capabilities(for: modelSelection)
     }
 
     static func loadDeployments(userDefaults: UserDefaults = .standard) -> [AzureDeployment] {
-        loadCodable([AzureDeployment].self, forKey: SettingsKeys.azureDeployments, default: [], userDefaults: userDefaults)
+        modelAvailabilitySnapshot(userDefaults: userDefaults).azureDeployments
     }
 
     static func saveDeployments(_ deployments: [AzureDeployment], userDefaults: UserDefaults = .standard) {
         saveCodable(deployments, forKey: SettingsKeys.azureDeployments, userDefaults: userDefaults)
+        invalidateModelAvailabilityCache(userDefaults: userDefaults)
     }
 
     static func loadProviderModels(
         forKey key: String,
         userDefaults: UserDefaults = .standard
     ) -> [ProviderModel] {
+        if key == SettingsKeys.neuralwattModels {
+            return modelAvailabilitySnapshot(userDefaults: userDefaults).neuralwattModels
+        }
+
+        if key == SettingsKeys.openRouterModels {
+            return modelAvailabilitySnapshot(userDefaults: userDefaults).openRouterModels
+        }
+
         if let data = userDefaults.data(forKey: key),
            let models = try? JSONDecoder().decode([ProviderModel].self, from: data) {
             return models
@@ -534,6 +782,9 @@ enum SettingsStorage {
         userDefaults: UserDefaults = .standard
     ) {
         saveCodable(models, forKey: key, userDefaults: userDefaults)
+        if key == SettingsKeys.neuralwattModels || key == SettingsKeys.openRouterModels {
+            invalidateModelAvailabilityCache(userDefaults: userDefaults)
+        }
     }
 
     nonisolated static let defaultBraveSearchRequestsPerSecond = 1.0
