@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Shared local-mutation + best-effort-server-call helpers for the common
 /// per-email actions (archive, delete-to-Trash, flag/read sync). Both call
@@ -15,6 +16,8 @@ import Foundation
 /// (the row flip + removal-from-card already happened locally).
 @MainActor
 enum EmailServerAction {
+    private static let logger = AppLog.make("mail.action")
+
     /// Archives the email locally + moves it to the account's resolved
     /// SPECIAL-USE Archive folder on the server. Gmail's archive target is
     /// `[Gmail]/All Mail` (no literal "Archive" folder), which is why the
@@ -43,6 +46,11 @@ enum EmailServerAction {
         let fallbackTrashMailbox = EmailAccountStore.shared
             .account(for: email.accountID)?
             .resolvedTrashMailbox ?? "Trash"
+        Self.logger.info("""
+            delete requested emailID=\(email.id.uuidString, privacy: .public) \
+            uid=\(uid, privacy: .public) sourceMailbox=\(sourceMailbox, privacy: .public) \
+            fallbackTrash=\(fallbackTrashMailbox, privacy: .public)
+            """)
         repository.delete(messageID: email.id, movedToMailbox: fallbackTrashMailbox)
         guard let mailClient else { return }
         do {
@@ -58,6 +66,11 @@ enum EmailServerAction {
                 repository.delete(messageID: email.id, movedToMailbox: resolvedTrashMailbox)
             }
         } catch {
+            Self.logger.error("""
+                delete server move failed emailID=\(email.id.uuidString, privacy: .public) \
+                uid=\(uid, privacy: .public) sourceMailbox=\(sourceMailbox, privacy: .public): \
+                \(String(describing: error))
+                """)
             MailSyncMonitor.shared.setStatus(
                 "Couldn't move to Trash on the server: \(error.localizedDescription)",
                 syncing: false

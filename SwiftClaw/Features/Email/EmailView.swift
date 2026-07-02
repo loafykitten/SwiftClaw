@@ -1,12 +1,12 @@
-import SwiftUI
 import SwiftData
+import SwiftUI
 
 struct EmailView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
 
-    @Query(sort: \EmailThread.lastDate, order: .reverse)
-    private var threads: [EmailThread]
+    @Query(sort: \Email.date, order: .reverse)
+    private var emails: [Email]
 
     @State private var selectedThreadID: UUID?
     @State private var selectedMailbox: EmailMailbox = .inbox
@@ -18,28 +18,33 @@ struct EmailView: View {
     }
 
     /// Inbox surfaces any thread that still has at least one visible
-    /// (non-archived + non-deleted) message. (We fetch *all* threads
-    /// unfiltered via `@Query` so Archive/Trash mailboxes can read off the
-    /// same list — the per-mailbox split happens here in code.)
+    /// (non-archived + non-deleted) message. (We query `Email` rows rather
+    /// than threads so SwiftUI observes the per-message flags that archive/
+    /// delete flip — the per-mailbox split happens here in code.)
     private var inboxThreads: [EmailThread] {
-        threads.filter { thread in
-            thread.messages.contains { message in
-                !message.isArchived && !message.isDeleted
-            }
-        }
+        threads(from: emails.filter { !$0.isArchived && !$0.isDeleted })
     }
 
     private var archiveThreads: [EmailThread] {
-        threads.filter { $0.containsArchived }
+        threads(from: emails.filter { $0.isArchived && !$0.isDeleted })
     }
 
     private var trashThreads: [EmailThread] {
-        threads.filter { $0.containsTrashed }
+        threads(from: emails.filter(\.isDeleted))
+    }
+
+    private func threads(from emails: [Email]) -> [EmailThread] {
+        var seen = Set<UUID>()
+        return emails.compactMap { email in
+            guard let thread = email.thread else { return nil }
+            guard seen.insert(thread.id).inserted else { return nil }
+            return thread
+        }
     }
 
     var body: some View {
-        // Each partition filters all @Query threads and faults in
-        // `thread.messages`, so compute them ONCE per render and derive
+        // Each partition filters all @Query emails, so compute them ONCE
+        // per render and derive
         // everything (filtered list, selection, visible mailboxes, the
         // empty-state gate) from these locals — reading the partitions
         // repeatedly used to re-run that work many times per `body` pass.
@@ -74,7 +79,6 @@ struct EmailView: View {
         // replaces the whole pane with a centered placeholder and strands
         // the user with no way back to Inbox without leaving the Email tab.
         let hasAnyMail = !inbox.isEmpty || !archive.isEmpty || !trash.isEmpty
-
         return Group {
             if !isConfigured {
                 unconfiguredState
@@ -136,13 +140,13 @@ struct EmailView: View {
         }
         .onAppear {
             if let emailID = pendingEmailID,
-               let thread = threads.first(where: { $0.messages.contains { $0.id == emailID } }) {
+               let thread = emails.first(where: { $0.id == emailID })?.thread {
                 selectedThreadID = thread.id
             }
         }
         .onChange(of: pendingEmailID) { _, emailID in
             guard let emailID,
-                  let thread = threads.first(where: { $0.messages.contains { $0.id == emailID } }) else { return }
+                  let thread = emails.first(where: { $0.id == emailID })?.thread else { return }
             selectedThreadID = thread.id
         }
     }

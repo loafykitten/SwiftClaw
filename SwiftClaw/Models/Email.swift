@@ -79,20 +79,6 @@ final class EmailThread {
         !messages.isEmpty && messages.allSatisfy { $0.isArchived }
     }
 
-    /// True if any message in the thread has been archived (but not deleted).
-    /// Used to surface threads in the Archive mailbox sidebar item — the
-    /// `isArchived` predicate above only fires when *every* message is
-    /// archived, which would otherwise hide partially-archived threads.
-    var containsArchived: Bool {
-        messages.contains { $0.isArchived && !$0.isDeleted }
-    }
-
-    /// True if any message in the thread has been soft-deleted (and so
-    /// belongs in the Trash mailbox view).
-    var containsTrashed: Bool {
-        messages.contains { $0.isDeleted }
-    }
-
     var unreadCount: Int {
         unreadCount(in: messages)
     }

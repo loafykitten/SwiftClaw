@@ -1,10 +1,11 @@
 # SwiftClaw Email Feature - Plan & Status
 
-The email feature is code-complete for the current macOS MVP. The only active
-remaining work is live end-to-end verification against a real mail account.
+The email feature is code-complete for the current macOS MVP. Live verification
+against a real mail account is mostly complete; the remaining live check is the
+reply/Sent reconciliation path.
 
-Current local verification, June 25, 2026:
-- `xcodebuild ... test` passes: 167 tests across 22 suites.
+Current local verification, June 27, 2026:
+- `xcodebuild ... test` passes.
   (The `SwiftClawTests` unit-test target and a shared test
   scheme are wired into the project; the test folder is attached as a
   synchronized group, so new test files are picked up automatically.)
@@ -95,6 +96,8 @@ Current local verification, June 25, 2026:
 - Thread list, detail view, read-on-view, flag/archive/delete, permanent
   delete from Trash, notes, attachments, HTML body rendering, and reply
   composer are implemented.
+- `EmailView` mailbox filters are driven by `Email` rows so local delete/archive
+  mutations move threads between Inbox/Archive/Trash immediately.
 - Toolbar has Sync Now and Review Now with status handling.
 - Review cards can navigate to the referenced email; acted-on items drop from
   the card.
@@ -114,10 +117,9 @@ The model-driven `fetch_inbox_emails` selection, the `reviewedCount` resurface
 decay, configurable review-fetch defaults, 10-thread default limit, interval and
 daily review scheduling, persisted review-completion time, schedule-change
 wakeups, first-run delays, same-day relative email date labels, and "Yesterday"
-email date labels are code-complete and pass locally. The next concrete step is
-still the live pass below, including the real-store migration check for
-`EmailThread.reviewedCount`, then memory-backed review context once the
-note/flag loop has real-world use.
+email date labels are code-complete and pass locally. Ember confirmed the real
+account path, old-store migration, provider actions, and review-chat note/flag
+loop work in live use. The only live provider check still open is reply/Sent.
 
 One behavior to watch during the live pass (not a code change yet — confirm it
 against a real inbox before deciding): unread/flagged/notated threads override
@@ -128,34 +130,15 @@ if the very first live pass produces an unwieldy prompt, the fix is a soft cap
 on the unread override (e.g. newest N unread) rather than the current unbounded
 return.
 
-**Live end-to-end verification - on Ember's side**
-- Test Connection succeeds; account persists; passwords land in Keychain.
-- Existing local email store opens successfully after the additive
-  `EmailThread.reviewedCount` migration.
-- First sync pulls INBOX; threads cluster sensibly.
-- Incremental sync fetches only new mail.
-- UIDVALIDITY change triggers a full re-fetch.
-- Special-use folders resolve per provider.
-- Archive, delete-to-Trash, flag, and mark-read reflect on the server.
-- Trash sync promotes moved rows to the server Trash UID.
-- Delete Permanently expunges the Trash copy and removes the local row.
-- Reply sends, threads on the recipient side, APPENDs to Sent, and the local
-  synthetic row reconciles to the real Sent UID.
-- A review pass calls `fetch_inbox_emails` then `notify_user_about_emails`
-  (check `mail.review` / `mail.review.fetch` logs) and creates a review chat;
-  card actions dispatch correctly.
-- A scheduled/default review over an inbox whose remaining mail is older than a
-  week still fetches stale read mail for clearing instead of returning nothing.
-- Interval scheduling runs an overdue review after app relaunch; daily local
-  review times fire once per configured time and do not repeat after completion.
-- Editing a review interval/daily time or switching schedule modes while the app
-  is open takes effect immediately.
-- Conversational steering reshapes the fetch — e.g. "this week" sets an age
-  window, "what's flagged" narrows to flagged — and a second scheduled pass with
-  no new mail doesn't re-surface a just-reviewed thread until its decayed window
-  elapses (while flagged/notated threads still return).
-- Replying in a review chat can add notes and set/clear flags on referenced
-  emails.
+**Live end-to-end verification**
+- Done: real account setup, account persistence, Keychain password storage,
+  old-store migration, first sync, incremental sync, special-use folders,
+  archive/delete-to-Trash/flag/mark-read server reflection, Trash behavior,
+  permanent delete, review pass creation, card actions, scheduling behavior,
+  conversational steering, suppression/resurface behavior, and review-chat
+  note/flag tools.
+- Still open: Reply sends, threads on the recipient side, APPENDs to Sent, and
+  the local synthetic row reconciles to the real Sent UID.
 
 ## Deferred
 
@@ -163,9 +146,10 @@ return.
 - Archive mailbox sync as a first-class mailbox.
 - `EmailView` fetch paging/windowing for very large stores.
 - Per-operation IMAP/SMTP connection reuse.
-- Memory-backed email review context, such as sender-level preferences.
-- More review follow-up tools, such as reply/delete, after the note/flag loop
-  is used live.
+- Memory-backed email review context, such as sender-level preferences, once
+  there are concrete preferences worth remembering.
+- More review follow-up tools, such as reply/delete, if the review-chat workflow
+  needs them.
 
 ### Low-priority cleanup (post-merge)
 

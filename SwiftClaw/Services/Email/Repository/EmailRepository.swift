@@ -135,10 +135,19 @@ final class EmailRepository {
 
     func delete(messageID: UUID, movedToMailbox mailbox: String? = nil) {
         guard let email = fetchEmail(by: messageID) else { return }
+        let previousMailbox = email.mailbox
+        let previousDeleted = email.isDeleted
         email.isDeleted = true
         if let mailbox, !mailbox.isEmpty {
             email.mailbox = mailbox
         }
+        Self.logger.info("""
+            repository delete emailID=\(email.id.uuidString, privacy: .public) \
+            uid=\(email.uid, privacy: .public) \
+            mailbox=\(previousMailbox, privacy: .public)->\(email.mailbox, privacy: .public) \
+            isDeleted=\(previousDeleted, privacy: .public)->\(email.isDeleted, privacy: .public) \
+            threadID=\(String(describing: email.thread?.id), privacy: .public)
+            """)
         save()
     }
 

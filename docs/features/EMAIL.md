@@ -53,10 +53,13 @@ were inserted.
 
 ## Review loop
 
-`EmailReviewService.runOnce()` sends up to `maxThreadsPerPass` (40) unreviewed
-threads to the model and stamps `EmailThread.lastReviewedAt` **only after** a
-successful inference call — a failure retries next pass instead of suppressing
-the threads forever. Suppression is via `lastReviewedAt`, not AI notes.
+`EmailReviewService.runOnce()` gives the model a scoped `fetch_inbox_emails`
+tool, then the model decides which slice of inbox to pull before optionally
+calling `notify_user_about_emails`. The service stamps
+`EmailThread.lastReviewedAt` only for threads the model actually fetched, and
+only after a successful inference call — a failure retries next pass instead of
+suppressing threads forever. Suppression is via `lastReviewedAt` plus
+`reviewedCount`; flagged/notated threads bypass it.
 
 ## Replies
 
