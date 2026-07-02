@@ -13,6 +13,16 @@ import AppKit
 @Observable
 final class EmailWorkflowManager {
     private static let logger = AppLog.make("mail.workflow")
+    private typealias SchedulerFactory = @MainActor (
+        MailSyncWorker,
+        @escaping () -> Int
+    ) -> [MailSyncScheduler]
+    private typealias ReviewRunHandler = @MainActor (
+        EmailReviewService,
+        Bool,
+        UUID?,
+        Bool
+    ) async -> Bool
 
     static let shared = EmailWorkflowManager()
 
@@ -23,11 +33,48 @@ final class EmailWorkflowManager {
     private var lastReviewRun: Date?
     private var reviewChatOpenedObserver: NSObjectProtocol?
     private var reviewScheduleObserver: NSObjectProtocol?
+    private var userDefaults: UserDefaults = .standard
+    private var schedulerFactory: SchedulerFactory = { worker, intervalProvider in
+        MailSyncSchedulerFactory.make(worker: worker, intervalProvider: intervalProvider)
+    }
+    private var reviewRunHandler: ReviewRunHandler?
 
     private init() {}
 
+    #if DEBUG
+    func configureForTesting(
+        userDefaults: UserDefaults,
+        schedulerFactory: (@MainActor (
+            MailSyncWorker,
+            @escaping () -> Int
+        ) -> [MailSyncScheduler])? = nil,
+        reviewRunHandler: (@MainActor (
+            EmailReviewService,
+            Bool,
+            UUID?,
+            Bool
+        ) async -> Bool)? = nil
+    ) {
+        self.userDefaults = userDefaults
+        if let schedulerFactory {
+            self.schedulerFactory = schedulerFactory
+        }
+        self.reviewRunHandler = reviewRunHandler
+    }
+
+    func resetForTesting() {
+        stop()
+        userDefaults = .standard
+        schedulerFactory = { worker, intervalProvider in
+            MailSyncSchedulerFactory.make(worker: worker, intervalProvider: intervalProvider)
+        }
+        reviewRunHandler = nil
+        lastReviewRun = nil
+    }
+    #endif
+
     func start(modelContainer: ModelContainer) {
-        guard SettingsStorage.isEmailEnabled() else {
+        guard SettingsStorage.isEmailEnabled(userDefaults: userDefaults) else {
             return
         }
         guard schedulers.isEmpty else {
@@ -40,16 +87,14 @@ final class EmailWorkflowManager {
         )
         self.syncWorker = worker
 
-        schedulers = MailSyncSchedulerFactory.make(
-            worker: worker,
-            intervalProvider: {
-                SettingsStorage.loadEmailPollInterval()
-            }
-        )
+        schedulers = schedulerFactory(worker) { [userDefaults] in
+            SettingsStorage.loadEmailPollInterval(userDefaults: userDefaults)
+        }
         schedulers.forEach { $0.start() }
 
         let reviewService = EmailReviewService(
-            modelContainer: modelContainer
+            modelContainer: modelContainer,
+            userDefaults: userDefaults
         )
         reviewService.onReviewCreated = { [weak self] chatID in
             self?.handleReviewChatCreated(chatID)
@@ -87,6 +132,7 @@ final class EmailWorkflowManager {
         reviewTask?.cancel()
         reviewTask = nil
         reviewService = nil
+        lastReviewRun = nil
         if let observer = reviewChatOpenedObserver {
             NotificationCenter.default.removeObserver(observer)
             reviewChatOpenedObserver = nil
@@ -175,9 +221,13 @@ final class EmailWorkflowManager {
     }
 
     private func nextReviewDate(now: Date = Date()) -> Date {
-        let persisted = SettingsStorage.loadEmailLastReviewCompletedAt()
+        let persisted = SettingsStorage.loadEmailLastReviewCompletedAt(userDefaults: userDefaults)
         let anchor = [persisted, lastReviewRun].compactMap { $0 }.max()
-        return SettingsStorage.nextEmailReviewDate(now: now, lastCompletedAt: anchor)
+        return SettingsStorage.nextEmailReviewDate(
+            now: now,
+            lastCompletedAt: anchor,
+            userDefaults: userDefaults
+        )
     }
 
     /// `force` bypasses the 60 s overlap guard (used by the manual "Review
@@ -214,14 +264,19 @@ final class EmailWorkflowManager {
         guard !ProcessInfo.processInfo.isRunningInPreview else { return nil }
         let startedAt = Date()
         lastReviewRun = startedAt
-        let didRun = await reviewService.runOnce(
-            force: force,
-            targetChatID: targetChatID,
-            suppressInlineSummary: conversational
-        )
+        let didRun: Bool
+        if let reviewRunHandler {
+            didRun = await reviewRunHandler(reviewService, force, targetChatID, conversational)
+        } else {
+            didRun = await reviewService.runOnce(
+                force: force,
+                targetChatID: targetChatID,
+                suppressInlineSummary: conversational
+            )
+        }
         if didRun {
             let completedAt = Date()
-            SettingsStorage.saveEmailLastReviewCompletedAt(completedAt)
+            SettingsStorage.saveEmailLastReviewCompletedAt(completedAt, userDefaults: userDefaults)
             lastReviewRun = completedAt
         }
         let status = reviewService.lastStatusMessage

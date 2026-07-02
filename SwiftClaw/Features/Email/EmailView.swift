@@ -13,7 +13,7 @@ struct EmailView: View {
     @State private var selectedMailbox: EmailMailbox = .inbox
     @State private var composingReplyFor: Email?
     @State private var manualSyncCoordinator = EmailManualSyncCoordinator.shared
-    @State private var reviewTask: Task<Void, Never>?
+    @State private var manualReviewCoordinator = EmailManualReviewCoordinator.shared
     var pendingEmailID: UUID?
 
     private var isConfigured: Bool {
@@ -115,7 +115,7 @@ struct EmailView: View {
                     }
                 }
                 .help("Run an inbox review pass now")
-                .disabled(MailSyncMonitor.shared.isReviewing || reviewTask != nil)
+                .disabled(MailSyncMonitor.shared.isReviewing || manualReviewCoordinator.isReviewing)
 
                 // Open Settings → Email directly rather than via a sheet
                 // containing only a "Open Settings" link (which forces a
@@ -149,12 +149,6 @@ struct EmailView: View {
             guard let emailID,
                   let thread = emails.first(where: { $0.id == emailID })?.thread else { return }
             selectedThreadID = thread.id
-        }
-        .onDisappear {
-            // Manual sync is intentionally coordinator-owned so it can finish
-            // after the Email tab leaves the navigation stack.
-            reviewTask?.cancel()
-            reviewTask = nil
         }
     }
 
@@ -226,23 +220,43 @@ struct EmailView: View {
         )
     }
 
-    private func reviewNow() async {
-        guard !ProcessInfo.processInfo.isRunningInPreview else { return }
-        guard !Task.isCancelled else { return }
-        await EmailWorkflowManager.shared.reviewNow()
-    }
-
     private func startRefreshNow() {
         manualSyncCoordinator.startRefreshNow()
     }
 
     private func startReviewNow() {
+        manualReviewCoordinator.startReviewNow()
+    }
+}
+
+@MainActor
+@Observable
+private final class EmailManualReviewCoordinator {
+    static let shared = EmailManualReviewCoordinator()
+
+    private(set) var isReviewing = false
+
+    @ObservationIgnored private var reviewTask: Task<Void, Never>?
+
+    private init() {}
+
+    func startReviewNow() {
         guard reviewTask == nil else { return }
-        reviewTask = Task { @MainActor in
-            await reviewNow()
-            guard !Task.isCancelled else { return }
-            reviewTask = nil
+
+        isReviewing = true
+        reviewTask = Task { @MainActor [weak self] in
+            guard !ProcessInfo.processInfo.isRunningInPreview else {
+                self?.finishReview()
+                return
+            }
+            await EmailWorkflowManager.shared.reviewNow()
+            self?.finishReview()
         }
+    }
+
+    private func finishReview() {
+        reviewTask = nil
+        isReviewing = false
     }
 }
 

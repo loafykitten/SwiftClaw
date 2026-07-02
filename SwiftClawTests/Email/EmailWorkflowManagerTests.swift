@@ -1,0 +1,107 @@
+import Foundation
+import SwiftData
+import Testing
+@testable import SwiftClaw
+
+@MainActor
+@Suite(.serialized)
+struct EmailWorkflowManagerTests {
+    @Test
+    func overdueIntervalReviewRunsWhenWorkflowStarts() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        let manager = EmailWorkflowManager.shared
+        manager.resetForTesting()
+        defer { manager.resetForTesting() }
+
+        let interval = SettingsStorage.defaultEmailReviewIntervalSeconds
+        let staleCompletedAt = Date().addingTimeInterval(-TimeInterval(interval + 30))
+        fixture.defaults.set(true, forKey: SettingsKeys.emailEnabled)
+        fixture.defaults.set(interval, forKey: SettingsKeys.emailReviewIntervalSeconds)
+        fixture.defaults.set(EmailReviewScheduleMode.interval.rawValue, forKey: SettingsKeys.emailReviewScheduleMode)
+        SettingsStorage.saveEmailLastReviewCompletedAt(staleCompletedAt, userDefaults: fixture.defaults)
+
+        let probe = ReviewRunProbe()
+        manager.configureForTesting(
+            userDefaults: fixture.defaults,
+            schedulerFactory: { _, _ in [NoOpMailSyncScheduler()] },
+            reviewRunHandler: { _, force, targetChatID, conversational in
+                await probe.record(
+                    force: force,
+                    targetChatID: targetChatID,
+                    conversational: conversational
+                )
+                return true
+            }
+        )
+
+        manager.start(modelContainer: try Self.inMemoryContainer())
+
+        let run = try #require(await Self.waitForRun(in: probe))
+        #expect(run.force == false)
+        #expect(run.targetChatID == nil)
+        #expect(run.conversational == false)
+
+        let completedAt = try #require(
+            SettingsStorage.loadEmailLastReviewCompletedAt(userDefaults: fixture.defaults)
+        )
+        #expect(completedAt > staleCompletedAt)
+    }
+
+    private static func waitForRun(
+        in probe: ReviewRunProbe,
+        timeout: TimeInterval = 1
+    ) async throws -> ReviewRunProbe.RecordedRun? {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if let run = await probe.firstRun() {
+                return run
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return await probe.firstRun()
+    }
+
+    private static func inMemoryContainer() throws -> ModelContainer {
+        try ModelContainer(
+            for: Item.self, Chat.self, ChatMessage.self,
+            Email.self, EmailThread.self, EmailNote.self, EmailAttachment.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true)
+        )
+    }
+}
+
+private actor ReviewRunProbe {
+    struct RecordedRun: Sendable {
+        let force: Bool
+        let targetChatID: UUID?
+        let conversational: Bool
+    }
+
+    private var runs: [RecordedRun] = []
+
+    func record(force: Bool, targetChatID: UUID?, conversational: Bool) {
+        runs.append(
+            RecordedRun(
+                force: force,
+                targetChatID: targetChatID,
+                conversational: conversational
+            )
+        )
+    }
+
+    func firstRun() -> RecordedRun? {
+        runs.first
+    }
+}
+
+private final class NoOpMailSyncScheduler: MailSyncScheduler, @unchecked Sendable {
+    let lastSyncDate: Date? = nil
+
+    func start() {}
+
+    func stop() {}
+
+    func refreshNow() async {}
+}
