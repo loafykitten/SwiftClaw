@@ -179,6 +179,15 @@ struct ChatComposerView: View {
                 ComposerDropTargetOverlay()
             }
         }
+        .background {
+            ImagePasteKeyMonitor(
+                isEnabled: canImportImageAttachments && isMessageFieldFocused,
+                onPasteImage: {
+                    attachmentController.pasteImagesFromClipboard(isEnabled: canImportImageAttachments)
+                }
+            )
+            .frame(width: 0, height: 0)
+        }
         .imageAttachmentPreviewOverlay(selection: previewSelectionBinding)
         .onAppear(perform: refreshModels)
         .onDisappear {
