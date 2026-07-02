@@ -110,15 +110,20 @@ enum ChatCompletionService {
                 tools: tools
             )
 
+            guard !Task.isCancelled else { return }
             chat.appendMessage(role: .assistant, content: response)
             chat.isGenerating = false
             chat.errorMessage = nil
+        } catch is CancellationError {
+            return
         } catch {
+            guard !Task.isCancelled else { return }
             chat.isGenerating = false
             chat.errorMessage = error.localizedDescription
         }
 
         do {
+            guard !Task.isCancelled else { return }
             try modelContext.save()
         } catch {
             chat.errorMessage = "Couldn't save the assistant response."

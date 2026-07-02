@@ -36,8 +36,7 @@ struct ChatsView: View {
         HStack(spacing: 0) {
             ChatHistoryView(
                 chats: orderedChats,
-                selectedChatID: selectedChat?.id,
-                selectChat: { selectedChatID = $0 },
+                selectedChatID: $selectedChatID,
                 togglePin: togglePin,
                 deleteChat: deleteChat
             )
@@ -80,6 +79,7 @@ struct ChatsView: View {
         let fallback = orderedChats.first { $0.id != chat.id }?.id
         let chatID = chat.id
 
+        ChatTaskCoordinator.shared.cancelTasks(for: chatID)
         modelContext.delete(chat)
         selectedChatID = selectedChatID == chat.id ? fallback : selectedChatID
         if saveChatListChange() {
@@ -101,10 +101,11 @@ struct ChatsView: View {
 
 private struct ChatHistoryView: View {
     let chats: [Chat]
-    let selectedChatID: UUID?
-    let selectChat: (UUID) -> Void
+    @Binding var selectedChatID: UUID?
     let togglePin: (Chat) -> Void
     let deleteChat: (Chat) -> Void
+
+    @State private var pendingDelete: Chat?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -116,31 +117,36 @@ private struct ChatHistoryView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
 
-            ScrollView {
-                LazyVStack(spacing: 4) {
-                    ForEach(chats) { chat in
-                        ChatHistoryRow(
-                            chat: chat,
-                            isSelected: chat.id == selectedChatID,
-                            selectChat: { selectChat(chat.id) },
-                            togglePin: { togglePin(chat) },
-                            deleteChat: { deleteChat(chat) }
-                        )
-                    }
+            List(selection: $selectedChatID) {
+                ForEach(chats) { chat in
+                    ChatHistoryRow(
+                        chat: chat,
+                        isSelected: chat.id == selectedChatID,
+                        togglePin: { togglePin(chat) },
+                        deleteChat: { pendingDelete = chat }
+                    )
+                    .tag(chat.id)
+                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 12)
             }
+            .listStyle(.sidebar)
         }
         .frame(width: 260)
-        .background(.background.secondary)
+        .confirmingAction(
+            item: $pendingDelete,
+            copy: ConfirmationDialogCopy(
+                title: "Delete this chat?",
+                actionTitle: "Delete",
+                message: "The chat and its image attachments will be removed from SwiftClaw."
+            ),
+            action: deleteChat
+        )
     }
 }
 
 private struct ChatHistoryRow: View {
     let chat: Chat
     let isSelected: Bool
-    let selectChat: () -> Void
     let togglePin: () -> Void
     let deleteChat: () -> Void
 
@@ -152,36 +158,33 @@ private struct ChatHistoryRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
-            Button(action: selectChat) {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 6) {
-                        Text(chat.title)
-                            .font(.callout)
-                            .fontWeight(isSelected ? .semibold : .regular)
-                            .lineLimit(2)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(chat.title)
+                        .font(.callout)
+                        .fontWeight(isSelected ? .semibold : .regular)
+                        .lineLimit(2)
 
-                        if chat.isGenerating {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .frame(width: 12, height: 12)
-                        }
+                    if chat.isGenerating {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .frame(width: 12, height: 12)
                     }
-
-                    Text(chat.modelSelection)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-
-                    Text(chat.updatedAt.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 10)
-                .padding(.vertical, 9)
-                .contentShape(Rectangle())
+
+                Text(chat.modelSelection)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Text(chat.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.leading, 10)
+            .padding(.vertical, 9)
+            .contentShape(Rectangle())
 
             HStack(spacing: 2) {
                 ChatHistoryActionButton(
@@ -194,7 +197,6 @@ private struct ChatHistoryRow: View {
                     systemName: "trash",
                     label: "Delete chat",
                     role: .destructive,
-                    requiresSecondClick: true,
                     action: deleteChat
                 )
             }
@@ -206,11 +208,7 @@ private struct ChatHistoryRow: View {
             .padding(.vertical, 7)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.accentColor.opacity(0.18) : .clear)
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .sidebarRowState()
         .onHover { isHovering = $0 }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -220,18 +218,11 @@ private struct ChatHistoryActionButton: View {
     let systemName: String
     let label: String
     var role: ButtonRole?
-    var requiresSecondClick = false
     let action: () -> Void
 
     @State private var isHovering = false
-    @State private var isWaitingForSecondClick = false
-    @State private var secondClickResetTask: Task<Void, Never>?
 
     private var foregroundStyle: Color {
-        if role == .destructive, isWaitingForSecondClick {
-            return .red
-        }
-
         if role == .destructive, isHovering {
             return .red
         }
@@ -240,15 +231,15 @@ private struct ChatHistoryActionButton: View {
     }
 
     private var effectiveSystemName: String {
-        isWaitingForSecondClick ? "\(systemName).fill" : systemName
+        systemName
     }
 
     private var effectiveLabel: String {
-        isWaitingForSecondClick ? "Click again to \(label.lowercased())" : label
+        label
     }
 
     var body: some View {
-        Button(role: role, action: performAction) {
+        Button(role: role, action: action) {
             Image(systemName: effectiveSystemName)
                 .frame(width: 18, height: 18)
                 .padding(3)
@@ -262,50 +253,8 @@ private struct ChatHistoryActionButton: View {
         .controlSize(.small)
         .help(effectiveLabel)
         .accessibilityLabel(effectiveLabel)
-        .onHover { isHovering in
-            self.isHovering = isHovering
-            if !isHovering {
-                cancelSecondClickRequirement()
-            }
-        }
-        .onDisappear(perform: cancelSecondClickRequirement)
+        .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isHovering)
-        .animation(.easeOut(duration: 0.12), value: isWaitingForSecondClick)
-    }
-
-    private func performAction() {
-        guard requiresSecondClick else {
-            action()
-            return
-        }
-
-        guard isWaitingForSecondClick else {
-            waitForSecondClick()
-            return
-        }
-
-        cancelSecondClickRequirement()
-        action()
-    }
-
-    private func waitForSecondClick() {
-        isWaitingForSecondClick = true
-        secondClickResetTask?.cancel()
-        secondClickResetTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2))
-            guard !Task.isCancelled else {
-                return
-            }
-
-            isWaitingForSecondClick = false
-            secondClickResetTask = nil
-        }
-    }
-
-    private func cancelSecondClickRequirement() {
-        isWaitingForSecondClick = false
-        secondClickResetTask?.cancel()
-        secondClickResetTask = nil
     }
 }
 
@@ -352,6 +301,8 @@ private struct ChatTranscriptView: View {
     let chat: Chat
     let emailDispatcherProvider: () -> AnyHashableReviewActionDispatcher?
     @State private var previewSelection: ImageAttachmentPreviewSelection?
+    @State private var presentedError: PresentedAppError?
+    @State private var scrollTask: Task<Void, Never>?
 
     private var scrollTrigger: String {
         let messages = chat.visibleMessages
@@ -424,34 +375,43 @@ private struct ChatTranscriptView: View {
                     .frame(maxWidth: .infinity)
                 }
                 .frame(maxHeight: .infinity)
+                .scrollEdgeEffectStyle(.soft, for: .bottom)
                 .onAppear {
                     scrollToBottom(proxy, animated: false)
                 }
                 .onChange(of: scrollTrigger) { _, _ in
                     scrollToBottom(proxy)
                 }
-            }
-
-            ChatComposerView(
-                isBusy: chat.isGenerating,
-                chatReasoningEffort: chat.reasoningEffort,
-                onReasoningEffortChange: { effort in
-                    chat.reasoningEffort = effort
-                    try? modelContext.save()
+                .safeAreaBar(edge: .bottom) {
+                    ChatComposerView(
+                        isBusy: chat.isGenerating,
+                        chatReasoningEffort: chat.reasoningEffort,
+                        onReasoningEffortChange: { effort in
+                            chat.reasoningEffort = effort
+                            try? modelContext.save()
+                        }
+                    ) { submission in
+                        submitMessage(submission)
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 20)
                 }
-            ) { submission in
-                submitMessage(submission)
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .imageAttachmentPreviewOverlay(selection: $previewSelection)
+        .appErrorAlert($presentedError)
+        .onDisappear {
+            scrollTask?.cancel()
+            scrollTask = nil
+        }
     }
 
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool = true) {
-        Task { @MainActor in
+        scrollTask?.cancel()
+        scrollTask = Task { @MainActor in
             await Task.yield()
+            guard !Task.isCancelled else { return }
 
             if animated {
                 withAnimation(.easeOut(duration: 0.2)) {
@@ -460,6 +420,8 @@ private struct ChatTranscriptView: View {
             } else {
                 proxy.scrollTo(ChatScrollTarget.bottom, anchor: .bottom)
             }
+            guard !Task.isCancelled else { return }
+            scrollTask = nil
         }
     }
 
@@ -486,7 +448,7 @@ private struct ChatTranscriptView: View {
                 for: chat.id
             )
         } catch {
-            chat.errorMessage = error.localizedDescription
+            presentSubmissionError(.attachmentFinalizationFailed(error))
             return false
         }
 
@@ -505,21 +467,47 @@ private struct ChatTranscriptView: View {
         } catch {
             ImageAttachmentStore.shared.deleteAttachments(finalizedAttachments)
             chat.isGenerating = false
-            chat.errorMessage = "Couldn't save your message."
+            presentSubmissionError(.saveFailed(error))
             return false
         }
 
-        Task {
-            await ChatCompletionService.completeChat(
-                chat,
-                in: modelContext,
-                allowInvestigation: submission.isInvestigationEnabled,
-                supportsImages: submission.supportsImages,
-                reasoningEffort: submission.reasoningEffort
-            )
-        }
+        ChatTaskCoordinator.shared.completeChat(
+            chat,
+            in: modelContext,
+            allowInvestigation: submission.isInvestigationEnabled,
+            supportsImages: submission.supportsImages,
+            reasoningEffort: submission.reasoningEffort
+        )
 
         return true
+    }
+
+    private func presentSubmissionError(_ error: ChatSubmissionError) {
+        chat.errorMessage = error.errorDescription
+        presentedError = PresentedAppError(error, title: "Couldn't send message")
+    }
+}
+
+private enum ChatSubmissionError: LocalizedError {
+    case attachmentFinalizationFailed(any Error)
+    case saveFailed(any Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .attachmentFinalizationFailed:
+            "Couldn't attach the selected images."
+        case .saveFailed:
+            "Couldn't save your message."
+        }
+    }
+
+    var recoverySuggestion: String? {
+        switch self {
+        case .attachmentFinalizationFailed(let error):
+            "Check that the image files still exist and try again. Details: \(error.localizedDescription)"
+        case .saveFailed(let error):
+            "Your draft attachments were rolled back. Try sending again. Details: \(error.localizedDescription)"
+        }
     }
 }
 
@@ -536,6 +524,7 @@ private struct ChatHeaderView: View {
     @State private var isEditingTitle = false
     @State private var draftTitle = ""
     @State private var isGeneratingTitle = false
+    @State private var titleTask: Task<Void, Never>?
     @FocusState private var isTitleFieldFocused: Bool
 
     private var isEmailReviewChat: Bool {
@@ -576,7 +565,7 @@ private struct ChatHeaderView: View {
                         ChatHistoryActionButton(
                             systemName: "sparkles",
                             label: "Regenerate title",
-                            action: { Task { await regenerateTitle() } }
+                            action: startRegeneratingTitle
                         )
                         .disabled(chat.isGenerating)
                     }
@@ -604,6 +593,10 @@ private struct ChatHeaderView: View {
                 isTitleFieldFocused = true
             }
         }
+        .onDisappear {
+            titleTask?.cancel()
+            titleTask = nil
+        }
     }
 
     private func beginTitleEdit() {
@@ -627,10 +620,23 @@ private struct ChatHeaderView: View {
         isEditingTitle = false
     }
 
-    private func regenerateTitle() async {
+    private func startRegeneratingTitle() {
         guard !isGeneratingTitle else { return }
+        titleTask?.cancel()
+        titleTask = Task { @MainActor in
+            await regenerateTitle()
+            guard !Task.isCancelled else { return }
+            titleTask = nil
+        }
+    }
+
+    private func regenerateTitle() async {
         isGeneratingTitle = true
-        defer { isGeneratingTitle = false }
+        defer {
+            if !Task.isCancelled {
+                isGeneratingTitle = false
+            }
+        }
 
         await ChatTitleService.regenerateTitle(for: chat, in: modelContext)
     }
@@ -641,6 +647,7 @@ private struct ChatMessageRow: View {
     var emailDispatcher: AnyHashableReviewActionDispatcher?
     let showImagePreview: ([ImageAttachmentRecord], Int) -> Void
 
+    @Environment(AppRouter.self) private var router
     @Environment(\.modelContext) private var modelContext
 
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
@@ -684,11 +691,7 @@ private struct ChatMessageRow: View {
                             try? modelContext.save()
                         },
                         onItemView: { emailID in
-                            NotificationCenter.default.post(
-                                name: .emailReviewViewEmail,
-                                object: nil,
-                                userInfo: ["emailID": emailID]
-                            )
+                            router.showEmail(emailID)
                         },
                         onRefreshAnalysis: {
                             await EmailWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)

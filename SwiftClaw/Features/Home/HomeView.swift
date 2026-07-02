@@ -11,6 +11,7 @@ struct HomeView: View {
     @State private var blurb = HomeBlurb.initial
     @State private var isCreatingChat = false
     @State private var submissionError: String?
+    @State private var presentedError: PresentedAppError?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -42,7 +43,10 @@ struct HomeView: View {
             }
 
             Spacer()
-
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
+        .safeAreaBar(edge: .bottom) {
             ChatComposerView(
                 isBusy: isCreatingChat,
                 submissionError: submissionError
@@ -52,10 +56,10 @@ struct HomeView: View {
             .padding(.horizontal, 40)
             .padding(.bottom, 24)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             await generateBlurb()
         }
+        .appErrorAlert($presentedError)
     }
 
     private func submitMessage(_ submission: ChatComposerSubmission) -> Bool {
@@ -81,7 +85,7 @@ struct HomeView: View {
                 for: chat.id
             )
         } catch {
-            submissionError = error.localizedDescription
+            presentSubmissionError(.attachmentFinalizationFailed(error))
             isCreatingChat = false
             return false
         }
@@ -104,7 +108,7 @@ struct HomeView: View {
             ImageAttachmentStore.shared.deleteDraftAttachments(submission.imageAttachments)
         } catch {
             ImageAttachmentStore.shared.deleteAttachments(finalizedAttachments)
-            submissionError = "Couldn't create the chat."
+            presentSubmissionError(.saveFailed(error))
             isCreatingChat = false
             return false
         }
@@ -112,25 +116,25 @@ struct HomeView: View {
         isCreatingChat = false
         onChatCreated(chat.id)
 
-        Task {
-            await ChatCompletionService.completeChat(
-                chat,
-                in: modelContext,
-                allowInvestigation: submission.isInvestigationEnabled,
-                supportsImages: submission.supportsImages,
-                reasoningEffort: submission.reasoningEffort
-            )
-        }
-
-        Task {
-            await ChatTitleService.generateInitialTitle(
-                for: chat,
-                userInput: input,
-                in: modelContext
-            )
-        }
+        ChatTaskCoordinator.shared.completeChat(
+            chat,
+            in: modelContext,
+            allowInvestigation: submission.isInvestigationEnabled,
+            supportsImages: submission.supportsImages,
+            reasoningEffort: submission.reasoningEffort
+        )
+        ChatTaskCoordinator.shared.generateInitialTitle(
+            for: chat,
+            userInput: input,
+            in: modelContext
+        )
 
         return true
+    }
+
+    private func presentSubmissionError(_ error: HomeSubmissionError) {
+        submissionError = error.errorDescription
+        presentedError = PresentedAppError(error, title: "Couldn't create chat")
     }
 
     private func generateBlurb() async {
@@ -156,12 +160,38 @@ struct HomeView: View {
             )
 
             let cleaned = HomeBlurb.cleaned(response)
+            guard !Task.isCancelled else { return }
             if !cleaned.isEmpty {
                 blurb = cleaned
             }
+        } catch is CancellationError {
+            return
         } catch {
             // Keep the blank line; details land in the unified log.
             HomeBlurb.logger.error("Blurb generation failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+}
+
+private enum HomeSubmissionError: LocalizedError {
+    case attachmentFinalizationFailed(any Error)
+    case saveFailed(any Error)
+
+    var errorDescription: String? {
+        switch self {
+        case .attachmentFinalizationFailed:
+            "Couldn't attach the selected images."
+        case .saveFailed:
+            "Couldn't create the chat."
+        }
+    }
+
+    var recoverySuggestion: String? {
+        switch self {
+        case .attachmentFinalizationFailed(let error):
+            "Check that the image files still exist and try again. Details: \(error.localizedDescription)"
+        case .saveFailed(let error):
+            "Your draft attachments were rolled back. Try sending again. Details: \(error.localizedDescription)"
         }
     }
 }
