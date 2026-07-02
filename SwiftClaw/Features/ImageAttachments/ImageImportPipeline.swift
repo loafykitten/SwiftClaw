@@ -61,6 +61,10 @@ enum ImageImportPipeline {
     }
 
     static func images(fromSources sources: [ImageImportSource]) async throws -> [NSImage] {
+        defer {
+            removeTemporaryFiles(from: sources)
+        }
+
         let images = try await decodeImages(fromSources: sources)
         guard !images.isEmpty else {
             throw ImageAttachmentError.noReadableImage
@@ -91,6 +95,10 @@ enum ImageImportPipeline {
     }
 
     private static func bestEffortImages(fromSources sources: [ImageImportSource]) async -> [NSImage] {
+        defer {
+            removeTemporaryFiles(from: sources)
+        }
+
         var images: [NSImage] = []
 
         for source in sources {
@@ -113,7 +121,7 @@ enum ImageImportPipeline {
 
             return NSImage(data: data)
 
-        case .fileURL(let url, let contentTypeIdentifier, let requiresSecurityScopedAccess):
+        case .fileURL(let url, let contentTypeIdentifier, let requiresSecurityScopedAccess, _):
             guard url.isFileURL else {
                 return nil
             }
@@ -133,7 +141,11 @@ enum ImageImportPipeline {
                 return nil
             }
 
-            return NSImage(contentsOf: url)
+            guard let data = try? Data(contentsOf: url) else {
+                return nil
+            }
+
+            return NSImage(data: data)
         }
     }
 
@@ -178,6 +190,12 @@ enum ImageImportPipeline {
         }
 
         return nil
+    }
+
+    private static func removeTemporaryFiles(from sources: [ImageImportSource]) {
+        for source in sources {
+            source.removeTemporaryFiles()
+        }
     }
 
     private static func providerSources(from providers: [NSItemProvider]) async -> [ImageImportSource] {

@@ -31,18 +31,21 @@ final class ImageAttachmentComposerController {
 
     @discardableResult
     func importDroppedItems(_ items: [ImageImportTransfer], isEnabled: Bool) -> Bool {
+        let sources = items.map(\.source)
+
         guard isEnabled else {
+            Self.removeTemporaryFiles(from: sources)
             isDropTargeted = false
             return false
         }
 
         isDropTargeted = false
-        guard !items.isEmpty else {
+        guard !sources.isEmpty else {
             errorMessage = ImageAttachmentError.noReadableImage.localizedDescription
             return false
         }
 
-        startImport(.sources(items.map(\.source)))
+        startImport(.sources(sources))
         return true
     }
 
@@ -119,7 +122,11 @@ final class ImageAttachmentComposerController {
         importGeneration += 1
         let generation = importGeneration
 
-        importTask = Task { @MainActor [weak self] in
+        importTask = Task { @MainActor [weak self, request] in
+            defer {
+                request.removeTemporaryFiles()
+            }
+
             guard let self else {
                 return
             }
@@ -164,10 +171,26 @@ final class ImageAttachmentComposerController {
             try await ImageImportPipeline.images(fromFileURLs: urls)
         }
     }
+
+    private static func removeTemporaryFiles(from sources: [ImageImportSource]) {
+        for source in sources {
+            source.removeTemporaryFiles()
+        }
+    }
 }
 
 private enum ImageAttachmentImportRequest: Sendable {
     case sources([ImageImportSource])
     case fileURLs([URL])
+
+    func removeTemporaryFiles() {
+        guard case .sources(let sources) = self else {
+            return
+        }
+
+        for source in sources {
+            source.removeTemporaryFiles()
+        }
+    }
 }
 #endif
