@@ -26,6 +26,8 @@ struct EmailSettingsView: View {
     private var reviewDefaultIncludeArchived = SettingsStorage.defaultEmailReviewDefaultIncludeArchived
     @AppStorage(SettingsKeys.emailReviewDefaultIncludeTrashed)
     private var reviewDefaultIncludeTrashed = SettingsStorage.defaultEmailReviewDefaultIncludeTrashed
+    @AppStorage(SettingsKeys.emailReviewSlideAction)
+    private var reviewSlideActionRaw = SettingsStorage.defaultEmailReviewSlideAction.rawValue
     @AppStorage(SettingsKeys.emailAutoNavigateToReviewChat)
     private var autoNavigateToReviewChat = SettingsStorage.defaultEmailAutoNavigateToReviewChat
 
@@ -239,6 +241,20 @@ struct EmailSettingsView: View {
                 Text("Defines which mail a review pass scans by default. The Inbox is always in scope. A chat request can override these for a single review.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            .disabled(!isEmailEnabled)
+
+            // MARK: Review cards
+
+            Section {
+                Picker("Slide Action", selection: $reviewSlideActionRaw) {
+                    ForEach(EmailReviewSlideAction.allCases) { action in
+                        Text(action.displayName).tag(action.rawValue)
+                    }
+                }
+                .pickerStyle(.menu)
+            } header: {
+                Text("Review cards")
             }
             .disabled(!isEmailEnabled)
 

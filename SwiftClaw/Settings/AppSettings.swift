@@ -153,6 +153,7 @@ extension SettingsKeys {
     static let emailReviewDefaultIncludeUnread = "settings.email.reviewDefaultInclude.unread"
     static let emailReviewDefaultIncludeArchived = "settings.email.reviewDefaultInclude.archived"
     static let emailReviewDefaultIncludeTrashed = "settings.email.reviewDefaultInclude.trashed"
+    static let emailReviewSlideAction = "settings.email.reviewSlideAction"
     static let emailAutoNavigateToReviewChat = "settings.email.autoNavigateToReviewChat"
     static let emailMailboxSyncStates = "settings.email.mailboxSyncStates"
 }
@@ -295,6 +296,28 @@ enum EmailReviewScheduleMode: String, CaseIterable, Identifiable, Sendable {
         case .interval: "Interval"
         case .daily: "Daily Times"
         }
+    }
+}
+
+enum EmailReviewSlideAction: String, CaseIterable, Identifiable, Sendable {
+    case review
+    case reply
+    case flag
+    case delete
+
+    var id: String { rawValue }
+
+    var token: ReviewActionToken {
+        switch self {
+        case .review: .review
+        case .reply: .reply
+        case .flag: .flag
+        case .delete: .delete
+        }
+    }
+
+    var displayName: String {
+        token.displayName
     }
 }
 
@@ -835,6 +858,7 @@ enum SettingsStorage {
     static let defaultEmailReviewDefaultIncludeUnread = true
     static let defaultEmailReviewDefaultIncludeArchived = false
     static let defaultEmailReviewDefaultIncludeTrashed = false
+    static let defaultEmailReviewSlideAction = EmailReviewSlideAction.review
     static let defaultEmailAutoNavigateToReviewChat = false
 
     static func isEmailEnabled(userDefaults: UserDefaults = .standard) -> Bool {
@@ -1057,6 +1081,12 @@ enum SettingsStorage {
                 userDefaults: userDefaults
             )
         )
+    }
+
+    static func loadEmailReviewSlideAction(userDefaults: UserDefaults = .standard) -> EmailReviewSlideAction {
+        userDefaults.string(forKey: SettingsKeys.emailReviewSlideAction)
+            .flatMap(EmailReviewSlideAction.init(rawValue:))
+            ?? defaultEmailReviewSlideAction
     }
 
     nonisolated static func loadInvestigationMaxSubAgents(userDefaults: UserDefaults = .standard) -> Int {

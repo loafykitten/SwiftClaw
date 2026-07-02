@@ -231,6 +231,46 @@ struct EmailSettingsStorageTests {
         #expect(defaults.maxAgeDays == nil)
     }
 
+    @Test func reviewSlideActionsMatchRequestedList() throws {
+        let actions = EmailReviewSlideAction.allCases.map(\.token)
+
+        #expect(actions == [.review, .reply, .flag, .delete])
+    }
+
+    @Test func reviewSlideActionDefaultsToReview() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        #expect(
+            SettingsStorage.loadEmailReviewSlideAction(userDefaults: fixture.defaults)
+                == .review
+        )
+    }
+
+    @Test func reviewSlideActionLoadsStoredValue() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(EmailReviewSlideAction.delete.rawValue, forKey: SettingsKeys.emailReviewSlideAction)
+
+        #expect(
+            SettingsStorage.loadEmailReviewSlideAction(userDefaults: fixture.defaults)
+                == .delete
+        )
+    }
+
+    @Test func reviewSlideActionIgnoresUnknownStoredValue() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set("archive", forKey: SettingsKeys.emailReviewSlideAction)
+
+        #expect(
+            SettingsStorage.loadEmailReviewSlideAction(userDefaults: fixture.defaults)
+                == SettingsStorage.defaultEmailReviewSlideAction
+        )
+    }
+
     @Test func intervalReviewScheduleFirstRunUsesDefaultDelay() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }

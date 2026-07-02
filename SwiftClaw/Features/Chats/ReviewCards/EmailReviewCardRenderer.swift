@@ -23,9 +23,16 @@ struct EmailReviewCardRenderer: View {
     let onItemView: (UUID) -> Void
     let onRefreshAnalysis: () async -> Void
 
+    @AppStorage(SettingsKeys.emailReviewSlideAction)
+    private var slideActionRaw = SettingsStorage.defaultEmailReviewSlideAction.rawValue
     @State private var pendingItem: ReviewItem?
     @State private var pendingAction: ReviewActionToken?
     @State private var isRefreshingAnalysis = false
+
+    private var slideAction: ReviewActionToken {
+        EmailReviewSlideAction(rawValue: slideActionRaw)?.token
+            ?? SettingsStorage.defaultEmailReviewSlideAction.token
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -65,6 +72,7 @@ struct EmailReviewCardRenderer: View {
                 ForEach(payload.items) { item in
                     EmailReviewCardRow(
                         item: item,
+                        slideAction: slideAction,
                         selectAction: { action in selectAction(action, for: item) },
                         performAction: { action in perform(action: action, for: item) },
                         viewEmail: { onItemView(item.itemID) }
@@ -140,6 +148,7 @@ struct EmailReviewCardRenderer: View {
 
 private struct EmailReviewCardRow: View {
     let item: ReviewItem
+    let slideAction: ReviewActionToken
     let selectAction: (ReviewActionToken) -> Void
     let performAction: (ReviewActionToken) -> Void
     let viewEmail: () -> Void
@@ -226,15 +235,15 @@ private struct EmailReviewCardRow: View {
         HStack {
             Spacer()
             HStack(spacing: 8) {
-                Image(systemName: recommendedAction.swipeSystemImage)
+                Image(systemName: slideAction.swipeSystemImage)
                     .font(.headline)
-                Text(recommendedAction.displayName)
+                Text(slideAction.displayName)
                     .font(.caption)
                     .fontWeight(.semibold)
             }
             .frame(width: actionWidth)
             .frame(maxHeight: .infinity)
-            .background(recommendedAction.swipeColor.opacity(0.25 + 0.65 * revealProgress))
+            .background(slideAction.swipeColor.opacity(0.25 + 0.65 * revealProgress))
             .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .foregroundStyle(.white)
@@ -253,8 +262,8 @@ private struct EmailReviewCardRow: View {
                 let shouldPerform = value.translation.width <= -triggerDistance
                 horizontalOffset = 0
                 guard shouldPerform else { return }
-                performAction(recommendedAction)
-                if recommendedAction == .review {
+                performAction(slideAction)
+                if slideAction == .review {
                     viewEmail()
                 }
             }
