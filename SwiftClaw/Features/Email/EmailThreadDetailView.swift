@@ -25,7 +25,6 @@ struct EmailThreadDetailView: View {
     /// Note composer target. `EmailNoteEditor` saves through
     /// `EmailRepository.addNote(...)` (author `.user`).
     @State private var composingNoteFor: Email?
-    @State private var actionTasks: [EmailServerActionTaskKey: Task<Void, Never>] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -99,10 +98,6 @@ struct EmailThreadDetailView: View {
             ),
             action: permanentlyDelete
         )
-        .onDisappear {
-            actionTasks.values.forEach { $0.cancel() }
-            actionTasks.removeAll()
-        }
     }
 
     private func repository() -> EmailRepository {
@@ -175,14 +170,33 @@ struct EmailThreadDetailView: View {
         email: Email,
         operation: @escaping @MainActor () async -> Void
     ) {
-        let key = EmailServerActionTaskKey(emailID: email.id, kind: kind)
-        guard actionTasks[key] == nil else { return }
+        EmailServerActionCoordinator.shared.run(
+            kind,
+            emailID: email.id,
+            operation: operation
+        )
+    }
+}
 
-        actionTasks[key] = Task { @MainActor in
-            guard !Task.isCancelled else { return }
+@MainActor
+private final class EmailServerActionCoordinator {
+    static let shared = EmailServerActionCoordinator()
+
+    private var tasks: [EmailServerActionTaskKey: Task<Void, Never>] = [:]
+
+    private init() {}
+
+    func run(
+        _ kind: EmailServerActionKind,
+        emailID: UUID,
+        operation: @escaping @MainActor () async -> Void
+    ) {
+        let key = EmailServerActionTaskKey(emailID: emailID, kind: kind)
+        guard tasks[key] == nil else { return }
+
+        tasks[key] = Task { @MainActor [weak self] in
             await operation()
-            guard !Task.isCancelled else { return }
-            actionTasks[key] = nil
+            self?.tasks[key] = nil
         }
     }
 }

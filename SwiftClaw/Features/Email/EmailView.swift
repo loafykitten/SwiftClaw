@@ -1,3 +1,4 @@
+import Observation
 import SwiftData
 import SwiftUI
 
@@ -11,7 +12,7 @@ struct EmailView: View {
     @State private var selectedThreadID: UUID?
     @State private var selectedMailbox: EmailMailbox = .inbox
     @State private var composingReplyFor: Email?
-    @State private var refreshTask: Task<Void, Never>?
+    @State private var manualSyncCoordinator = EmailManualSyncCoordinator.shared
     @State private var reviewTask: Task<Void, Never>?
     var pendingEmailID: UUID?
 
@@ -99,7 +100,7 @@ struct EmailView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button("Sync Now", systemImage: "arrow.clockwise", action: startRefreshNow)
                 .help("Sync mail now")
-                .disabled(MailSyncMonitor.shared.isSyncing || refreshTask != nil)
+                .disabled(MailSyncMonitor.shared.isSyncing || manualSyncCoordinator.isRefreshing)
 
                 Button(action: startReviewNow) {
                     Label {
@@ -150,8 +151,8 @@ struct EmailView: View {
             selectedThreadID = thread.id
         }
         .onDisappear {
-            refreshTask?.cancel()
-            refreshTask = nil
+            // Manual sync is intentionally coordinator-owned so it can finish
+            // after the Email tab leaves the navigation stack.
             reviewTask?.cancel()
             reviewTask = nil
         }
@@ -225,16 +226,6 @@ struct EmailView: View {
         )
     }
 
-    private func refreshNow() async {
-        guard !ProcessInfo.processInfo.isRunningInPreview else { return }
-        guard !Task.isCancelled else { return }
-        // Route through `EmailWorkflowManager` (not a one-off
-        // `MailSyncWorker`) so a manual sync also kicks an immediate review
-        // pass — otherwise the user has to wait up to
-        // `emailReviewIntervalSeconds` for triage after a sync.
-        await EmailWorkflowManager.shared.refreshNow()
-    }
-
     private func reviewNow() async {
         guard !ProcessInfo.processInfo.isRunningInPreview else { return }
         guard !Task.isCancelled else { return }
@@ -242,12 +233,7 @@ struct EmailView: View {
     }
 
     private func startRefreshNow() {
-        guard refreshTask == nil else { return }
-        refreshTask = Task { @MainActor in
-            await refreshNow()
-            guard !Task.isCancelled else { return }
-            refreshTask = nil
-        }
+        manualSyncCoordinator.startRefreshNow()
     }
 
     private func startReviewNow() {
@@ -257,6 +243,41 @@ struct EmailView: View {
             guard !Task.isCancelled else { return }
             reviewTask = nil
         }
+    }
+}
+
+@MainActor
+@Observable
+private final class EmailManualSyncCoordinator {
+    static let shared = EmailManualSyncCoordinator()
+
+    private(set) var isRefreshing = false
+
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+
+    private init() {}
+
+    func startRefreshNow() {
+        guard refreshTask == nil else { return }
+
+        isRefreshing = true
+        refreshTask = Task { @MainActor [weak self] in
+            guard !ProcessInfo.processInfo.isRunningInPreview else {
+                self?.finishRefresh()
+                return
+            }
+            // Route through `EmailWorkflowManager` (not a one-off
+            // `MailSyncWorker`) so a manual sync also kicks an immediate review
+            // pass — otherwise the user has to wait up to
+            // `emailReviewIntervalSeconds` for triage after a sync.
+            await EmailWorkflowManager.shared.refreshNow()
+            self?.finishRefresh()
+        }
+    }
+
+    private func finishRefresh() {
+        refreshTask = nil
+        isRefreshing = false
     }
 }
 
