@@ -48,6 +48,11 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var router = AppRouter.shared
     @State private var isNotificationBridgeStarted = false
+    @State private var backStack: [NavigationItem] = []
+    @State private var forwardStack: [NavigationItem] = []
+    /// Set right before a programmatic assignment so the `onChange` observer
+    /// knows not to treat that assignment as a new user navigation.
+    @State private var isUpdatingSelectionWithoutRecording = false
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
 
     /// Lazily-constructed email review dispatcher + its backing mail client.
@@ -83,8 +88,20 @@ struct ContentView: View {
                 Text("Select an item")
             }
         }
+        .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button("Back", systemImage: "chevron.left", action: goBack)
+                    .disabled(!canGoBack)
+                    .keyboardShortcut("[", modifiers: .command)
+                Button("Forward", systemImage: "chevron.right", action: goForward)
+                    .disabled(!canGoForward)
+                    .keyboardShortcut("]", modifiers: .command)
+            }
+        }
         .onChange(of: isEmailEnabled) { _, enabled in
+            pruneHiddenNavigationHistory()
             if !enabled, router.selectedNavigationItem == .email {
+                isUpdatingSelectionWithoutRecording = true
                 router.selectedNavigationItem = .home
             }
             if enabled {
@@ -98,7 +115,8 @@ struct ContentView: View {
             stopNotificationBridge()
         }
         .environment(router)
-        .onChange(of: router.selectedNavigationItem) { _, item in
+        .onChange(of: router.selectedNavigationItem) { oldValue, item in
+            recordNavigation(from: oldValue)
             if item == .chats { router.clearUnreadChatIfOpened() }
         }
         .onChange(of: router.selectedChatID) { _, _ in
@@ -129,6 +147,54 @@ struct ContentView: View {
                 item.destination
             }
         }
+    }
+
+    private var canGoBack: Bool {
+        backStack.contains { visibleNavigationItems.contains($0) }
+    }
+
+    private var canGoForward: Bool {
+        forwardStack.contains { visibleNavigationItems.contains($0) }
+    }
+
+    private func recordNavigation(from oldValue: NavigationItem?) {
+        guard !isUpdatingSelectionWithoutRecording else {
+            isUpdatingSelectionWithoutRecording = false
+            return
+        }
+        if let oldValue, visibleNavigationItems.contains(oldValue) {
+            backStack.append(oldValue)
+            forwardStack.removeAll()
+        }
+    }
+
+    private func goBack() {
+        while let previous = backStack.popLast() {
+            guard visibleNavigationItems.contains(previous) else { continue }
+            if let current = router.selectedNavigationItem, visibleNavigationItems.contains(current) {
+                forwardStack.append(current)
+            }
+            isUpdatingSelectionWithoutRecording = true
+            router.selectedNavigationItem = previous
+            return
+        }
+    }
+
+    private func goForward() {
+        while let next = forwardStack.popLast() {
+            guard visibleNavigationItems.contains(next) else { continue }
+            if let current = router.selectedNavigationItem, visibleNavigationItems.contains(current) {
+                backStack.append(current)
+            }
+            isUpdatingSelectionWithoutRecording = true
+            router.selectedNavigationItem = next
+            return
+        }
+    }
+
+    private func pruneHiddenNavigationHistory() {
+        backStack.removeAll { !visibleNavigationItems.contains($0) }
+        forwardStack.removeAll { !visibleNavigationItems.contains($0) }
     }
 
     /// Returns a cached `EmailReviewActionDispatcher`. Allocating on every
