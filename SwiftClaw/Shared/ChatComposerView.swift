@@ -1,17 +1,4 @@
 import SwiftUI
-#if os(macOS)
-import AppKit
-import UniformTypeIdentifiers
-#endif
-
-struct ChatComposerSubmission {
-    let text: String
-    let model: String
-    let isInvestigationEnabled: Bool
-    let reasoningEffort: ModelReasoningEffort?
-    let imageAttachments: [ImageAttachmentRecord]
-    let supportsImages: Bool
-}
 
 struct ChatComposerView: View {
     private let controlRowHeight: CGFloat = 28
@@ -22,15 +9,9 @@ struct ChatComposerView: View {
     var submissionError: String?
     var allowsImageAttachments = true
 
-    /// Per-chat reasoning effort source. When non-nil, the composer reads and
-    /// writes the chat's stored value via `onReasoningEffortChange` instead of
-    /// the global `@AppStorage` default (which is only used by the Home
-    /// composer for brand-new chats).
     var chatReasoningEffort: ModelReasoningEffort? = nil
     var onReasoningEffortChange: ((ModelReasoningEffort) -> Void)? = nil
 
-    /// Called with the message text, model selection, per-message toggles, and
-    /// any finalized-ready draft image attachments.
     var onSubmit: (ChatComposerSubmission) -> Bool
 
     @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
@@ -44,14 +25,27 @@ struct ChatComposerView: View {
     private var investigationToolEnabled = SettingsStorage.defaultInvestigationEnabled
 
     @State private var messageText = ""
-    @State private var imageAttachments: [ImageAttachmentRecord] = []
-    @State private var imageAttachmentError: String?
-    @State private var isImageDropTargeted = false
-    @State private var previewSelection: ImageAttachmentPreviewSelection?
+    @State private var attachmentController = ImageAttachmentComposerController()
     @State private var availableModels = SettingsStorage.loadAvailableModels()
     @State private var isInvestigationEnabled = false
     @State private var isInvestigationAvailable = InvestigateTool().isConfigured
     @FocusState private var isMessageFieldFocused: Bool
+
+    init(
+        isBusy: Bool = false,
+        submissionError: String? = nil,
+        allowsImageAttachments: Bool = true,
+        chatReasoningEffort: ModelReasoningEffort? = nil,
+        onReasoningEffortChange: ((ModelReasoningEffort) -> Void)? = nil,
+        onSubmit: @escaping (ChatComposerSubmission) -> Bool
+    ) {
+        self.isBusy = isBusy
+        self.submissionError = submissionError
+        self.allowsImageAttachments = allowsImageAttachments
+        self.chatReasoningEffort = chatReasoningEffort
+        self.onReasoningEffortChange = onReasoningEffortChange
+        self.onSubmit = onSubmit
+    }
 
     private var activeModelSelection: String {
         selectedModel
@@ -63,6 +57,15 @@ struct ChatComposerView: View {
         }
 
         return ModelReasoningEffort(rawValue: selectedReasoningEffortRaw) ?? .off
+    }
+
+    private var modelResolution: ComposerModelResolution {
+        ComposerModelResolution(
+            activeSelection: activeModelSelection,
+            availableModels: availableModels,
+            swiftModel: swiftModel,
+            clawModel: clawModel
+        )
     }
 
     private var selectedModelCapabilities: Set<ModelCapability> {
@@ -89,31 +92,10 @@ struct ChatComposerView: View {
         selectedModelSupportsReasoning ? selectedReasoningEffort : nil
     }
 
-    /// Whether the composer's current selection is the Claw model. True when the
-    /// user picked the "Claw Model" quick-pick preset, or — as a fallback — when
-    /// the resolved selection happens to be the exact model configured as the
-    /// Claw in Settings > Model Behaviors.
     private var isClawModelSelected: Bool {
-        if activeModelSelection == ComposerModelSelection.clawModel {
-            return true
-        }
-
-        guard let effectiveModel, !clawModel.isEmpty, isClawModelAvailable else {
-            return false
-        }
-
-        return effectiveModel == clawModel
+        modelResolution.isClawModelSelected
     }
 
-    /// The reasoning effort applied as a default whenever the model selection
-    /// changes (see `applyReasoningDefaultForModelChange`).
-    ///
-    /// - Claw model → the Claw's configured effort (Settings > Model
-    ///   Behaviors), so the composer mirrors the companion preset.
-    /// - Any other reasoning-capable model → Low.
-    /// - Non-reasoning models → `nil`: the reasoning menu is hidden for those
-    ///   models, and any previously chosen effort is left untouched until the
-    ///   next reasoning-capable selection.
     private var reasoningDefaultForModelChange: ModelReasoningEffort? {
         SettingsStorage.composerDefaultReasoningEffort(
             isClawModel: isClawModelSelected,
@@ -122,39 +104,11 @@ struct ChatComposerView: View {
     }
 
     private var selectedModelTitle: String {
-        guard !availableModels.isEmpty else {
-            return "(N/A)"
-        }
-
-        if activeModelSelection == ComposerModelSelection.swiftModel, isSwiftModelAvailable {
-            return "Swift Model"
-        }
-
-        if activeModelSelection == ComposerModelSelection.clawModel, isClawModelAvailable {
-            return "Claw Model"
-        }
-
-        return effectiveModel ?? availableModels[0]
+        modelResolution.selectedTitle
     }
 
     private var effectiveModel: String? {
-        if activeModelSelection == ComposerModelSelection.swiftModel {
-            return isSwiftModelAvailable ? swiftModel : nil
-        }
-
-        if activeModelSelection == ComposerModelSelection.clawModel {
-            return isClawModelAvailable ? clawModel : nil
-        }
-
-        if !activeModelSelection.isEmpty, availableModels.contains(activeModelSelection) {
-            return activeModelSelection
-        }
-
-        if !swiftModel.isEmpty, availableModels.contains(swiftModel) {
-            return swiftModel
-        }
-
-        return availableModels.first
+        modelResolution.effectiveModel
     }
 
     private var modelSelectionDisabled: Bool {
@@ -173,13 +127,6 @@ struct ChatComposerView: View {
         !composerControlsDisabled && !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var isSwiftModelAvailable: Bool {
-        !swiftModel.isEmpty && availableModels.contains(swiftModel)
-    }
-
-    private var isClawModelAvailable: Bool {
-        !clawModel.isEmpty && availableModels.contains(clawModel)
-    }
 
     private var canEnableInvestigation: Bool {
         isInvestigationToolEnabled
@@ -194,248 +141,53 @@ struct ChatComposerView: View {
     }
 
     private var quickModelOptions: [ComposerModelOption] {
-        var options: [ComposerModelOption] = []
-
-        if isSwiftModelAvailable {
-            options.append(ComposerModelOption(title: "Swift Model", selection: ComposerModelSelection.swiftModel))
-        }
-
-        if isClawModelAvailable {
-            options.append(ComposerModelOption(title: "Claw Model", selection: ComposerModelSelection.clawModel))
-        }
-
-        return options
+        modelResolution.quickOptions
     }
 
-    private var isQuickModelSelection: Bool {
-        activeModelSelection == ComposerModelSelection.swiftModel || activeModelSelection == ComposerModelSelection.clawModel
-    }
-
-    private var modelSelectionMenu: some View {
-        Menu {
-            ForEach(quickModelOptions) { option in
-                Button {
-                    selectedModel = option.selection
-                } label: {
-                    if activeModelSelection == option.selection {
-                        Label(option.title, systemImage: "checkmark")
-                    } else {
-                        Text(option.title)
-                    }
-                }
-            }
-
-            if !quickModelOptions.isEmpty {
-                Divider()
-            }
-
-            ForEach(availableModels, id: \.self) { model in
-                Button {
-                    selectedModel = model
-                } label: {
-                    if !isQuickModelSelection, model == effectiveModel {
-                        Label(model, systemImage: "checkmark")
-                    } else {
-                        Text(model)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(selectedModelTitle)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-            }
-            .foregroundStyle(.secondary)
-            .frame(width: modelControlWidth, height: controlRowHeight, alignment: .center)
-            .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .menuIndicator(.hidden)
-        .disabled(modelSelectionDisabled)
-        .frame(height: controlRowHeight, alignment: .center)
-        .pointingHandCursor(isDisabled: modelSelectionDisabled)
-    }
-
-    private var reasoningMenu: some View {
-        Menu {
-            ForEach(ModelReasoningEffort.selectableCases) { effort in
-                Button {
-                    setReasoningEffort(effort)
-                } label: {
-                    if selectedReasoningEffort == effort {
-                        Label(effort.displayName, systemImage: "checkmark")
-                    } else {
-                        Text(effort.displayName)
-                    }
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "brain")
-                    .font(.caption)
-                Text(selectedReasoningEffort.displayName)
-                    .font(.caption)
-                    .lineLimit(1)
-                Image(systemName: "chevron.down")
-                    .font(.caption2)
-            }
-            .foregroundStyle(.secondary)
-            .frame(width: reasoningControlWidth, height: controlRowHeight, alignment: .center)
-            .contentShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .menuIndicator(.hidden)
-        .disabled(composerControlsDisabled || !selectedModelSupportsReasoning)
-        .frame(height: controlRowHeight, alignment: .center)
-        .pointingHandCursor(isDisabled: composerControlsDisabled || !selectedModelSupportsReasoning)
-        .help("Reasoning effort")
-        .accessibilityLabel("Reasoning effort \(selectedReasoningEffort.displayName)")
+    private var previewSelectionBinding: Binding<ImageAttachmentPreviewSelection?> {
+        Binding(
+            get: { attachmentController.previewSelection },
+            set: { attachmentController.previewSelection = $0 }
+        )
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if allowsImageAttachments, !imageAttachments.isEmpty {
-                ImageAttachmentThumbnailStrip(
-                    attachments: imageAttachments,
-                    onSelect: {
-                        previewSelection = ImageAttachmentPreviewSelection(
-                            attachments: imageAttachments,
-                            initialIndex: $0
-                        )
-                    },
-                    onRemove: removeImageAttachment
-                )
-                .padding(.bottom, 8)
-            }
-
-            HStack(alignment: .top, spacing: 8) {
-                TextField("Message SwiftClaw...", text: $messageText, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.body)
-                    .lineLimit(1...3)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .disabled(composerControlsDisabled)
-                    .focused($isMessageFieldFocused)
-                    .onKeyPress { keyPress in
-                        handleKeyPress(keyPress)
-                    }
-            }
-            .onDrop(
-                of: ImageDropImporter.supportedContentTypes,
-                isTargeted: $isImageDropTargeted,
-                perform: handleImageDrop
-            )
+            attachmentStrip
+            messageInput
 
             Divider()
                 .padding(.top, 4)
 
-            HStack(alignment: .center) {
-                HStack(spacing: 12) {
-                    ComposerIconButton(
-                        systemName: "paperclip",
-                        size: controlRowHeight,
-                        isDisabled: !canImportImageAttachments,
-                        helpText: selectedModelSupportsVision ? "Attach images" : "Selected model does not support vision",
-                        accessibilityLabel: "Attach images"
-                    ) {
-                        chooseImageAttachments()
-                    }
+            controlRow
+                .frame(height: controlRowHeight, alignment: .center)
+                .padding(.vertical, 8)
 
-                    if isInvestigationToolEnabled {
-                        ComposerIconButton(
-                            systemName: "magnifyingglass",
-                            size: controlRowHeight,
-                            isSelected: isInvestigationEnabled,
-                            isDisabled: composerControlsDisabled || !canEnableInvestigation,
-                            helpText: canEnableInvestigation
-                                ? "Investigate this message in depth"
-                                : "Investigation needs Brave Search plus a selected model with Tools, Reasoning, and reasoning turned on",
-                            accessibilityLabel: "Investigation mode"
-                        ) {
-                            setInvestigation(!isInvestigationEnabled)
-                        }
-                    }
-                }
-
-                Spacer()
-
-                HStack(spacing: 8) {
-                    if selectedModelSupportsReasoning {
-                        reasoningMenu
-                    }
-
-                    modelSelectionMenu
-
-                    Button {
-                        submitMessage()
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
-                            .foregroundStyle(.tint)
-                            .composerControlHoverEffect(
-                                width: controlRowHeight,
-                                height: controlRowHeight,
-                                isDisabled: !canSubmitMessage,
-                                hoverScale: 1.08
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!canSubmitMessage)
-                    .accessibilityLabel("Send message")
-                }
-            }
-            .frame(height: controlRowHeight, alignment: .center)
-            .padding(.vertical, 8)
-
-            if let submissionError {
-                Text(submissionError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, 10)
-            }
-
-            if let imageAttachmentError {
-                Text(imageAttachmentError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, 10)
-            }
+            errorMessages
         }
         .padding(.horizontal, 16)
         .padding(.top, 16)
         .glassEffect(in: .rect(cornerRadius: 16.0))
         .contentShape(Rectangle())
-        .onDrop(
-            of: ImageDropImporter.supportedContentTypes,
-            isTargeted: $isImageDropTargeted,
-            perform: handleImageDrop
-        )
+        .dropDestination(for: ImageImportTransfer.self) { items, _ in
+            attachmentController.importDroppedItems(items, isEnabled: canImportImageAttachments)
+        } isTargeted: { isTargeted in
+            attachmentController.setDropTargeted(isTargeted, isEnabled: canImportImageAttachments)
+        }
         .overlay {
-            if isImageDropTargeted, canImportImageAttachments {
-                imageDropTargetOverlay
+            if attachmentController.isDropTargeted, canImportImageAttachments {
+                ComposerDropTargetOverlay()
             }
         }
-        .background {
-            ImagePasteKeyMonitor(
-                isEnabled: canImportImageAttachments && isMessageFieldFocused,
-                onPasteImage: pasteImagesFromClipboard
-            )
-            .frame(width: 0, height: 0)
-        }
-        .imageAttachmentPreviewOverlay(selection: $previewSelection)
+        .imageAttachmentPreviewOverlay(selection: previewSelectionBinding)
         .onAppear(perform: refreshModels)
         .onDisappear {
-            // Reset the transient one-shot toggle if the composer goes away.
             setInvestigation(false)
-            clearDraftImageAttachments()
+            attachmentController.clearDraftAttachments()
         }
         .onChange(of: allowsImageAttachments) { _, allowsImageAttachments in
             if !allowsImageAttachments {
-                clearDraftImageAttachments()
+                attachmentController.clearDraftAttachments()
             }
         }
         .onChange(of: effectiveModel) { _, _ in
@@ -462,25 +214,114 @@ struct ChatComposerView: View {
         }
     }
 
-    private var imageDropTargetOverlay: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 16)
-                .fill(Color.accentColor.opacity(0.08))
-
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(
-                    Color.accentColor.opacity(0.72),
-                    style: StrokeStyle(lineWidth: 2, dash: [7, 5])
-                )
-
-            Image(systemName: "photo.badge.plus")
-                .font(.system(size: 30, weight: .semibold))
-                .foregroundStyle(.tint)
-                .padding(14)
-                .background(.regularMaterial, in: Circle())
-                .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 4)
+    @ViewBuilder
+    private var attachmentStrip: some View {
+        if allowsImageAttachments, !attachmentController.attachments.isEmpty {
+            ImageAttachmentThumbnailStrip(
+                attachments: attachmentController.attachments,
+                onSelect: attachmentController.selectPreview,
+                onRemove: attachmentController.removeAttachment
+            )
+            .padding(.bottom, 8)
         }
-        .allowsHitTesting(false)
+    }
+
+    private var messageInput: some View {
+        HStack(alignment: .top, spacing: 8) {
+            TextField("Message SwiftClaw...", text: $messageText, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.body)
+                .lineLimit(1...3)
+                .fixedSize(horizontal: false, vertical: true)
+                .disabled(composerControlsDisabled)
+                .focused($isMessageFieldFocused)
+                .onKeyPress { keyPress in
+                    handleKeyPress(keyPress)
+                }
+        }
+    }
+
+    private var controlRow: some View {
+        HStack(alignment: .center) {
+            HStack(spacing: 12) {
+                ComposerIconButton(
+                    systemName: "paperclip",
+                    size: controlRowHeight,
+                    isDisabled: !canImportImageAttachments,
+                    helpText: selectedModelSupportsVision ? "Attach images" : "Selected model does not support vision",
+                    accessibilityLabel: "Attach images"
+                ) {
+                    attachmentController.chooseImageAttachments(isEnabled: canImportImageAttachments)
+                }
+
+                if isInvestigationToolEnabled {
+                    ComposerIconButton(
+                        systemName: "magnifyingglass",
+                        size: controlRowHeight,
+                        isSelected: isInvestigationEnabled,
+                        isDisabled: composerControlsDisabled || !canEnableInvestigation,
+                        helpText: canEnableInvestigation
+                            ? "Investigate this message in depth"
+                            : "Investigation needs Brave Search plus a selected model with Tools, Reasoning, and reasoning turned on",
+                        accessibilityLabel: "Investigation mode"
+                    ) {
+                        setInvestigation(!isInvestigationEnabled)
+                    }
+                }
+            }
+
+            Spacer()
+
+            HStack(spacing: 8) {
+                if selectedModelSupportsReasoning {
+                    ComposerReasoningMenu(
+                        selectedReasoningEffort: selectedReasoningEffort,
+                        width: reasoningControlWidth,
+                        height: controlRowHeight,
+                        isDisabled: composerControlsDisabled || !selectedModelSupportsReasoning,
+                        onSelect: setReasoningEffort
+                    )
+                }
+
+                ComposerModelSelectionMenu(
+                    selectedModelTitle: selectedModelTitle,
+                    activeModelSelection: activeModelSelection,
+                    effectiveModel: effectiveModel,
+                    availableModels: availableModels,
+                    quickModelOptions: quickModelOptions,
+                    width: modelControlWidth,
+                    height: controlRowHeight,
+                    isDisabled: modelSelectionDisabled
+                ) { selection in
+                    selectedModel = selection
+                }
+
+                ComposerSendButton(
+                    size: controlRowHeight,
+                    isDisabled: !canSubmitMessage,
+                    action: submitMessage
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var errorMessages: some View {
+        if let submissionError {
+            Text(submissionError)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 10)
+        }
+
+        if let imageAttachmentError = attachmentController.errorMessage {
+            Text(imageAttachmentError)
+                .font(.caption)
+                .foregroundStyle(.red)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.bottom, 10)
+        }
     }
 
     private func refreshModels() {
@@ -496,11 +337,10 @@ struct ChatComposerView: View {
         }
 
         if !allowsImageAttachments || !selectedModelSupportsVision {
-            clearDraftImageAttachments()
+            attachmentController.clearDraftAttachments()
         }
     }
 
-    /// Turns investigation mode on or off for the selected model.
     private func setInvestigation(_ enabled: Bool) {
         guard enabled != isInvestigationEnabled else {
             return
@@ -525,13 +365,6 @@ struct ChatComposerView: View {
         }
     }
 
-    /// Re-applies the model-change reasoning default. SwiftUI only fires this
-    /// on actual model-selection changes (never on appear/refresh), so it never
-    /// clobbers a chat's stored effort on entry, and re-selecting the same
-    /// model is a no-op. A manual effort edit sticks until the model is changed
-    /// again, at which point a fresh default is computed here. Per-chat mode
-    /// persists via `onReasoningEffortChange`; the Home composer writes the
-    /// global home default.
     private func applyReasoningDefaultForModelChange() {
         guard let effort = reasoningDefaultForModelChange else {
             return
@@ -552,95 +385,12 @@ struct ChatComposerView: View {
         }
 
         if keyPress.key == "v", keyPress.modifiers.contains(.command) {
-            return pasteImagesFromClipboard() ? .handled : .ignored
+            return attachmentController.pasteImagesFromClipboard(isEnabled: canImportImageAttachments)
+                ? .handled
+                : .ignored
         }
 
         return .ignored
-    }
-
-    private func pasteImagesFromClipboard() -> Bool {
-        guard canImportImageAttachments else {
-            return false
-        }
-
-        let images = ClipboardImageImporter.imagesForPaste()
-        guard !images.isEmpty else {
-            return false
-        }
-
-        importImageAttachments(images)
-
-        return true
-    }
-
-    private func handleImageDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard canImportImageAttachments else {
-            return false
-        }
-
-        Task {
-            let images = await ImageDropImporter.images(from: providers)
-            guard !images.isEmpty else {
-                imageAttachmentError = ImageAttachmentError.noReadableImage.localizedDescription
-                return
-            }
-
-            importImageAttachments(images)
-        }
-
-        return true
-    }
-
-    private func chooseImageAttachments() {
-        guard canImportImageAttachments else {
-            return
-        }
-
-        #if os(macOS)
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
-        panel.canChooseFiles = true
-        panel.prompt = "Attach"
-
-        guard panel.runModal() == .OK else {
-            return
-        }
-
-        let images = panel.urls.compactMap(NSImage.init(contentsOf:))
-        guard !images.isEmpty, images.count == panel.urls.count else {
-            imageAttachmentError = ImageAttachmentError.noReadableImage.localizedDescription
-            return
-        }
-
-        importImageAttachments(images)
-        #endif
-    }
-
-    private func removeImageAttachment(_ attachment: ImageAttachmentRecord) {
-        imageAttachments.removeAll { $0.id == attachment.id }
-        ImageAttachmentStore.shared.deleteDraftAttachments([attachment])
-    }
-
-    private func clearDraftImageAttachments() {
-        ImageAttachmentStore.shared.deleteDraftAttachments(imageAttachments)
-        imageAttachments = []
-        imageAttachmentError = nil
-        previewSelection = nil
-    }
-
-    private func importImageAttachments(_ images: [NSImage]) {
-        do {
-            let newAttachments = try ImageAttachmentStore.shared.importImages(
-                images,
-                existingAttachments: imageAttachments
-            )
-            imageAttachments.append(contentsOf: newAttachments)
-            imageAttachmentError = nil
-        } catch {
-            imageAttachmentError = error.localizedDescription
-        }
     }
 
     private func submitMessage() {
@@ -649,7 +399,9 @@ struct ChatComposerView: View {
             return
         }
 
-        let attachments = allowsImageAttachments && selectedModelSupportsVision ? imageAttachments : []
+        let attachments = allowsImageAttachments && selectedModelSupportsVision
+            ? attachmentController.attachments
+            : []
         let submission = ChatComposerSubmission(
             text: input,
             model: model,
@@ -661,184 +413,8 @@ struct ChatComposerView: View {
 
         if onSubmit(submission) {
             messageText = ""
-            imageAttachments = []
-            imageAttachmentError = nil
-            // Investigation is a one-shot toggle: it always resets after the
-            // message is submitted.
+            attachmentController.releaseSubmittedAttachments()
             setInvestigation(false)
         }
     }
-}
-
-private struct ComposerControlHoverEffect: ViewModifier {
-    let width: CGFloat
-    let height: CGFloat
-    var isSelected = false
-    var isDisabled = false
-    var cornerRadius: CGFloat = 6
-    var hoverScale: CGFloat = 1.03
-
-    @State private var isHovering = false
-
-    private var isHoverActive: Bool {
-        isHovering && !isDisabled
-    }
-
-    private var isActive: Bool {
-        !isDisabled && (isHovering || isSelected)
-    }
-
-    private var fillOpacity: Double {
-        if isSelected {
-            return isHoverActive ? 0.26 : 0.18
-        }
-
-        return isHoverActive ? 0.12 : 0
-    }
-
-    private var strokeOpacity: Double {
-        isActive ? 0.22 : 0
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .frame(width: width, height: height, alignment: .center)
-            .background {
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .fill(Color.accentColor.opacity(fillOpacity))
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius)
-                    .strokeBorder(Color.accentColor.opacity(strokeOpacity), lineWidth: 1)
-            }
-            .shadow(
-                color: Color.accentColor.opacity(isHoverActive ? 0.14 : 0),
-                radius: isHoverActive ? 6 : 0,
-                x: 0,
-                y: isHoverActive ? 2 : 0
-            )
-            .scaleEffect(isHoverActive ? hoverScale : 1)
-            .contentShape(RoundedRectangle(cornerRadius: cornerRadius))
-            .onHover { isHovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: isHovering)
-            .animation(.easeOut(duration: 0.12), value: isSelected)
-    }
-}
-
-private extension View {
-    func composerControlHoverEffect(
-        width: CGFloat,
-        height: CGFloat,
-        isSelected: Bool = false,
-        isDisabled: Bool = false,
-        hoverScale: CGFloat = 1.03
-    ) -> some View {
-        modifier(
-            ComposerControlHoverEffect(
-                width: width,
-                height: height,
-                isSelected: isSelected,
-                isDisabled: isDisabled,
-                hoverScale: hoverScale
-            )
-        )
-    }
-
-    func pointingHandCursor(isDisabled: Bool = false) -> some View {
-        modifier(PointingHandCursor(isDisabled: isDisabled))
-    }
-}
-
-private struct PointingHandCursor: ViewModifier {
-    let isDisabled: Bool
-
-    @State private var didPushCursor = false
-
-    func body(content: Content) -> some View {
-        content
-            .onHover { isInside in
-                updateCursor(isInside: isInside)
-            }
-            .onChange(of: isDisabled) { _, isDisabled in
-                if isDisabled {
-                    popCursorIfNeeded()
-                }
-            }
-            .onDisappear {
-                popCursorIfNeeded()
-            }
-    }
-
-    private func updateCursor(isInside: Bool) {
-        #if os(macOS)
-        if isInside, !isDisabled {
-            guard !didPushCursor else {
-                return
-            }
-
-            NSCursor.pointingHand.push()
-            didPushCursor = true
-        } else {
-            popCursorIfNeeded()
-        }
-        #endif
-    }
-
-    private func popCursorIfNeeded() {
-        #if os(macOS)
-        guard didPushCursor else {
-            return
-        }
-
-        NSCursor.pop()
-        didPushCursor = false
-        #endif
-    }
-}
-
-private struct ComposerIconButton: View {
-    let systemName: String
-    let size: CGFloat
-    var isSelected = false
-    var isDisabled = false
-    let helpText: String
-    let accessibilityLabel: String
-    let action: () -> Void
-
-    private var foregroundStyle: AnyShapeStyle {
-        isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary)
-    }
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .foregroundStyle(foregroundStyle)
-                .composerControlHoverEffect(
-                    width: size,
-                    height: size,
-                    isSelected: isSelected,
-                    isDisabled: isDisabled,
-                    hoverScale: 1.08
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(isDisabled)
-        .help(helpText)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-    }
-}
-
-/// Sentinel selections for the composer's quick-pick model presets, persisted
-/// in place of a concrete model name.
-enum ComposerModelSelection {
-    static let swiftModel = "settings.home.modelPreset.swift"
-    static let clawModel = "settings.home.modelPreset.claw"
-}
-
-private struct ComposerModelOption: Identifiable {
-    let title: String
-    let selection: String
-
-    var id: String { selection }
 }
