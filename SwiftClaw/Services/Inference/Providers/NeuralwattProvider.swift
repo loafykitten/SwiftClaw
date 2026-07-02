@@ -6,8 +6,8 @@ struct NeuralwattProvider: OpenAICompatibleProvider {
 
     var id: InferenceProviderID { .neuralwatt }
 
-    func endpoint() throws -> (host: String, basePath: String) {
-        ("api.neuralwatt.com", "/v1")
+    func endpoint() throws -> OpenAICompatibleEndpoint {
+        OpenAICompatibleEndpoint(host: "api.neuralwatt.com", basePath: "/v1")
     }
 
     static func fromSettings() -> NeuralwattProvider {

@@ -6,8 +6,8 @@ struct OpenRouterProvider: OpenAICompatibleProvider {
 
     var id: InferenceProviderID { .openRouter }
 
-    func endpoint() throws -> (host: String, basePath: String) {
-        ("openrouter.ai", "/api/v1")
+    func endpoint() throws -> OpenAICompatibleEndpoint {
+        OpenAICompatibleEndpoint(host: "openrouter.ai", basePath: "/api/v1")
     }
 
     static func fromSettings() -> OpenRouterProvider {

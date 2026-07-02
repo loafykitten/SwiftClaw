@@ -37,6 +37,8 @@ enum InferenceMessage: Sendable, Equatable {
     case user(String, imageAttachments: [ImageAttachmentRecord] = [])
     case assistant(String)
 
+    private static let logger = AppLog.make("InferenceMessage")
+
     var chatParam: ChatQuery.ChatCompletionMessageParam {
         chatParam(includingImages: true)
     }
@@ -46,8 +48,16 @@ enum InferenceMessage: Sendable, Equatable {
         case .system(let content):
             return ChatQuery.ChatCompletionMessageParam.system(.init(content: .textContent(content)))
         case .user(let content, let imageAttachments):
-            let imageData = includingImages ? imageAttachments.compactMap { attachment in
-                try? Data(contentsOf: attachment.fileURL)
+            let imageData: [Data] = includingImages ? imageAttachments.compactMap { attachment in
+                do {
+                    return try Data(contentsOf: attachment.fileURL)
+                } catch {
+                    Self.logger.warning("""
+                        Skipping unreadable image attachment \(attachment.filePath): \
+                        \(String(describing: error))
+                        """)
+                    return nil
+                }
             } : []
 
             guard !imageData.isEmpty else {
@@ -184,12 +194,12 @@ struct InferenceService: Sendable {
 
             let result: ChatResult
             do {
-                result = try await client.chats(query: query)
+                result = try await client.complete(query: query)
             } catch {
                 Self.logger.error("""
                     Completion via \(resolved.provider.id.rawValue, privacy: .public) \
                     model \(resolved.modelID, privacy: .public) failed: \
-                    \(String(describing: error), privacy: .public)
+                    \(String(describing: error))
                     """)
                 throw error
             }
@@ -266,7 +276,7 @@ struct InferenceService: Sendable {
         } catch {
             logger.error("""
                 Tool \(toolName, privacy: .public) failed: \
-                \(String(describing: error), privacy: .public)
+                \(String(describing: error))
                 """)
             return "Error: \(error.localizedDescription)"
         }
@@ -302,7 +312,7 @@ struct InferenceService: Sendable {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    for try await chunk in client.chatsStream(query: query) {
+                    for try await chunk in client.streamCompletion(query: query) {
                         if let delta = chunk.choices.first?.delta.content, !delta.isEmpty {
                             continuation.yield(delta)
                         }
@@ -313,7 +323,7 @@ struct InferenceService: Sendable {
                     Self.logger.error("""
                         Streaming via \(resolved.provider.id.rawValue, privacy: .public) \
                         model \(resolved.modelID, privacy: .public) failed: \
-                        \(String(describing: error), privacy: .public)
+                        \(String(describing: error))
                         """)
                     continuation.finish(throwing: error)
                 }

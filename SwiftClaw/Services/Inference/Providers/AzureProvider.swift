@@ -8,13 +8,16 @@ struct AzureProvider: OpenAICompatibleProvider {
 
     var id: InferenceProviderID { .azure }
 
-    func endpoint() throws -> (host: String, basePath: String) {
+    func endpoint() throws -> OpenAICompatibleEndpoint {
         let trimmedName = resourceName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else {
             throw InferenceError.providerNotConfigured(id, reason: "missing resource name")
         }
 
-        return ("\(trimmedName).services.ai.azure.com", "/openai/v1")
+        return OpenAICompatibleEndpoint(
+            host: "\(trimmedName).services.ai.azure.com",
+            basePath: "/openai/v1"
+        )
     }
 
     static func fromSettings() -> AzureProvider {
