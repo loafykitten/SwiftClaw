@@ -2,10 +2,10 @@ import SwiftUI
 
 struct CalendarView: View {
     var body: some View {
-        FeaturePlaceholderView(
+        FeaturePlaceholderView.comingSoon(
             systemImage: "calendar",
             title: "Calendar",
-            message: "No events today"
+            message: "Calendar integrations are planned for a future SwiftClaw update."
         )
     }
 }

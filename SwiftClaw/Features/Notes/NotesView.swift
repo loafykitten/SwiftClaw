@@ -2,10 +2,10 @@ import SwiftUI
 
 struct NotesView: View {
     var body: some View {
-        FeaturePlaceholderView(
+        FeaturePlaceholderView.comingSoon(
             systemImage: "note.text",
             title: "Notes",
-            message: "No notes yet"
+            message: "Notes capture is planned for a future SwiftClaw update."
         )
     }
 }

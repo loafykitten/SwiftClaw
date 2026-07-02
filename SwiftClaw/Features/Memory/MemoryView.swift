@@ -2,10 +2,10 @@ import SwiftUI
 
 struct MemoryView: View {
     var body: some View {
-        FeaturePlaceholderView(
+        FeaturePlaceholderView.comingSoon(
             systemImage: "brain",
             title: "Memory",
-            message: "No memories stored"
+            message: "Long-term assistant memory is planned for a future SwiftClaw update."
         )
     }
 }

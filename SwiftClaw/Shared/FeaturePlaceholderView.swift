@@ -6,6 +6,7 @@ struct FeaturePlaceholderView: View {
     let systemImage: String
     let title: String
     let message: String
+    var badge: String? = nil
 
     var body: some View {
         VStack(spacing: 20) {
@@ -20,9 +21,32 @@ struct FeaturePlaceholderView: View {
             Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.tertiary)
+
+            if let badge {
+                Text(badge)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.secondary.opacity(0.12), in: Capsule())
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    static func comingSoon(
+        systemImage: String,
+        title: String,
+        message: String = "This feature is planned for a future SwiftClaw update."
+    ) -> FeaturePlaceholderView {
+        FeaturePlaceholderView(
+            systemImage: systemImage,
+            title: title,
+            message: message,
+            badge: "Coming Soon"
+        )
     }
 }
 
