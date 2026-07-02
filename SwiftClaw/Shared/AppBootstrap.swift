@@ -21,7 +21,6 @@ final class AppBootstrap {
         }
 
         Keychain.migrateAPIKeysFromUserDefaults()
-        AccentColor.migrateStoredLightnessIfNeeded()
         EmailAccountStore.shared.migrateLegacyIfNeeded()
 
         EmailWorkflowManager.shared.start(modelContainer: modelContainer)

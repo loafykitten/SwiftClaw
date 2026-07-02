@@ -17,16 +17,16 @@ enum AppTheme: String, CaseIterable, Identifiable {
     }
 }
 
-enum AccentColor {
-    static let defaultHue = 0.52
+/// HSL color model backing the chat blockquote accent (Settings > Appearance >
+/// Quote Accent). The app's primary accent follows the macOS system accent, so
+/// this only powers the quote styling.
+enum QuoteAccent {
     static let defaultSaturation = 0.72
-    static let defaultBrightness = 0.82
-    static let defaultLightness = defaultBrightness * (2 - defaultSaturation) / 2
     static let defaultQuoteHue = 0.08
     static let defaultQuoteLightness = 0.62
     static let lightnessRange: ClosedRange<Double> = 0.18...0.95
 
-    static func color(hue: Double, lightness: Double = defaultLightness) -> Color {
+    static func color(hue: Double, lightness: Double) -> Color {
         let rgb = hslToRGB(
             hue: hue,
             saturation: defaultSaturation,
@@ -34,23 +34,6 @@ enum AccentColor {
         )
 
         return Color(red: rgb.red, green: rgb.green, blue: rgb.blue)
-    }
-
-    static func migrateStoredLightnessIfNeeded(userDefaults: UserDefaults = .standard) {
-        guard userDefaults.object(forKey: SettingsKeys.accentLightness) == nil else {
-            return
-        }
-
-        guard userDefaults.object(forKey: SettingsKeys.accentBrightness) != nil else {
-            return
-        }
-
-        let brightness = userDefaults.double(forKey: SettingsKeys.accentBrightness)
-        let lightness = brightness * (2 - defaultSaturation) / 2
-        userDefaults.set(
-            Swift.min(Swift.max(lightness, lightnessRange.lowerBound), lightnessRange.upperBound),
-            forKey: SettingsKeys.accentLightness
-        )
     }
 
     private static func hslToRGB(hue: Double, saturation: Double, lightness: Double) -> (red: Double, green: Double, blue: Double) {
@@ -93,9 +76,6 @@ enum SettingsKeys { }
 
 extension SettingsKeys {
     static let theme = "settings.appearance.theme"
-    static let accentHue = "settings.appearance.accentHue"
-    static let accentLightness = "settings.appearance.accentLightness"
-    static let accentBrightness = "settings.appearance.accentBrightness"
     static let quoteAccentHue = "settings.appearance.quoteAccentHue"
     static let quoteAccentLightness = "settings.appearance.quoteAccentLightness"
 }

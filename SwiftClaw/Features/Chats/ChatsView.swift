@@ -650,17 +650,11 @@ private struct ChatMessageRow: View {
     @Environment(AppRouter.self) private var router
     @Environment(\.modelContext) private var modelContext
 
-    @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
-    @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
-    @AppStorage(SettingsKeys.quoteAccentHue) private var quoteAccentHue = AccentColor.defaultQuoteHue
-    @AppStorage(SettingsKeys.quoteAccentLightness) private var quoteAccentLightness = AccentColor.defaultQuoteLightness
-
-    private var accent: Color {
-        AccentColor.color(hue: accentHue, lightness: accentLightness)
-    }
+    @AppStorage(SettingsKeys.quoteAccentHue) private var quoteAccentHue = QuoteAccent.defaultQuoteHue
+    @AppStorage(SettingsKeys.quoteAccentLightness) private var quoteAccentLightness = QuoteAccent.defaultQuoteLightness
 
     private var quoteAccent: Color {
-        AccentColor.color(hue: quoteAccentHue, lightness: quoteAccentLightness)
+        QuoteAccent.color(hue: quoteAccentHue, lightness: quoteAccentLightness)
     }
 
     private var isUser: Bool {
@@ -711,9 +705,9 @@ private struct ChatMessageRow: View {
                     ChatMarkdownView(
                         content: message.content,
                         defaultForeground: isUser ? .white : .primary,
-                        codeAccent: isUser ? .white : accent,
+                        codeAccent: isUser ? .white : Color.accentColor,
                         quoteAccent: quoteAccent,
-                        linkAccent: isUser ? .white : accent,
+                        linkAccent: isUser ? .white : Color.accentColor,
                         maximumContentWidth: ChatBubbleLayout.contentMaxWidth
                     )
                     .textSelection(.enabled)
@@ -721,7 +715,7 @@ private struct ChatMessageRow: View {
                     .padding(.vertical, ChatBubbleLayout.verticalPadding)
                     .background {
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(isUser ? accent : Color.secondary.opacity(0.12))
+                            .fill(isUser ? Color.accentColor : Color.secondary.opacity(0.12))
                     }
                 }
 

@@ -1,9 +1,8 @@
 import SwiftUI
 
-struct AccentSidebarList<Item: Identifiable & Hashable>: View {
+struct SidebarList<Item: Identifiable & Hashable>: View {
     let items: [Item]
     @Binding var selection: Item?
-    let accent: Color
     var topContentInset: CGFloat = 0
     let title: (Item) -> String
     let systemImage: (Item) -> String
@@ -18,7 +17,7 @@ struct AccentSidebarList<Item: Identifiable & Hashable>: View {
                         Spacer(minLength: 0)
                         if showsBadge(item) {
                             Circle()
-                                .fill(accent)
+                                .fill(Color.accentColor)
                                 .frame(width: 7, height: 7)
                                 .accessibilityLabel("New item")
                         }
@@ -27,7 +26,6 @@ struct AccentSidebarList<Item: Identifiable & Hashable>: View {
                     Image(systemName: systemImage(item))
                 }
                 .tag(item)
-                .listItemTint(accent)
                 .accessibilityAddTraits(selection == item ? .isSelected : [])
                 .accessibilityElement(children: .combine)
             }

@@ -11,13 +11,9 @@ import os
 
 @main
 struct SwiftClawApp: App {
-    @AppStorage(SettingsKeys.theme) private var theme = AppTheme.system.rawValue
-    @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
-    @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
+    static let settingsWindowID = "settings"
 
-    private var accent: Color {
-        AccentColor.color(hue: accentHue, lightness: accentLightness)
-    }
+    @AppStorage(SettingsKeys.theme) private var theme = AppTheme.system.rawValue
 
     private let modelContainerResult = SwiftClawModelContainerFactory.make()
 
@@ -28,22 +24,26 @@ struct SwiftClawApp: App {
                 ContentView()
                     .modelContainer(modelContainer)
                     .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
-                    .tint(accent)
                     .task {
                         await AppBootstrap.shared.run(modelContainer: modelContainer)
                     }
             case .failure(let error):
                 AppStartupFailureView(error: error)
                     .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
-                    .tint(accent)
+            }
+        }
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                OpenSettingsButton(windowID: Self.settingsWindowID)
             }
         }
 
-        Settings {
+        Window("SwiftClaw Settings", id: Self.settingsWindowID) {
             SettingsView()
                 .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
-                .tint(accent)
         }
+        .windowResizability(.contentMinSize)
+        .windowToolbarStyle(.unified)
     }
 
     private enum SwiftClawModelContainerFactory {
@@ -113,5 +113,21 @@ struct SwiftClawApp: App {
                 Text(error.recoverySuggestion ?? error.localizedDescription)
             }
         }
+    }
+}
+
+/// Replaces the standard "Settings…" app-menu item so ⌘, opens our dedicated
+/// `Window` scene instead of the SwiftUI `Settings` scene. The plain window
+/// hosts a unified `NSToolbar`, which (unlike the Settings scene) leading-aligns
+/// the back/forward controls and section title like Xcode's settings.
+private struct OpenSettingsButton: View {
+    let windowID: String
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings…") {
+            openWindow(id: windowID)
+        }
+        .keyboardShortcut(",", modifiers: .command)
     }
 }

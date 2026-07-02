@@ -24,31 +24,64 @@ private enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
 
 struct SettingsView: View {
     @State private var selectedSection: SettingsSection? = .appearance
-    @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
-    @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
-
-    private var accent: Color {
-        AccentColor.color(hue: accentHue, lightness: accentLightness)
-    }
+    @State private var backStack: [SettingsSection] = []
+    @State private var forwardStack: [SettingsSection] = []
+    /// Set right before a back/forward assignment so the `onChange` observer
+    /// knows not to treat that assignment as a new user navigation.
+    @State private var isNavigatingViaHistory = false
 
     var body: some View {
         NavigationSplitView {
             List(selection: $selectedSection) {
                 ForEach(SettingsSection.allCases) { section in
                     Label(section.rawValue, systemImage: section.systemImage)
+                        .listItemTint(.monochrome)
                         .tag(section)
                 }
             }
             .listStyle(.sidebar)
-            .navigationTitle("Settings")
             .frame(minWidth: 180)
+            .toolbar(removing: .sidebarToggle)
         } detail: {
             detailContent
-                .navigationTitle(selectedSection?.rawValue ?? "Settings")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationTitle(selectedSection?.rawValue ?? "Settings")
         }
-        .tint(accent)
         .frame(minWidth: 640, minHeight: 560)
+        .toolbar {
+            ToolbarItemGroup(placement: .navigation) {
+                Button("Back", systemImage: "chevron.left", action: goBack)
+                    .disabled(backStack.isEmpty)
+                    .keyboardShortcut("[", modifiers: .command)
+                Button("Forward", systemImage: "chevron.right", action: goForward)
+                    .disabled(forwardStack.isEmpty)
+                    .keyboardShortcut("]", modifiers: .command)
+            }
+        }
+        .onChange(of: selectedSection) { oldValue, _ in
+            guard !isNavigatingViaHistory else {
+                isNavigatingViaHistory = false
+                return
+            }
+            if let oldValue {
+                backStack.append(oldValue)
+                forwardStack.removeAll()
+            }
+        }
+    }
+
+    private func goBack() {
+        guard let previous = backStack.popLast(), let current = selectedSection else { return }
+        forwardStack.append(current)
+        isNavigatingViaHistory = true
+        selectedSection = previous
+    }
+
+    private func goForward() {
+        guard let next = forwardStack.popLast(), let current = selectedSection else { return }
+        backStack.append(current)
+        isNavigatingViaHistory = true
+        selectedSection = next
     }
 
     @ViewBuilder

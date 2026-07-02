@@ -2,10 +2,8 @@ import SwiftUI
 
 struct AppearanceSettingsView: View {
     @AppStorage(SettingsKeys.theme) private var theme = AppTheme.system.rawValue
-    @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
-    @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
-    @AppStorage(SettingsKeys.quoteAccentHue) private var quoteAccentHue = AccentColor.defaultQuoteHue
-    @AppStorage(SettingsKeys.quoteAccentLightness) private var quoteAccentLightness = AccentColor.defaultQuoteLightness
+    @AppStorage(SettingsKeys.quoteAccentHue) private var quoteAccentHue = QuoteAccent.defaultQuoteHue
+    @AppStorage(SettingsKeys.quoteAccentLightness) private var quoteAccentLightness = QuoteAccent.defaultQuoteLightness
 
     var body: some View {
         Form {
@@ -13,16 +11,12 @@ struct AppearanceSettingsView: View {
                 ThemePicker(selection: $theme)
             }
 
-            Section("Accent Color") {
-                AccentColorEditor(hue: $accentHue, lightness: $accentLightness)
-            }
-
             Section("Quote Accent") {
-                AccentColorEditor(
+                QuoteAccentEditor(
                     hue: $quoteAccentHue,
                     lightness: $quoteAccentLightness,
-                    defaultHue: AccentColor.defaultQuoteHue,
-                    defaultLightness: AccentColor.defaultQuoteLightness,
+                    defaultHue: QuoteAccent.defaultQuoteHue,
+                    defaultLightness: QuoteAccent.defaultQuoteLightness,
                     accessibilityName: "Quote accent"
                 )
             }
@@ -169,13 +163,13 @@ private struct MiniDesktop: View {
 
 // MARK: - Accent color
 
-private struct AccentColorEditor: View {
+private struct QuoteAccentEditor: View {
     @Binding var hue: Double
     @Binding var lightness: Double
 
-    var defaultHue = AccentColor.defaultHue
-    var defaultLightness = AccentColor.defaultLightness
-    var accessibilityName = "Accent color"
+    let defaultHue: Double
+    let defaultLightness: Double
+    var accessibilityName = "Quote accent"
 
     private var isDefault: Bool {
         abs(hue - defaultHue) < 0.001
@@ -184,21 +178,21 @@ private struct AccentColorEditor: View {
 
     private var hueGradient: Gradient {
         Gradient(colors: stride(from: 0.0, through: 1.0, by: 0.1).map {
-            AccentColor.color(hue: $0, lightness: lightness)
+            QuoteAccent.color(hue: $0, lightness: lightness)
         })
     }
 
     private var lightnessGradient: Gradient {
         Gradient(colors: [
-            AccentColor.color(hue: hue, lightness: AccentColor.lightnessRange.lowerBound),
-            AccentColor.color(hue: hue, lightness: AccentColor.lightnessRange.upperBound),
+            QuoteAccent.color(hue: hue, lightness: QuoteAccent.lightnessRange.lowerBound),
+            QuoteAccent.color(hue: hue, lightness: QuoteAccent.lightnessRange.upperBound),
         ])
     }
 
     var body: some View {
         HStack(spacing: 14) {
             Circle()
-                .fill(AccentColor.color(hue: hue, lightness: lightness))
+                .fill(QuoteAccent.color(hue: hue, lightness: lightness))
                 .frame(width: 36, height: 36)
                 .overlay {
                     Circle()
@@ -210,15 +204,15 @@ private struct AccentColorEditor: View {
                     value: $hue,
                     range: 0...1,
                     gradient: hueGradient,
-                    knobColor: AccentColor.color(hue: hue, lightness: lightness),
+                    knobColor: QuoteAccent.color(hue: hue, lightness: lightness),
                     label: "Hue",
                     accessibilityName: accessibilityName
                 )
                 GradientSlider(
                     value: $lightness,
-                    range: AccentColor.lightnessRange,
+                    range: QuoteAccent.lightnessRange,
                     gradient: lightnessGradient,
-                    knobColor: AccentColor.color(hue: hue, lightness: lightness),
+                    knobColor: QuoteAccent.color(hue: hue, lightness: lightness),
                     label: "Lightness",
                     accessibilityName: accessibilityName
                 )

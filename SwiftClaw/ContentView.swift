@@ -48,8 +48,6 @@ struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @State private var router = AppRouter.shared
     @State private var isNotificationBridgeStarted = false
-    @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
-    @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
 
     /// Lazily-constructed email review dispatcher + its backing mail client.
@@ -57,10 +55,6 @@ struct ContentView: View {
     /// `destination(for: .chats)` allocated a fresh `SwiftMailClient` + dispatcher
     /// on every body evaluation).
     @State private var emailDispatcherState: EmailDispatcherCache? = EmailDispatcherCache()
-
-    private var accent: Color {
-        AccentColor.color(hue: accentHue, lightness: accentLightness)
-    }
 
     private var visibleNavigationItems: [NavigationItem] {
         NavigationItem.allCases.filter { item in
@@ -70,13 +64,12 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            AccentSidebarList(
+            SidebarList(
                 items: visibleNavigationItems,
                 selection: Binding(
                     get: { router.selectedNavigationItem },
                     set: { router.selectedNavigationItem = $0 }
                 ),
-                accent: accent,
                 title: { $0.rawValue },
                 systemImage: { $0.systemImage },
                 showsBadge: { $0 == .chats && router.unreadChatID != nil }
@@ -90,7 +83,6 @@ struct ContentView: View {
                 Text("Select an item")
             }
         }
-        .tint(accent)
         .onChange(of: isEmailEnabled) { _, enabled in
             if !enabled, router.selectedNavigationItem == .email {
                 router.selectedNavigationItem = .home
