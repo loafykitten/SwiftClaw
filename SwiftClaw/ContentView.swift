@@ -46,10 +46,8 @@ enum NavigationItem: String, CaseIterable, Identifiable {
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @State private var selectedNavigationItem: NavigationItem? = .home
-    @State private var selectedChatID: UUID?
-    @State private var unreadChatID: UUID?
-    @State private var pendingEmailViewID: UUID?
+    @State private var router = AppRouter.shared
+    @State private var isNotificationBridgeStarted = false
     @AppStorage(SettingsKeys.accentHue) private var accentHue = AccentColor.defaultHue
     @AppStorage(SettingsKeys.accentLightness) private var accentLightness = AccentColor.defaultLightness
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
@@ -74,15 +72,18 @@ struct ContentView: View {
         NavigationSplitView {
             AccentSidebarList(
                 items: visibleNavigationItems,
-                selection: $selectedNavigationItem,
+                selection: Binding(
+                    get: { router.selectedNavigationItem },
+                    set: { router.selectedNavigationItem = $0 }
+                ),
                 accent: accent,
                 title: { $0.rawValue },
                 systemImage: { $0.systemImage },
-                showsBadge: { $0 == .chats && unreadChatID != nil }
+                showsBadge: { $0 == .chats && router.unreadChatID != nil }
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
-            if let item = selectedNavigationItem, visibleNavigationItems.contains(item) {
+            if let item = router.selectedNavigationItem, visibleNavigationItems.contains(item) {
                 destination(for: item)
                     .navigationTitle(item.rawValue)
             } else {
@@ -91,8 +92,8 @@ struct ContentView: View {
         }
         .tint(accent)
         .onChange(of: isEmailEnabled) { _, enabled in
-            if !enabled, selectedNavigationItem == .email {
-                selectedNavigationItem = .home
+            if !enabled, router.selectedNavigationItem == .email {
+                router.selectedNavigationItem = .home
             }
             if enabled {
                 EmailWorkflowManager.shared.start(modelContainer: modelContext.container)
@@ -100,36 +101,17 @@ struct ContentView: View {
                 EmailWorkflowManager.shared.stop()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .emailReviewChatCreated)) { note in
-            if let chatID = note.userInfo?["chatID"] as? UUID {
-                unreadChatID = chatID
-                if note.userInfo?["autoNavigate"] as? Bool == true {
-                    selectedChatID = chatID
-                    selectedNavigationItem = .chats
-                    clearUnreadChatIfOpened()
-                }
-            }
+        .onAppear(perform: startNotificationBridge)
+        .onDisappear {
+            stopNotificationBridge()
         }
-        .onChange(of: selectedNavigationItem) { _, item in
-            if item == .chats { clearUnreadChatIfOpened() }
+        .environment(router)
+        .onChange(of: router.selectedNavigationItem) { _, item in
+            if item == .chats { router.clearUnreadChatIfOpened() }
         }
-        .onChange(of: selectedChatID) { _, _ in
-            clearUnreadChatIfOpened()
+        .onChange(of: router.selectedChatID) { _, _ in
+            router.clearUnreadChatIfOpened()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .emailReviewViewEmail)) { note in
-            if let emailID = note.userInfo?["emailID"] as? UUID {
-                pendingEmailViewID = emailID
-                selectedNavigationItem = .email
-            }
-        }
-    }
-
-    private func clearUnreadChatIfOpened() {
-        guard selectedNavigationItem == .chats,
-              let unreadChatID,
-              selectedChatID == unreadChatID else { return }
-        self.unreadChatID = nil
-        NotificationCenter.default.post(name: .emailReviewChatOpened, object: nil)
     }
 
     @MainActor @ViewBuilder
@@ -137,18 +119,20 @@ struct ContentView: View {
         switch item {
         case .home:
             HomeView { chatID in
-                selectedChatID = chatID
-                selectedNavigationItem = .chats
+                router.selectChat(chatID)
             }
         case .chats:
             ChatsView(
-                selectedChatID: $selectedChatID,
+                selectedChatID: Binding(
+                    get: { router.selectedChatID },
+                    set: { router.selectedChatID = $0 }
+                ),
                 emailDispatcher: emailDispatcher(for: modelContext.container)
             )
         default:
             if item == .email {
-                EmailView(pendingEmailID: pendingEmailViewID)
-                    .onAppear { pendingEmailViewID = nil }
+                EmailView(pendingEmailID: router.pendingEmailViewID)
+                    .onAppear { router.clearPendingEmailView() }
             } else {
                 item.destination
             }
@@ -168,6 +152,18 @@ struct ContentView: View {
         )
         emailDispatcherState?.dispatcher = dispatcher
         return dispatcher
+    }
+
+    private func startNotificationBridge() {
+        guard !isNotificationBridgeStarted else { return }
+        isNotificationBridgeStarted = true
+        router.startNotificationBridge()
+    }
+
+    private func stopNotificationBridge() {
+        guard isNotificationBridgeStarted else { return }
+        isNotificationBridgeStarted = false
+        router.stopNotificationBridge()
     }
 }
 

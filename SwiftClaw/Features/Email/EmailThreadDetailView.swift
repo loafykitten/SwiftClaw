@@ -25,6 +25,7 @@ struct EmailThreadDetailView: View {
     /// Note composer target. `EmailNoteEditor` saves through
     /// `EmailRepository.addNote(...)` (author `.user`).
     @State private var composingNoteFor: Email?
+    @State private var actionTasks: [EmailServerActionTaskKey: Task<Void, Never>] = [:]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -67,69 +68,40 @@ struct EmailThreadDetailView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .confirmationDialog(
-            "Delete this email?",
-            isPresented: Binding(
-                get: { pendingDestructive != nil },
-                set: { if !$0 { pendingDestructive = nil } }
+        .confirmingAction(
+            item: $pendingDestructive,
+            copy: ConfirmationDialogCopy(
+                title: "Delete this email?",
+                actionTitle: "Delete",
+                message: "The email will be moved to the Trash mailbox on the server."
             ),
-            presenting: pendingDestructive
-        ) { email in
-            Button("Delete", role: .destructive) {
-                delete(email)
-                pendingDestructive = nil
-            }
-            Button("Cancel", role: .cancel) {
-                pendingDestructive = nil
-            }
-        } message: { _ in
-            // "Delete" moves to the Trash mailbox (recoverable) rather than
-            // expunging from the server. The irreversible expunge path is
-            // reserved for the Trash mailbox's "Delete Permanently" action.
-            Text("The email will be moved to the Trash mailbox on the server.")
-        }
-        .confirmationDialog(
-            "Archive this email?",
-            isPresented: Binding(
-                get: { pendingArchive != nil },
-                set: { if !$0 { pendingArchive = nil } }
+            action: delete
+        )
+        .confirmingAction(
+            item: $pendingArchive,
+            copy: ConfirmationDialogCopy(
+                title: "Archive this email?",
+                actionTitle: "Archive",
+                message: "The email will be moved to the Archive mailbox on the server.",
+                role: nil
             ),
-            presenting: pendingArchive
-        ) { email in
-            Button("Archive") {
-                archive(email)
-                pendingArchive = nil
-            }
-            Button("Cancel", role: .cancel) {
-                pendingArchive = nil
-            }
-        } message: { _ in
-            Text("The email will be moved to the Archive mailbox on the server.")
-        }
+            action: archive
+        )
         .sheet(item: $composingNoteFor) { email in
             EmailNoteEditor(email: email)
         }
-        .confirmationDialog(
-            "Delete this email permanently?",
-            isPresented: Binding(
-                get: { pendingPermanentDelete != nil },
-                set: { if !$0 { pendingPermanentDelete = nil } }
+        .confirmingAction(
+            item: $pendingPermanentDelete,
+            copy: ConfirmationDialogCopy(
+                title: "Delete this email permanently?",
+                actionTitle: "Delete Permanently",
+                message: "The email will be permanently deleted from the server and from SwiftClaw. This action cannot be undone."
             ),
-            presenting: pendingPermanentDelete
-        ) { email in
-            Button("Delete Permanently", role: .destructive) {
-                permanentlyDelete(email)
-                pendingPermanentDelete = nil
-            }
-            Button("Cancel", role: .cancel) {
-                pendingPermanentDelete = nil
-            }
-        } message: { _ in
-            // Make the irrecoverable nature explicit — both the local row +
-            // its notes (and any attachment bytes on disk) are removed, and
-            // the server copy is expunged from the Trash folder. There's no
-            // undo.
-            Text("The email will be permanently deleted from the server and from SwiftClaw. This action cannot be undone.")
+            action: permanentlyDelete
+        )
+        .onDisappear {
+            actionTasks.values.forEach { $0.cancel() }
+            actionTasks.removeAll()
         }
     }
 
@@ -143,7 +115,7 @@ struct EmailThreadDetailView: View {
     /// scrolled to.
     private func markAsReadIfNeeded(_ email: Email) {
         guard !email.isRead else { return }
-        Task {
+        runServerAction(.markRead, email: email) {
             await EmailServerAction.setFlags(
                 email: email,
                 repository: repository(),
@@ -155,7 +127,7 @@ struct EmailThreadDetailView: View {
     }
 
     private func archive(_ email: Email) {
-        Task {
+        runServerAction(.archive, email: email) {
             await EmailServerAction.archive(
                 email: email,
                 repository: repository(),
@@ -165,7 +137,7 @@ struct EmailThreadDetailView: View {
     }
 
     private func delete(_ email: Email) {
-        Task {
+        runServerAction(.delete, email: email) {
             await EmailServerAction.delete(
                 email: email,
                 repository: repository(),
@@ -179,7 +151,7 @@ struct EmailThreadDetailView: View {
     /// expunge + local hard-delete + error surface stay coordinated in one
     /// place rather than diverging in the view.
     private func permanentlyDelete(_ email: Email) {
-        Task {
+        runServerAction(.permanentDelete, email: email) {
             await EmailServerAction.deletePermanently(
                 email: email,
                 repository: repository(),
@@ -189,7 +161,7 @@ struct EmailThreadDetailView: View {
     }
 
     private func toggleFlag(_ email: Email) {
-        Task {
+        runServerAction(.toggleFlag, email: email) {
             await EmailServerAction.toggleFlag(
                 email: email,
                 repository: repository(),
@@ -197,6 +169,35 @@ struct EmailThreadDetailView: View {
             )
         }
     }
+
+    private func runServerAction(
+        _ kind: EmailServerActionKind,
+        email: Email,
+        operation: @escaping @MainActor () async -> Void
+    ) {
+        let key = EmailServerActionTaskKey(emailID: email.id, kind: kind)
+        guard actionTasks[key] == nil else { return }
+
+        actionTasks[key] = Task { @MainActor in
+            guard !Task.isCancelled else { return }
+            await operation()
+            guard !Task.isCancelled else { return }
+            actionTasks[key] = nil
+        }
+    }
+}
+
+private struct EmailServerActionTaskKey: Hashable {
+    let emailID: UUID
+    let kind: EmailServerActionKind
+}
+
+private enum EmailServerActionKind: Hashable {
+    case markRead
+    case archive
+    case delete
+    case permanentDelete
+    case toggleFlag
 }
 
 struct EmailItemSeparator: View {

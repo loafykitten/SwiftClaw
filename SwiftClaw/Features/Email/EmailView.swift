@@ -11,6 +11,8 @@ struct EmailView: View {
     @State private var selectedThreadID: UUID?
     @State private var selectedMailbox: EmailMailbox = .inbox
     @State private var composingReplyFor: Email?
+    @State private var refreshTask: Task<Void, Never>?
+    @State private var reviewTask: Task<Void, Never>?
     var pendingEmailID: UUID?
 
     private var isConfigured: Bool {
@@ -95,26 +97,24 @@ struct EmailView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    Task { await refreshNow() }
-                } label: {
-                    Label("Sync Now", systemImage: "arrow.clockwise")
-                }
+                Button("Sync Now", systemImage: "arrow.clockwise", action: startRefreshNow)
                 .help("Sync mail now")
-                .disabled(MailSyncMonitor.shared.isSyncing)
+                .disabled(MailSyncMonitor.shared.isSyncing || refreshTask != nil)
 
-                Button {
-                    Task { await reviewNow() }
-                } label: {
-                    if MailSyncMonitor.shared.isReviewing {
-                        ProgressView()
-                            .controlSize(.small)
-                    } else {
-                        Label("Review Now", systemImage: "sparkles")
+                Button(action: startReviewNow) {
+                    Label {
+                        Text("Review Now")
+                    } icon: {
+                        if MailSyncMonitor.shared.isReviewing {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "sparkles")
+                        }
                     }
                 }
                 .help("Run an inbox review pass now")
-                .disabled(MailSyncMonitor.shared.isReviewing)
+                .disabled(MailSyncMonitor.shared.isReviewing || reviewTask != nil)
 
                 // Open Settings → Email directly rather than via a sheet
                 // containing only a "Open Settings" link (which forces a
@@ -148,6 +148,12 @@ struct EmailView: View {
             guard let emailID,
                   let thread = emails.first(where: { $0.id == emailID })?.thread else { return }
             selectedThreadID = thread.id
+        }
+        .onDisappear {
+            refreshTask?.cancel()
+            refreshTask = nil
+            reviewTask?.cancel()
+            reviewTask = nil
         }
     }
 
@@ -221,6 +227,7 @@ struct EmailView: View {
 
     private func refreshNow() async {
         guard !ProcessInfo.processInfo.isRunningInPreview else { return }
+        guard !Task.isCancelled else { return }
         // Route through `EmailWorkflowManager` (not a one-off
         // `MailSyncWorker`) so a manual sync also kicks an immediate review
         // pass — otherwise the user has to wait up to
@@ -230,7 +237,26 @@ struct EmailView: View {
 
     private func reviewNow() async {
         guard !ProcessInfo.processInfo.isRunningInPreview else { return }
+        guard !Task.isCancelled else { return }
         await EmailWorkflowManager.shared.reviewNow()
+    }
+
+    private func startRefreshNow() {
+        guard refreshTask == nil else { return }
+        refreshTask = Task { @MainActor in
+            await refreshNow()
+            guard !Task.isCancelled else { return }
+            refreshTask = nil
+        }
+    }
+
+    private func startReviewNow() {
+        guard reviewTask == nil else { return }
+        reviewTask = Task { @MainActor in
+            await reviewNow()
+            guard !Task.isCancelled else { return }
+            reviewTask = nil
+        }
     }
 }
 
@@ -277,22 +303,17 @@ private struct EmailMailboxSidebar: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
 
-            ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(visibleMailboxes) { mailbox in
-                        EmailMailboxRow(
-                            mailbox: mailbox,
-                            isSelected: selectedMailbox == mailbox,
-                            select: { selectedMailbox = mailbox }
-                        )
-                    }
+            List(selection: $selectedMailbox) {
+                ForEach(visibleMailboxes) { mailbox in
+                    Label(mailbox.rawValue, systemImage: mailbox.systemImage)
+                        .tag(mailbox)
+                        .listItemTint(.accentColor)
                 }
-                .padding(.horizontal, 8)
             }
+            .listStyle(.sidebar)
 
             footer
         }
-        .background(.background.secondary)
     }
 
     @ViewBuilder
@@ -329,33 +350,6 @@ private struct EmailMailboxSidebar: View {
     }
 }
 
-private struct EmailMailboxRow: View {
-    let mailbox: EmailMailbox
-    let isSelected: Bool
-    let select: () -> Void
-
-    var body: some View {
-        Button(action: select) {
-            HStack(spacing: 8) {
-                Image(systemName: mailbox.systemImage)
-                    .frame(width: 18)
-                Text(mailbox.rawValue)
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-            .background {
-                if isSelected {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color.accentColor.opacity(0.18))
-                }
-            }
-        }
-        .buttonStyle(.plain)
-    }
-}
-
 private struct EmailThreadListView: View {
     let threads: [EmailThread]
     @Binding var selectedThreadID: UUID?
@@ -379,33 +373,26 @@ private struct EmailThreadListView: View {
                     message: "This mailbox is empty."
                 )
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(threads.enumerated()), id: \.element.id) { index, thread in
-                            EmailThreadRow(
-                                thread: thread,
-                                isSelected: thread.id == selectedThreadID,
-                                select: { selectedThreadID = thread.id }
-                            )
-                            if index < threads.count - 1 {
-                                EmailItemSeparator()
-                                    .padding(.vertical, 2)
-                            }
-                        }
+                List(selection: $selectedThreadID) {
+                    ForEach(threads) { thread in
+                        EmailThreadRow(
+                            thread: thread,
+                            isSelected: thread.id == selectedThreadID
+                        )
+                        .tag(thread.id)
+                        .sidebarRowState(isEmphasized: thread.unreadCount > 0)
+                        .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 12)
                 }
+                .listStyle(.sidebar)
             }
         }
-        .background(.background.secondary)
     }
 }
 
 private struct EmailThreadRow: View {
     let thread: EmailThread
     let isSelected: Bool
-    let select: () -> Void
 
     @State private var showingNotes = false
 
@@ -467,17 +454,7 @@ private struct EmailThreadRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .contentShape(Rectangle())
-        .background {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(rowBackground(unread: unread))
-        }
-        .onTapGesture(perform: select)
-    }
-
-    private func rowBackground(unread: Int) -> Color {
-        if isSelected { return Color.accentColor.opacity(0.18) }
-        if unread > 0 { return Color.accentColor.opacity(0.07) }
-        return .clear
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

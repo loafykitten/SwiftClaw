@@ -2,10 +2,10 @@ import SwiftUI
 
 struct DeepResearchView: View {
     var body: some View {
-        FeaturePlaceholderView(
+        FeaturePlaceholderView.comingSoon(
             systemImage: "magnifyingglass",
             title: "Deep Research",
-            message: "Start a deep research query"
+            message: "Deep research workflows are planned for a future SwiftClaw update."
         )
     }
 }

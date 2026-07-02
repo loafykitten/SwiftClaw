@@ -92,17 +92,21 @@ enum ChatTitleService {
                 reasoningEffort: reasoning,
                 systemPromptMode: .standalone
             )
+        } catch is CancellationError {
+            return
         } catch {
             logger.error("Title generation failed: \(String(describing: error), privacy: .public)")
             return
         }
 
+        guard !Task.isCancelled else { return }
         let cleaned = cleaned(response)
         guard !cleaned.isEmpty else { return }
 
         chat.title = cleaned
 
         do {
+            guard !Task.isCancelled else { return }
             try modelContext.save()
         } catch {
             logger.error("Couldn't persist generated title: \(String(describing: error), privacy: .public)")

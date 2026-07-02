@@ -19,7 +19,8 @@ struct SheetHeader: View {
                 Text(title)
                     .font(.headline)
                 Spacer()
-                Button("Cancel", action: onCancel)
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -44,6 +45,7 @@ struct SheetFooter: View {
                 Button(confirmTitle, action: onConfirm)
                     .buttonStyle(.borderedProminent)
                     .disabled(isDisabled)
+                    .keyboardShortcut(.defaultAction)
             }
             .padding(20)
         }
