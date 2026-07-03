@@ -194,6 +194,12 @@ private struct WorkspaceWidgetPanel: View {
 private struct WorkspaceEmailStatsView: View {
     let summary: WorkspaceEmailSummary
 
+    /// Bumped when Settings posts `emailReviewScheduleDidChange` so the
+    /// footer re-reads the schedule from UserDefaults — otherwise the view
+    /// only re-renders when the `@Query` email data changes and an interval
+    /// edit in Settings wouldn't move "Next review".
+    @State private var scheduleVersion = 0
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
@@ -220,6 +226,14 @@ private struct WorkspaceEmailStatsView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            .id(scheduleVersion)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: SettingsNotifications.emailReviewScheduleDidChange
+            )
+        ) { _ in
+            scheduleVersion += 1
         }
     }
 }
