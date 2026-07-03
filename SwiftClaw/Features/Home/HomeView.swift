@@ -5,6 +5,7 @@ import os
 struct HomeView: View {
     var onChatCreated: (UUID) -> Void = { _ in }
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
 
@@ -12,6 +13,14 @@ struct HomeView: View {
     @State private var isCreatingChat = false
     @State private var submissionError: String?
     @State private var presentedError: PresentedAppError?
+
+    private var composerHorizontalPadding: CGFloat {
+        #if os(iOS)
+        horizontalSizeClass == .compact ? 18 : 40
+        #else
+        40
+        #endif
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,6 +55,7 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
+        .chatComposerDismissKeyboardOnTap()
         .safeAreaBar(edge: .bottom) {
             ChatComposerView(
                 isBusy: isCreatingChat,
@@ -53,7 +63,7 @@ struct HomeView: View {
             ) { submission in
                 submitMessage(submission)
             }
-            .padding(.horizontal, 40)
+            .padding(.horizontal, composerHorizontalPadding)
             .padding(.bottom, 24)
         }
         .task {

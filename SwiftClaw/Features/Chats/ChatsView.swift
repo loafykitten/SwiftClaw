@@ -558,6 +558,14 @@ private struct ChatTranscriptView: View {
         return items
     }
 
+    private var composerHorizontalPadding: CGFloat {
+        #if os(iOS)
+        horizontalSizeClass == .compact ? 18 : 24
+        #else
+        24
+        #endif
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // In compact widths the navigation bar carries the title, model,
@@ -603,6 +611,8 @@ private struct ChatTranscriptView: View {
                 }
                 .frame(maxHeight: .infinity)
                 .scrollEdgeEffectStyle(.soft, for: .bottom)
+                .chatComposerScrollDismissesKeyboard()
+                .chatComposerDismissKeyboardOnTap()
                 .onAppear {
                     scrollToBottom(proxy, animated: false)
                 }
@@ -620,7 +630,7 @@ private struct ChatTranscriptView: View {
                     ) { submission in
                         submitMessage(submission)
                     }
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, composerHorizontalPadding)
                     .padding(.bottom, 20)
                 }
             }

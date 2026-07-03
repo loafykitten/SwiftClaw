@@ -167,6 +167,7 @@ struct ChatComposerView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 16)
+        .iOSChatComposerWidth()
         .glassEffect(in: .rect(cornerRadius: 16.0))
         .contentShape(Rectangle())
         .dropDestination(for: ImageImportTransfer.self) { items, _ in
@@ -229,6 +230,9 @@ struct ChatComposerView: View {
             }
 
             refreshModels()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .chatComposerShouldResignFocus)) { _ in
+            isMessageFieldFocused = false
         }
     }
 
@@ -434,5 +438,16 @@ struct ChatComposerView: View {
             attachmentController.releaseSubmittedAttachments()
             setInvestigation(false)
         }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func iOSChatComposerWidth() -> some View {
+        #if os(iOS)
+        frame(maxWidth: .infinity)
+        #else
+        self
+        #endif
     }
 }
