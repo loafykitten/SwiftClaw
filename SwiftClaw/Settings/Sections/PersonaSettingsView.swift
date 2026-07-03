@@ -2,6 +2,9 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 import UniformTypeIdentifiers
+#elseif os(iOS)
+import PhotosUI
+import UIKit
 #endif
 
 struct PersonaSettingsView: View {
@@ -9,6 +12,9 @@ struct PersonaSettingsView: View {
     @AppStorage(SettingsKeys.personaAvatarData) private var avatarData = Data()
 
     @State private var avatarError: String?
+    #if os(iOS)
+    @State private var selectedAvatarItem: PhotosPickerItem?
+    #endif
 
     private var hasNameOverrideValue: Bool {
         !displayNameOverride.isEmpty
@@ -21,6 +27,7 @@ struct PersonaSettingsView: View {
     var body: some View {
         Form {
             Section("Name") {
+                #if os(macOS)
                 LabeledContent("Detected Name") {
                     Text(PersonaProfile.detectedDisplayName)
                         .foregroundStyle(.secondary)
@@ -34,29 +41,65 @@ struct PersonaSettingsView: View {
                     Label("Use Detected Name", systemImage: "arrow.counterclockwise")
                 }
                 .disabled(!hasNameOverrideValue)
+                #else
+                LabeledContent("Preferred Name") {
+                    TextField("friend", text: $displayNameOverride, prompt: Text("friend"))
+                        .multilineTextAlignment(.trailing)
+                }
+                #endif
             }
 
             Section("Chat Avatar") {
+                #if os(iOS)
+                PhotosPicker(
+                    selection: $selectedAvatarItem,
+                    matching: .images,
+                    photoLibrary: .shared()
+                ) {
+                    HStack(spacing: 12) {
+                        PersonaAvatarPreview(avatarData: avatarData, size: 56)
+
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(hasAvatarOverride ? "Change Image" : "Choose Image")
+                                .foregroundStyle(.primary)
+
+                            Text(avatarStatusText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Image(systemName: "photo")
+                            .foregroundStyle(.tint)
+                            .imageScale(.medium)
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.plain)
+
+                if hasAvatarOverride {
+                    Button(role: .destructive) {
+                        resetAvatar()
+                    } label: {
+                        Label("Remove Image", systemImage: "trash")
+                    }
+                }
+
+                if let avatarError {
+                    Text(avatarError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                #else
                 HStack(spacing: 14) {
                     PersonaAvatarPreview(avatarData: avatarData)
 
                     VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
-                            Button {
-                                chooseAvatar()
-                            } label: {
-                                Label("Choose Image", systemImage: "photo")
-                            }
+                        avatarControls
 
-                            Button {
-                                resetAvatar()
-                            } label: {
-                                Label("Use Detected Avatar", systemImage: "arrow.counterclockwise")
-                            }
-                            .disabled(!hasAvatarOverride)
-                        }
-
-                        Text(hasAvatarOverride ? "Custom avatar selected." : "Using the detected macOS profile image.")
+                        Text(avatarStatusText)
                             .font(.caption)
                             .foregroundStyle(.secondary)
 
@@ -68,13 +111,51 @@ struct PersonaSettingsView: View {
                     }
                 }
                 .padding(.vertical, 4)
+                #endif
             }
         }
         .formStyle(.grouped)
+        #if os(iOS)
+        .onChange(of: selectedAvatarItem) { _, item in
+            loadAvatar(from: item)
+        }
+        #endif
     }
 
-    private func chooseAvatar() {
+    #if os(macOS)
+    @ViewBuilder
+    private var avatarControls: some View {
+        HStack(spacing: 8) {
+            Button {
+                chooseAvatar()
+            } label: {
+                Label("Choose Image", systemImage: "photo")
+            }
+
+            Button {
+                resetAvatar()
+            } label: {
+                Label("Use Detected Avatar", systemImage: "arrow.counterclockwise")
+            }
+            .disabled(!hasAvatarOverride)
+        }
+    }
+    #endif
+
+    private var avatarStatusText: String {
+        if hasAvatarOverride {
+            return "Custom avatar selected."
+        }
+
         #if os(macOS)
+        return "Using the detected macOS profile image."
+        #else
+        return "Using the default avatar."
+        #endif
+    }
+
+    #if os(macOS)
+    private func chooseAvatar() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
@@ -93,8 +174,36 @@ struct PersonaSettingsView: View {
 
         avatarData = data
         avatarError = nil
-        #endif
     }
+    #endif
+
+    #if os(iOS)
+    private func loadAvatar(from item: PhotosPickerItem?) {
+        guard let item else {
+            return
+        }
+
+        Task { @MainActor in
+            defer {
+                selectedAvatarItem = nil
+            }
+
+            do {
+                guard let imageData = try await item.loadTransferable(type: Data.self),
+                      let image = UIImage(data: imageData),
+                      let data = PersonaProfile.normalizedAvatarData(from: image) else {
+                    avatarError = "Couldn't read that image."
+                    return
+                }
+
+                avatarData = data
+                avatarError = nil
+            } catch {
+                avatarError = "Couldn't read that image."
+            }
+        }
+    }
+    #endif
 
     private func resetAvatar() {
         avatarData = Data()
@@ -104,11 +213,15 @@ struct PersonaSettingsView: View {
 
 private struct PersonaAvatarPreview: View {
     let avatarData: Data
+    let size: CGFloat
 
-    private let size: CGFloat = 72
+    init(avatarData: Data, size: CGFloat = 72) {
+        self.avatarData = avatarData
+        self.size = size
+    }
 
-    #if os(macOS)
-    private var image: NSImage? {
+    #if os(macOS) || os(iOS)
+    private var image: PlatformImage? {
         PersonaProfile.avatarImage(
             overrideData: avatarData.isEmpty ? nil : avatarData,
             pointSize: size
@@ -121,6 +234,14 @@ private struct PersonaAvatarPreview: View {
             #if os(macOS)
             if let image {
                 Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                placeholder
+            }
+            #elseif os(iOS)
+            if let image {
+                Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
             } else {

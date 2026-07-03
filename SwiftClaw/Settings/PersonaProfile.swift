@@ -4,6 +4,8 @@ import AppKit
 import Collaboration
 import Darwin
 import OpenDirectory
+#elseif os(iOS)
+import UIKit
 #endif
 
 enum PersonaProfile {
@@ -194,6 +196,46 @@ private extension NSImage {
         }
 
         return bitmap.representation(using: .png, properties: [:])
+    }
+}
+#endif
+
+#if os(iOS)
+extension PersonaProfile {
+    static func avatarImage(
+        overrideData: Data? = UserDefaults.standard.data(forKey: SettingsKeys.personaAvatarData),
+        pointSize: CGFloat
+    ) -> UIImage? {
+        overrideAvatarImage(data: overrideData, pointSize: pointSize)
+    }
+
+    static func overrideAvatarImage(
+        data: Data? = UserDefaults.standard.data(forKey: SettingsKeys.personaAvatarData),
+        pointSize: CGFloat
+    ) -> UIImage? {
+        guard let data,
+              !data.isEmpty,
+              let image = UIImage(data: data) else {
+            return nil
+        }
+
+        return image.normalizedForAvatar(pointSize: pointSize)
+    }
+
+    static func normalizedAvatarData(from image: UIImage, pointSize: CGFloat = 256) -> Data? {
+        image.normalizedForAvatar(pointSize: pointSize).pngData()
+    }
+}
+
+private extension UIImage {
+    func normalizedForAvatar(pointSize: CGFloat) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+
+        let size = CGSize(width: pointSize, height: pointSize)
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
+        }
     }
 }
 #endif

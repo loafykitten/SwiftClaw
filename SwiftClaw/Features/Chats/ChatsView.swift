@@ -1147,8 +1147,8 @@ private struct AssistantAvatarView: View {
     @AppStorage(SettingsKeys.assistantAvatarData) private var avatarData = Data()
     @AppStorage(SettingsKeys.assistantDisplayName) private var displayName = AssistantPersona.defaultDisplayName
 
-    #if os(macOS)
-    private var image: NSImage? {
+    #if os(macOS) || os(iOS)
+    private var image: PlatformImage? {
         AssistantPersona.avatarImage(
             overrideData: avatarData.isEmpty ? nil : avatarData
         )
@@ -1164,6 +1164,14 @@ private struct AssistantAvatarView: View {
             #if os(macOS)
             if let image {
                 Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                fallback
+            }
+            #elseif os(iOS)
+            if let image {
+                Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
             } else {
@@ -1193,8 +1201,8 @@ private struct UserAvatarView: View {
     @AppStorage(SettingsKeys.personaAvatarData) private var avatarData = Data()
     @AppStorage(SettingsKeys.personaDisplayName) private var displayNameOverride = ""
 
-    #if os(macOS)
-    private var image: NSImage? {
+    #if os(macOS) || os(iOS)
+    private var image: PlatformImage? {
         PersonaProfile.avatarImage(
             overrideData: avatarData.isEmpty ? nil : avatarData,
             pointSize: ChatAvatarMetrics.size
@@ -1221,6 +1229,18 @@ private struct UserAvatarView: View {
             #if os(macOS)
             if let image {
                 Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "person.crop.circle.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.secondary)
+                    .padding(1)
+            }
+            #elseif os(iOS)
+            if let image {
+                Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
             } else {

@@ -1,6 +1,8 @@
 import Foundation
 #if os(macOS)
 import AppKit
+#elseif os(iOS)
+import UIKit
 #endif
 
 struct AssistantPersonalityPreset: Identifiable, Hashable {
@@ -141,6 +143,26 @@ extension AssistantPersona {
     }
 
     static func normalizedAvatarData(from image: NSImage) -> Data? {
+        PersonaProfile.normalizedAvatarData(from: image)
+    }
+}
+#endif
+
+#if os(iOS)
+extension AssistantPersona {
+    static func avatarImage(
+        overrideData: Data? = UserDefaults.standard.data(forKey: SettingsKeys.assistantAvatarData)
+    ) -> UIImage? {
+        if let overrideData,
+           !overrideData.isEmpty,
+           let image = UIImage(data: overrideData) {
+            return image
+        }
+
+        return UIImage(named: "AssistantAvatar")
+    }
+
+    static func normalizedAvatarData(from image: UIImage) -> Data? {
         PersonaProfile.normalizedAvatarData(from: image)
     }
 }

@@ -2,6 +2,9 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 import UniformTypeIdentifiers
+#elseif os(iOS)
+import PhotosUI
+import UIKit
 #endif
 
 struct PersonalitySettingsView: View {
@@ -13,6 +16,9 @@ struct PersonalitySettingsView: View {
     @AppStorage(SettingsKeys.assistantCustomPersonality) private var customPersonality = ""
 
     @State private var avatarError: String?
+    #if os(iOS)
+    @State private var selectedAssistantAvatarItem: PhotosPickerItem?
+    #endif
 
     private var hasAvatarOverride: Bool {
         !assistantAvatarData.isEmpty
@@ -71,11 +77,21 @@ struct PersonalitySettingsView: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         HStack(spacing: 8) {
+                            #if os(macOS)
                             Button {
                                 chooseAssistantAvatar()
                             } label: {
                                 Label("Choose Image", systemImage: "photo")
                             }
+                            #else
+                            PhotosPicker(
+                                selection: $selectedAssistantAvatarItem,
+                                matching: .images,
+                                photoLibrary: .shared()
+                            ) {
+                                Label("Choose Image", systemImage: "photo")
+                            }
+                            #endif
 
                             Button {
                                 resetAssistantAvatar()
@@ -149,10 +165,15 @@ struct PersonalitySettingsView: View {
             }
         }
         .formStyle(.grouped)
+        #if os(iOS)
+        .onChange(of: selectedAssistantAvatarItem) { _, item in
+            loadAssistantAvatar(from: item)
+        }
+        #endif
     }
 
+    #if os(macOS)
     private func chooseAssistantAvatar() {
-        #if os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
@@ -171,8 +192,36 @@ struct PersonalitySettingsView: View {
 
         assistantAvatarData = data
         avatarError = nil
-        #endif
     }
+    #endif
+
+    #if os(iOS)
+    private func loadAssistantAvatar(from item: PhotosPickerItem?) {
+        guard let item else {
+            return
+        }
+
+        Task { @MainActor in
+            defer {
+                selectedAssistantAvatarItem = nil
+            }
+
+            do {
+                guard let imageData = try await item.loadTransferable(type: Data.self),
+                      let image = UIImage(data: imageData),
+                      let data = AssistantPersona.normalizedAvatarData(from: image) else {
+                    avatarError = "Couldn't read that image."
+                    return
+                }
+
+                assistantAvatarData = data
+                avatarError = nil
+            } catch {
+                avatarError = "Couldn't read that image."
+            }
+        }
+    }
+    #endif
 
     private func resetAssistantAvatar() {
         assistantAvatarData = Data()
@@ -218,8 +267,8 @@ private struct AssistantAvatarPreview: View {
 
     private let size: CGFloat = 72
 
-    #if os(macOS)
-    private var image: NSImage? {
+    #if os(macOS) || os(iOS)
+    private var image: PlatformImage? {
         AssistantPersona.avatarImage(
             overrideData: avatarData.isEmpty ? nil : avatarData
         )
@@ -231,6 +280,14 @@ private struct AssistantAvatarPreview: View {
             #if os(macOS)
             if let image {
                 Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                placeholder
+            }
+            #elseif os(iOS)
+            if let image {
+                Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
             } else {
