@@ -29,7 +29,7 @@ struct WorkspaceView: View {
 
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
 
-    @State private var navigationPath: [WorkspaceItem] = []
+    @State private var navigationPath = NavigationPath()
     @State private var hasAppliedLaunchSelection = false
 
     private var visibleItems: [WorkspaceItem] {
@@ -59,8 +59,11 @@ struct WorkspaceView: View {
     private func destination(for item: WorkspaceItem) -> some View {
         switch item {
         case .email:
-            EmailView(pendingEmailID: pendingEmailID)
-                .onAppear(perform: onEmailPresented)
+            EmailView(
+                pendingEmailID: pendingEmailID,
+                openCompactThread: openEmailThread,
+                onPendingEmailHandled: onEmailPresented
+            )
         case .calendar:
             CalendarView()
         case .reminders:
@@ -79,15 +82,29 @@ struct WorkspaceView: View {
            let item = WorkspaceItem(launchArgument: requestedItem),
            visibleItems.contains(item) {
             hasAppliedLaunchSelection = true
-            navigationPath = [item]
+            navigate(to: item)
             return
         }
         hasAppliedLaunchSelection = true
         #endif
 
         if pendingEmailID != nil, isEmailEnabled {
-            navigationPath = [.email]
+            navigate(to: .email)
         }
+    }
+
+    private func navigate(to item: WorkspaceItem) {
+        var path = NavigationPath()
+        path.append(item)
+        navigationPath = path
+    }
+
+    private func openEmailThread(mailbox: EmailMailbox, threadID: UUID) {
+        var path = NavigationPath()
+        path.append(WorkspaceItem.email)
+        path.append(mailbox)
+        path.append(threadID)
+        navigationPath = path
     }
 }
 

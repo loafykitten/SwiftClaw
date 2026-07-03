@@ -16,6 +16,8 @@ struct EmailView: View {
     @State private var manualSyncCoordinator = EmailManualSyncCoordinator.shared
     @State private var manualReviewCoordinator = EmailManualReviewCoordinator.shared
     var pendingEmailID: UUID?
+    var openCompactThread: ((EmailMailbox, UUID) -> Void)?
+    var onPendingEmailHandled: () -> Void = {}
 
     private var isConfigured: Bool {
         EmailAccountStore.shared.hasConfiguredAccount
@@ -150,15 +152,13 @@ struct EmailView: View {
             }
         }
         .onAppear {
-            if let emailID = pendingEmailID,
-               let thread = emails.first(where: { $0.id == emailID })?.thread {
-                selectedThreadID = thread.id
-            }
+            handlePendingEmailSelection()
         }
         .onChange(of: pendingEmailID) { _, emailID in
-            guard let emailID,
-                  let thread = emails.first(where: { $0.id == emailID })?.thread else { return }
-            selectedThreadID = thread.id
+            handlePendingEmailSelection(emailID)
+        }
+        .onChange(of: emails.compactMap { $0.thread?.id }) { _, _ in
+            handlePendingEmailSelection()
         }
     }
 
@@ -278,6 +278,33 @@ struct EmailView: View {
         case .trash:
             trash
         }
+    }
+
+    private func handlePendingEmailSelection(_ emailID: UUID? = nil) {
+        guard let emailID = emailID ?? pendingEmailID,
+              let email = emails.first(where: { $0.id == emailID }),
+              let thread = email.thread else { return }
+
+        selectedThreadID = thread.id
+
+        if horizontalSizeClass == .compact {
+            openCompactThread?(mailbox(for: email), thread.id)
+        }
+
+        onPendingEmailHandled()
+    }
+
+    private func mailbox(for email: Email) -> EmailMailbox {
+        if email.isDeleted {
+            return .trash
+        }
+        if email.isArchived {
+            return .archive
+        }
+        if email.isFlagged {
+            return .flagged
+        }
+        return .inbox
     }
 
     private var unconfiguredState: some View {
