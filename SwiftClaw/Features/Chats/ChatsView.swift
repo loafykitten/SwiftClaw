@@ -1240,22 +1240,11 @@ private enum ChatAvatarMetrics {
 
 private struct EmptyChatsView: View {
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "bubble.left.and.bubble.right")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
-
-            Text("No chats yet")
-                .font(.title2)
-                .fontWeight(.semibold)
-
-            Text("Create a chat to start a new conversation.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ContentUnavailableView(
+            "No Chats Yet",
+            systemImage: "bubble.left.and.bubble.right",
+            description: Text("Create a chat to start a new conversation.")
+        )
     }
 }
 
