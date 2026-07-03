@@ -15,12 +15,19 @@ struct EmailView: View {
     @State private var composingReplyFor: Email?
     @State private var manualSyncCoordinator = EmailManualSyncCoordinator.shared
     @State private var manualReviewCoordinator = EmailManualReviewCoordinator.shared
+    @AppStorage(SettingsKeys.emailReviewSlideAction)
+    private var quickActionRaw = SettingsStorage.defaultEmailReviewSlideAction.rawValue
     var pendingEmailID: UUID?
     var openCompactThread: ((EmailMailbox, UUID) -> Void)?
     var onPendingEmailHandled: () -> Void = {}
 
     private var isConfigured: Bool {
         EmailAccountStore.shared.hasConfiguredAccount
+    }
+
+    private var quickAction: ReviewActionToken {
+        EmailReviewSlideAction(rawValue: quickActionRaw)?.token
+            ?? SettingsStorage.defaultEmailReviewSlideAction.token
     }
 
     /// Inbox surfaces any thread that still has at least one visible
@@ -183,10 +190,13 @@ struct EmailView: View {
 
             EmailThreadListView(
                 threads: filtered,
+                mailbox: selectedMailbox,
+                quickAction: quickAction,
                 selectedThreadID: Binding(
                     get: { selected?.id },
                     set: { selectedThreadID = $0 }
-                )
+                ),
+                onQuickAction: performQuickAction
             )
             .frame(width: 280)
 
@@ -240,7 +250,9 @@ struct EmailView: View {
                     inbox: inbox,
                     archive: archive,
                     trash: trash
-                )
+                ),
+                quickAction: quickAction,
+                onQuickAction: performQuickAction
             )
             .navigationTitle(mailbox.rawValue)
         }
@@ -305,6 +317,65 @@ struct EmailView: View {
             return .flagged
         }
         return .inbox
+    }
+
+    private func quickActionTarget(for thread: EmailThread, in mailbox: EmailMailbox) -> Email? {
+        switch mailbox {
+        case .inbox:
+            thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted }
+        case .flagged:
+            thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted && $0.isFlagged }
+                ?? thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted }
+        case .archive:
+            thread.sortedMessages.last { $0.isArchived && !$0.isDeleted }
+        case .trash:
+            thread.sortedMessages.last { $0.isDeleted }
+        }
+    }
+
+    private func performQuickAction(_ action: ReviewActionToken, thread: EmailThread, mailbox: EmailMailbox) {
+        guard let email = quickActionTarget(for: thread, in: mailbox) else { return }
+
+        if action == .reply {
+            composingReplyFor = email
+            return
+        }
+
+        Task { @MainActor in
+            let repository = EmailRepository(modelContext: modelContext)
+            let mailClient = EmailMailClientResolver.mailClient(for: email)
+
+            switch action {
+            case .review:
+                await EmailServerAction.setFlags(
+                    email: email,
+                    repository: repository,
+                    mailClient: mailClient,
+                    isRead: true,
+                    isFlagged: nil
+                )
+            case .flag:
+                await EmailServerAction.toggleFlag(
+                    email: email,
+                    repository: repository,
+                    mailClient: mailClient
+                )
+            case .reply:
+                break
+            case .delete:
+                await EmailServerAction.delete(
+                    email: email,
+                    repository: repository,
+                    mailClient: mailClient
+                )
+            case .archive:
+                await EmailServerAction.archive(
+                    email: email,
+                    repository: repository,
+                    mailClient: mailClient
+                )
+            }
+        }
     }
 
     private var unconfiguredState: some View {
@@ -512,7 +583,10 @@ private struct EmailMailboxSidebar: View {
 
 private struct EmailThreadListView: View {
     let threads: [EmailThread]
+    let mailbox: EmailMailbox
+    let quickAction: ReviewActionToken
     @Binding var selectedThreadID: UUID?
+    let onQuickAction: (ReviewActionToken, EmailThread, EmailMailbox) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -536,10 +610,12 @@ private struct EmailThreadListView: View {
                 #if os(macOS)
                 List(selection: $selectedThreadID) {
                     ForEach(threads) { thread in
-                        EmailThreadRow(
-                            thread: thread,
-                            isSelected: thread.id == selectedThreadID
-                        )
+                        quickActionRow(for: thread) {
+                            EmailThreadRow(
+                                thread: thread,
+                                isSelected: thread.id == selectedThreadID
+                            )
+                        }
                         .tag(thread.id)
                         .sidebarRowState(isEmphasized: thread.unreadCount > 0)
                         .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
@@ -549,15 +625,17 @@ private struct EmailThreadListView: View {
                 #else
                 List {
                     ForEach(threads) { thread in
-                        Button {
-                            selectedThreadID = thread.id
-                        } label: {
-                            EmailThreadRow(
-                                thread: thread,
-                                isSelected: thread.id == selectedThreadID
-                            )
+                        quickActionRow(for: thread) {
+                            Button {
+                                selectedThreadID = thread.id
+                            } label: {
+                                EmailThreadRow(
+                                    thread: thread,
+                                    isSelected: thread.id == selectedThreadID
+                                )
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                         .sidebarRowState(isEmphasized: thread.unreadCount > 0)
                         .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
                     }
@@ -567,11 +645,27 @@ private struct EmailThreadListView: View {
             }
         }
     }
+
+    private func quickActionRow<Content: View>(
+        for thread: EmailThread,
+        @ViewBuilder content: @escaping () -> Content
+    ) -> some View {
+        EmailQuickActionSwipe(
+            action: quickAction,
+            onPerform: { action in onQuickAction(action, thread, mailbox) },
+            content: content
+        )
+        .accessibilityAction(named: Text(quickAction.displayName)) {
+            onQuickAction(quickAction, thread, mailbox)
+        }
+    }
 }
 
 private struct EmailThreadNavigationList: View {
     let mailbox: EmailMailbox
     let threads: [EmailThread]
+    let quickAction: ReviewActionToken
+    let onQuickAction: (ReviewActionToken, EmailThread, EmailMailbox) -> Void
 
     var body: some View {
         Group {
@@ -584,11 +678,19 @@ private struct EmailThreadNavigationList: View {
             } else {
                 List {
                     ForEach(threads) { thread in
-                        NavigationLink(value: thread.id) {
-                            EmailThreadRow(
-                                thread: thread,
-                                isSelected: false
-                            )
+                        EmailQuickActionSwipe(
+                            action: quickAction,
+                            onPerform: { action in onQuickAction(action, thread, mailbox) }
+                        ) {
+                            NavigationLink(value: thread.id) {
+                                EmailThreadRow(
+                                    thread: thread,
+                                    isSelected: false
+                                )
+                            }
+                        }
+                        .accessibilityAction(named: Text(quickAction.displayName)) {
+                            onQuickAction(quickAction, thread, mailbox)
                         }
                     }
                 }
