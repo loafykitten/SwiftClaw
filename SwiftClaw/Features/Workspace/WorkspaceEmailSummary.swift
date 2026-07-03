@@ -3,22 +3,27 @@ import Foundation
 @MainActor
 struct WorkspaceEmailSummary: Equatable {
     let unreadCount: Int
-    let newCount: Int
-    let flaggedCount: Int
-    let notatedCount: Int
+    let inboxThreadCount: Int
+    let flaggedThreadCount: Int
+    let notatedThreadCount: Int
 
     init(emails: [Email]) {
+        // Same partition as `EmailView.inboxThreads`: a thread belongs to the
+        // inbox while it still has at least one visible message, so the tile
+        // count always agrees with the Inbox list the widget navigates to.
         let activeEmails = emails.filter { !$0.isArchived && !$0.isDeleted }
         unreadCount = activeEmails.filter { !$0.isRead }.count
-        newCount = activeEmails.filter(Self.isNewSinceReview).count
-        flaggedCount = activeEmails.filter(\.isFlagged).count
-        notatedCount = activeEmails.filter { !$0.notes.isEmpty }.count
+
+        var seen = Set<UUID>()
+        let activeThreads = activeEmails.compactMap { email -> EmailThread? in
+            guard let thread = email.thread else { return nil }
+            guard seen.insert(thread.id).inserted else { return nil }
+            return thread
+        }
+        inboxThreadCount = activeThreads.count
+        flaggedThreadCount = activeThreads.filter(\.isReviewFlagged).count
+        notatedThreadCount = activeThreads.filter(\.hasReviewNote).count
     }
 
     static let empty = WorkspaceEmailSummary(emails: [])
-
-    private static func isNewSinceReview(_ email: Email) -> Bool {
-        guard let lastReviewedAt = email.thread?.lastReviewedAt else { return true }
-        return lastReviewedAt < email.date
-    }
 }

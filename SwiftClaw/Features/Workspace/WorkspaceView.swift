@@ -195,50 +195,53 @@ private struct WorkspaceEmailStatsView: View {
     let summary: WorkspaceEmailSummary
 
     var body: some View {
-        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
-            WorkspaceEmailStatRow(
-                systemImage: "envelope.badge",
-                count: summary.unreadCount,
-                label: "Unread"
-            )
-            WorkspaceEmailStatRow(
-                systemImage: "sparkles",
-                count: summary.newCount,
-                label: "New since review"
-            )
-            WorkspaceEmailStatRow(
-                systemImage: "flag",
-                count: summary.flaggedCount,
-                label: "Flagged"
-            )
-            WorkspaceEmailStatRow(
-                systemImage: "note.text",
-                count: summary.notatedCount,
-                label: "Notated"
-            )
+        VStack(alignment: .leading, spacing: 12) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                GridRow(alignment: .firstTextBaseline) {
+                    WorkspaceEmailStatTile(count: summary.unreadCount, label: "Unread")
+                    WorkspaceEmailStatTile(count: summary.inboxThreadCount, label: "Inbox")
+                }
+                GridRow(alignment: .firstTextBaseline) {
+                    WorkspaceEmailStatTile(count: summary.flaggedThreadCount, label: "Flagged")
+                    WorkspaceEmailStatTile(count: summary.notatedThreadCount, label: "Notated")
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                if let reviewedAt = SettingsStorage.loadEmailLastReviewCompletedAt() {
+                    Text("Reviewed \(Text(reviewedAt, style: .relative)) ago")
+                }
+                let nextReview = SettingsStorage.nextEmailReviewDate()
+                if nextReview > .now {
+                    Text("Next review in \(Text(nextReview, style: .relative))")
+                } else {
+                    Text("Review due")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 }
 
-private struct WorkspaceEmailStatRow: View {
-    let systemImage: String
+private struct WorkspaceEmailStatTile: View {
     let count: Int
     let label: String
 
     var body: some View {
-        GridRow {
-            Image(systemName: systemImage)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .frame(width: 20, height: 20)
+        VStack(alignment: .leading, spacing: 2) {
             Text(count, format: .number)
-                .font(.subheadline.monospacedDigit())
-                .fontWeight(.semibold)
-                .frame(minWidth: 24, alignment: .leading)
+                .font(.system(.title3, design: .rounded, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(count == 0 ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
             Text(label)
-                .font(.subheadline)
+                .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
+        .gridColumnAlignment(.leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(count) \(label)")
     }
 }
