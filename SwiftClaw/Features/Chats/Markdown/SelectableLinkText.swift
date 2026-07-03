@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -138,3 +139,4 @@ final class WrappingTextView: NSTextView {
         measuredSize(forWidth: maxLayoutWidth)
     }
 }
+#endif

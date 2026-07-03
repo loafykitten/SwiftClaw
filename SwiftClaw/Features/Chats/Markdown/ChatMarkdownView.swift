@@ -1,5 +1,7 @@
-import AppKit
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 struct ChatMarkdownView: View {
     let content: String
@@ -143,6 +145,7 @@ struct ChatMarkdownView: View {
     private func inlineText(_ text: String, style: BlockStyle) -> some View {
         let runs = ChatInlineMarkdownParser.runs(from: text, citations: citations)
 
+        #if os(macOS)
         if runs.contains(where: { $0.link != nil }) {
             SelectableLinkText(
                 attributed: ChatInlineMarkdownParser.nsAttributedString(
@@ -156,17 +159,24 @@ struct ChatMarkdownView: View {
                 maximumWidth: maximumContentWidth
             )
         } else {
-            Text(ChatInlineMarkdownParser.attributedString(
-                runs: runs,
-                baseFont: style.swiftBase,
-                codeFont: style.swiftCode,
-                defaultForeground: style.foreground,
-                codeAccent: codeAccent,
-                quoteAccent: quoteAccent,
-                linkAccent: linkAccent
-            ))
-            .lineSpacing(style.lineSpacing)
+            swiftInlineText(runs, style: style)
         }
+        #else
+        swiftInlineText(runs, style: style)
+        #endif
+    }
+
+    private func swiftInlineText(_ runs: [InlineRun], style: BlockStyle) -> some View {
+        Text(ChatInlineMarkdownParser.attributedString(
+            runs: runs,
+            baseFont: style.swiftBase,
+            codeFont: style.swiftCode,
+            defaultForeground: style.foreground,
+            codeAccent: codeAccent,
+            quoteAccent: quoteAccent,
+            linkAccent: linkAccent
+        ))
+        .lineSpacing(style.lineSpacing)
     }
 }
 
@@ -176,14 +186,17 @@ struct BlockStyle {
     var swiftBase: Font
     var swiftCode: Font
     var foreground: Color
+    #if os(macOS)
     var appKitTextStyle: NSFont.TextStyle
     var appKitWeight: NSFont.Weight
+    #endif
     var lineSpacing: CGFloat
     var isQuote: Bool
 }
 
 extension BlockStyle {
     static func heading(level: Int, foreground: Color) -> BlockStyle {
+        #if os(macOS)
         BlockStyle(
             swiftBase: headingFont(for: level),
             swiftCode: headingCodeFont(for: level),
@@ -193,9 +206,19 @@ extension BlockStyle {
             lineSpacing: 2,
             isQuote: false
         )
+        #else
+        BlockStyle(
+            swiftBase: headingFont(for: level),
+            swiftCode: headingCodeFont(for: level),
+            foreground: foreground,
+            lineSpacing: 2,
+            isQuote: false
+        )
+        #endif
     }
 
     static func paragraph(foreground: Color) -> BlockStyle {
+        #if os(macOS)
         BlockStyle(
             swiftBase: .body,
             swiftCode: .system(.body, design: .monospaced),
@@ -205,9 +228,19 @@ extension BlockStyle {
             lineSpacing: 3,
             isQuote: false
         )
+        #else
+        BlockStyle(
+            swiftBase: .body,
+            swiftCode: .system(.body, design: .monospaced),
+            foreground: foreground,
+            lineSpacing: 3,
+            isQuote: false
+        )
+        #endif
     }
 
     static func quote(foreground: Color) -> BlockStyle {
+        #if os(macOS)
         BlockStyle(
             swiftBase: .callout,
             swiftCode: .system(.callout, design: .monospaced),
@@ -217,6 +250,15 @@ extension BlockStyle {
             lineSpacing: 3,
             isQuote: true
         )
+        #else
+        BlockStyle(
+            swiftBase: .callout,
+            swiftCode: .system(.callout, design: .monospaced),
+            foreground: foreground,
+            lineSpacing: 3,
+            isQuote: true
+        )
+        #endif
     }
 
     private static func headingFont(for level: Int) -> Font {
@@ -235,6 +277,7 @@ extension BlockStyle {
         }
     }
 
+    #if os(macOS)
     private static func headingTextStyle(for level: Int) -> NSFont.TextStyle {
         switch level {
         case 1: .title3
@@ -242,4 +285,5 @@ extension BlockStyle {
         default: .subheadline
         }
     }
+    #endif
 }

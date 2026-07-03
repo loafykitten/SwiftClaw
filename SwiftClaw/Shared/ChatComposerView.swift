@@ -179,6 +179,14 @@ struct ChatComposerView: View {
                 ComposerDropTargetOverlay()
             }
         }
+        .fileImporter(
+            isPresented: $attachmentController.isFileImporterPresented,
+            allowedContentTypes: ImageImportPipeline.openPanelContentTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            attachmentController.completeFileImport(result, isEnabled: canImportImageAttachments)
+        }
+        #if os(macOS)
         .background {
             ImagePasteKeyMonitor(
                 isEnabled: canImportImageAttachments && isMessageFieldFocused,
@@ -188,6 +196,7 @@ struct ChatComposerView: View {
             )
             .frame(width: 0, height: 0)
         }
+        #endif
         .imageAttachmentPreviewOverlay(selection: previewSelectionBinding)
         .onAppear(perform: refreshModels)
         .onDisappear {

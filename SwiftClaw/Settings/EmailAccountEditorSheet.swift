@@ -128,6 +128,27 @@ struct EmailAccountEditorSheet: View {
     @State private var testTask: Task<Void, Never>?
     @State private var successfulTestFingerprint: EmailAccountConnectionFingerprint?
 
+    /// Values the validated fields held when the sheet opened. A field's
+    /// error is only shown once the user changes it, so a pristine form
+    /// doesn't open covered in "required" messages.
+    @State private var fieldBaseline = ValidatedFieldBaseline()
+
+    private struct ValidatedFieldBaseline {
+        var fromAddress = ""
+        var imapHost = ""
+        var imapPort = SettingsStorage.defaultEmailImapPort
+        var smtpHost = ""
+        var smtpPort = SettingsStorage.defaultEmailSmtpPort
+    }
+
+    private func errorIfEdited<Value: Equatable>(
+        _ message: String?,
+        current: Value,
+        baseline: Value
+    ) -> String? {
+        current == baseline ? nil : message
+    }
+
     private var validation: EmailAccountValidation {
         EmailAccountValidator.validate(
             imapHost: imapHost,
@@ -174,75 +195,51 @@ struct EmailAccountEditorSheet: View {
     }
 
     var body: some View {
+        Group {
+            #if os(iOS)
+            iOSBody
+            #else
+            macOSBody
+            #endif
+        }
+        .onAppear(perform: hydrate)
+        .onChange(of: currentConnectionFingerprint) { _, _ in
+            successfulTestFingerprint = nil
+            if testResult?.isSuccess == true {
+                testResult = nil
+            }
+        }
+    }
+
+    private var sheetTitle: String {
+        mode.isEditing ? "Edit Account" : "Add Account"
+    }
+
+    #if os(iOS)
+    private var iOSBody: some View {
+        NavigationStack {
+            accountForm
+                .navigationTitle(sheetTitle)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel", role: .cancel, action: cancel)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(mode.isEditing ? "Save" : "Add Account") {
+                            confirm()
+                        }
+                        .disabled(!canConfirm)
+                    }
+                }
+        }
+    }
+    #else
+    private var macOSBody: some View {
         VStack(spacing: 0) {
-            SheetHeader(title: mode.isEditing ? "Edit Account" : "Add Account") {
-                testTask?.cancel()
-                dismiss()
-            }
+            SheetHeader(title: sheetTitle, onCancel: cancel)
 
-            Form {
-                Section("General") {
-                    TextField("Display Name", text: $displayName)
-                        .autocorrectionDisabled()
-                    TextField("From Address", text: $fromAddress)
-                        .autocorrectionDisabled()
-                    FieldErrorText(message: validation.fromAddress)
-                }
-
-                Section {
-                    TextField("IMAP Host", text: $imapHost)
-                        .autocorrectionDisabled()
-                    FieldErrorText(message: validation.imapHost)
-                    SettingsIntegerField(label: "IMAP Port", value: $imapPort, error: validation.imapPort)
-                    TextField("IMAP Username", text: $imapUsername)
-                        .autocorrectionDisabled()
-                    APIKeyField(title: "IMAP Password", text: $imapPassword)
-                } header: {
-                    Text("IMAP")
-                } footer: {
-                    Text("Gmail users: create an app-specific password at myaccount.google.com/apppasswords and use it here.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section {
-                    TextField("SMTP Host", text: $smtpHost)
-                        .autocorrectionDisabled()
-                    FieldErrorText(message: validation.smtpHost)
-                    SettingsIntegerField(label: "SMTP Port", value: $smtpPort, error: validation.smtpPort)
-                    TextField("SMTP Username", text: $smtpUsername)
-                        .autocorrectionDisabled()
-                    APIKeyField(title: "SMTP Password", text: $smtpPassword)
-                } header: {
-                    Text("SMTP")
-                }
-
-                Section {
-                    Button {
-                        runTest()
-                    } label: {
-                        HStack {
-                            if isTesting {
-                                ProgressView().controlSize(.mini)
-                            }
-                            Text(isTesting ? "Testing…" : "Test Connection")
-                        }
-                    }
-                    .disabled(!canTest)
-
-                    if let testResult {
-                        switch testResult {
-                        case .success:
-                            Label("Connection successful. You can now confirm.", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        case .failure(let reason):
-                            Label(reason, systemImage: "xmark.circle.fill")
-                                .foregroundStyle(.red)
-                        }
-                    }
-                }
-            }
-            .formStyle(.grouped)
+            accountForm
 
             SheetFooter(
                 confirmTitle: mode.isEditing ? "Save" : "Add Account",
@@ -252,13 +249,78 @@ struct EmailAccountEditorSheet: View {
             }
         }
         .frame(minWidth: 520, minHeight: 560)
-        .onAppear(perform: hydrate)
-        .onChange(of: currentConnectionFingerprint) { _, _ in
-            successfulTestFingerprint = nil
-            if testResult?.isSuccess == true {
-                testResult = nil
+    }
+    #endif
+
+    private var accountForm: some View {
+        Form {
+            Section("General") {
+                TextField("Display Name", text: $displayName)
+                    .autocorrectionDisabled()
+                TextField("From Address", text: $fromAddress)
+                    .autocorrectionDisabled()
+                FieldErrorText(message: errorIfEdited(validation.fromAddress, current: fromAddress, baseline: fieldBaseline.fromAddress))
+            }
+
+            Section {
+                TextField("IMAP Host", text: $imapHost)
+                    .autocorrectionDisabled()
+                FieldErrorText(message: errorIfEdited(validation.imapHost, current: imapHost, baseline: fieldBaseline.imapHost))
+                SettingsIntegerField(label: "IMAP Port", value: $imapPort, error: errorIfEdited(validation.imapPort, current: imapPort, baseline: fieldBaseline.imapPort))
+                TextField("IMAP Username", text: $imapUsername)
+                    .autocorrectionDisabled()
+                APIKeyField(title: "IMAP Password", text: $imapPassword)
+            } header: {
+                Text("IMAP")
+            } footer: {
+                Text("Gmail users: create an app-specific password at myaccount.google.com/apppasswords and use it here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                TextField("SMTP Host", text: $smtpHost)
+                    .autocorrectionDisabled()
+                FieldErrorText(message: errorIfEdited(validation.smtpHost, current: smtpHost, baseline: fieldBaseline.smtpHost))
+                SettingsIntegerField(label: "SMTP Port", value: $smtpPort, error: errorIfEdited(validation.smtpPort, current: smtpPort, baseline: fieldBaseline.smtpPort))
+                TextField("SMTP Username", text: $smtpUsername)
+                    .autocorrectionDisabled()
+                APIKeyField(title: "SMTP Password", text: $smtpPassword)
+            } header: {
+                Text("SMTP")
+            }
+
+            Section {
+                Button {
+                    runTest()
+                } label: {
+                    HStack {
+                        if isTesting {
+                            ProgressView().controlSize(.mini)
+                        }
+                        Text(isTesting ? "Testing…" : "Test Connection")
+                    }
+                }
+                .disabled(!canTest)
+
+                if let testResult {
+                    switch testResult {
+                    case .success:
+                        Label("Connection successful. You can now confirm.", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                    case .failure(let reason):
+                        Label(reason, systemImage: "xmark.circle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
             }
         }
+        .formStyle(.grouped)
+    }
+
+    private func cancel() {
+        testTask?.cancel()
+        dismiss()
     }
 
     private func hydrate() {
@@ -273,6 +335,13 @@ struct EmailAccountEditorSheet: View {
         fromAddress = account.fromAddress
         imapPassword = Keychain.string(forKey: EmailAccountKeychainKeys.imapPassword(for: account.id)) ?? ""
         smtpPassword = Keychain.string(forKey: EmailAccountKeychainKeys.smtpPassword(for: account.id)) ?? ""
+        fieldBaseline = ValidatedFieldBaseline(
+            fromAddress: account.fromAddress,
+            imapHost: account.imapHost,
+            imapPort: account.imapPort,
+            smtpHost: account.smtpHost,
+            smtpPort: account.smtpPort
+        )
     }
 
     private func runTest() {

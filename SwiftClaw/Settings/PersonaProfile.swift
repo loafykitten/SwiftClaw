@@ -8,9 +8,13 @@ import OpenDirectory
 
 enum PersonaProfile {
     static var detectedDisplayName: String {
+        #if os(macOS)
         sanitizedDisplayName(NSFullUserName()) ??
             sanitizedDisplayName(NSUserName()) ??
             "friend"
+        #else
+        "friend"
+        #endif
     }
 
     static var displayName: String {

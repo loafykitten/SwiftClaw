@@ -1,16 +1,15 @@
 import SwiftUI
 import SwiftData
+#if os(iOS)
+import UIKit
+#endif
 
 enum NavigationItem: String, CaseIterable, Identifiable {
     case home = "Home"
     case chats = "Chats"
+    case workspace = "Workspace"
     case deepResearch = "Deep Research"
-    case email = "Email"
-    case calendar = "Calendar"
-    case reminders = "Reminders"
-    case notes = "Notes"
-    case memory = "Memory"
-    case tools = "Tools"
+    case settings = "Settings"
 
     var id: String { rawValue }
 
@@ -18,13 +17,9 @@ enum NavigationItem: String, CaseIterable, Identifiable {
         switch self {
         case .home: "house"
         case .chats: "bubble.left.and.bubble.right"
+        case .workspace: "square.grid.2x2"
         case .deepResearch: "magnifyingglass"
-        case .email: "envelope"
-        case .calendar: "calendar"
-        case .reminders: "checklist"
-        case .notes: "note.text"
-        case .memory: "brain"
-        case .tools: "wrench.and.screwdriver"
+        case .settings: "gear"
         }
     }
 
@@ -33,23 +28,21 @@ enum NavigationItem: String, CaseIterable, Identifiable {
         switch self {
         case .home: HomeView()
         case .chats: ChatsView()
+        case .workspace: WorkspaceView()
         case .deepResearch: DeepResearchView()
-        case .email: EmailView()
-        case .calendar: CalendarView()
-        case .reminders: RemindersView()
-        case .notes: NotesView()
-        case .memory: MemoryView()
-        case .tools: ToolsView()
+        case .settings: SettingsView()
         }
     }
 }
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var router = AppRouter.shared
     @State private var isNotificationBridgeStarted = false
     @State private var backStack: [NavigationItem] = []
     @State private var forwardStack: [NavigationItem] = []
+    @State private var hasAppliedLaunchNavigation = false
     /// Set right before a programmatic assignment so the `onChange` observer
     /// knows not to treat that assignment as a new user navigation.
     @State private var isUpdatingSelectionWithoutRecording = false
@@ -63,11 +56,82 @@ struct ContentView: View {
 
     private var visibleNavigationItems: [NavigationItem] {
         NavigationItem.allCases.filter { item in
-            item != .email || isEmailEnabled
+            if item == .settings {
+                #if os(iOS)
+                return true
+                #else
+                return false
+                #endif
+            }
+
+            return true
         }
     }
 
+    private var compactNavigationItems: [NavigationItem] {
+        [
+            .home,
+            .chats,
+            .workspace,
+            .deepResearch,
+            .settings,
+        ].filter { visibleNavigationItems.contains($0) }
+    }
+
     var body: some View {
+        appShell
+            .toolbar {
+                #if os(macOS)
+                ToolbarItemGroup(placement: .navigation) {
+                    Button("Back", systemImage: "chevron.left", action: goBack)
+                        .disabled(!canGoBack)
+                        .keyboardShortcut("[", modifiers: .command)
+                    Button("Forward", systemImage: "chevron.right", action: goForward)
+                        .disabled(!canGoForward)
+                        .keyboardShortcut("]", modifiers: .command)
+                }
+                #endif
+            }
+            .onChange(of: isEmailEnabled) { _, enabled in
+                pruneHiddenNavigationHistory()
+                ensureVisibleNavigationSelection()
+                if enabled {
+                    EmailWorkflowManager.shared.start(modelContainer: modelContext.container)
+                } else {
+                    EmailWorkflowManager.shared.stop()
+                }
+            }
+            .onAppear {
+                applyLaunchNavigationIfNeeded()
+                startNotificationBridge()
+            }
+            .onDisappear {
+                stopNotificationBridge()
+            }
+            .environment(router)
+            .onChange(of: router.selectedNavigationItem) { oldValue, item in
+                recordNavigation(from: oldValue)
+                if item == .chats { router.clearUnreadChatIfOpened() }
+            }
+            .onChange(of: router.selectedChatID) { _, _ in
+                router.clearUnreadChatIfOpened()
+            }
+    }
+
+    @ViewBuilder
+    private var appShell: some View {
+        #if os(iOS)
+        if horizontalSizeClass == .compact {
+            compactAppShell
+        } else {
+            splitAppShell
+        }
+        #else
+        splitAppShell
+        #endif
+    }
+
+    private var splitAppShell: some View {
         NavigationSplitView {
             SidebarList(
                 items: visibleNavigationItems,
@@ -88,41 +152,45 @@ struct ContentView: View {
                 Text("Select an item")
             }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
-                Button("Back", systemImage: "chevron.left", action: goBack)
-                    .disabled(!canGoBack)
-                    .keyboardShortcut("[", modifiers: .command)
-                Button("Forward", systemImage: "chevron.right", action: goForward)
-                    .disabled(!canGoForward)
-                    .keyboardShortcut("]", modifiers: .command)
+    }
+
+    #if os(iOS)
+    private var compactAppShell: some View {
+        TabView(
+            selection: Binding(
+                get: { router.selectedNavigationItem ?? .home },
+                set: { router.selectedNavigationItem = $0 }
+            )
+        ) {
+            ForEach(compactNavigationItems) { item in
+                compactDestination(for: item)
+                    .tabItem {
+                        Label(item.rawValue, systemImage: item.systemImage)
+                    }
+                    .badge(item == .chats ? router.unreadChatIDs.count : 0)
+                    .tag(item)
             }
         }
-        .onChange(of: isEmailEnabled) { _, enabled in
-            pruneHiddenNavigationHistory()
-            if !enabled, router.selectedNavigationItem == .email {
-                isUpdatingSelectionWithoutRecording = true
-                router.selectedNavigationItem = .home
+        .onAppear(perform: ensureVisibleNavigationSelection)
+    }
+
+    /// Home fills the screen with its own chrome; Chats, Workspace, and
+    /// Settings manage their own `NavigationStack` (they push
+    /// programmatically). Only the simple tabs get a stack here — nesting
+    /// stacks breaks safe-area and transition behavior.
+    @ViewBuilder
+    private func compactDestination(for item: NavigationItem) -> some View {
+        switch item {
+        case .home, .chats, .workspace, .settings:
+            destination(for: item)
+        default:
+            NavigationStack {
+                destination(for: item)
+                    .navigationTitle(item.rawValue)
             }
-            if enabled {
-                EmailWorkflowManager.shared.start(modelContainer: modelContext.container)
-            } else {
-                EmailWorkflowManager.shared.stop()
-            }
-        }
-        .onAppear(perform: startNotificationBridge)
-        .onDisappear {
-            stopNotificationBridge()
-        }
-        .environment(router)
-        .onChange(of: router.selectedNavigationItem) { oldValue, item in
-            recordNavigation(from: oldValue)
-            if item == .chats { router.clearUnreadChatIfOpened() }
-        }
-        .onChange(of: router.selectedChatID) { _, _ in
-            router.clearUnreadChatIfOpened()
         }
     }
+    #endif
 
     @MainActor @ViewBuilder
     private func destination(for item: NavigationItem) -> some View {
@@ -139,13 +207,13 @@ struct ContentView: View {
                 ),
                 emailDispatcher: emailDispatcher(for: modelContext.container)
             )
+        case .workspace:
+            WorkspaceView(
+                pendingEmailID: router.pendingEmailViewID,
+                onEmailPresented: router.clearPendingEmailView
+            )
         default:
-            if item == .email {
-                EmailView(pendingEmailID: router.pendingEmailViewID)
-                    .onAppear { router.clearPendingEmailView() }
-            } else {
-                item.destination
-            }
+            item.destination
         }
     }
 
@@ -197,6 +265,31 @@ struct ContentView: View {
         forwardStack.removeAll { !visibleNavigationItems.contains($0) }
     }
 
+    private func ensureVisibleNavigationSelection() {
+        guard !visibleNavigationItems.isEmpty else { return }
+        if let item = router.selectedNavigationItem, visibleNavigationItems.contains(item) {
+            return
+        }
+        isUpdatingSelectionWithoutRecording = true
+        router.selectedNavigationItem = .home
+    }
+
+    private func applyLaunchNavigationIfNeeded() {
+        #if DEBUG
+        guard !hasAppliedLaunchNavigation else { return }
+        hasAppliedLaunchNavigation = true
+
+        guard let requestedItem = ProcessInfo.processInfo.argumentValue(after: "-SwiftClawInitialNavigationItem"),
+              let item = NavigationItem(launchArgument: requestedItem),
+              visibleNavigationItems.contains(item) else { return }
+
+        isUpdatingSelectionWithoutRecording = true
+        router.selectedNavigationItem = item
+        #else
+        hasAppliedLaunchNavigation = true
+        #endif
+    }
+
     /// Returns a cached `EmailReviewActionDispatcher`. Allocating on every
     /// render was wasteful; the dispatcher now resolves the per-email account
     /// lazily via `EmailAccountStore`, so it no longer holds a `MailClient`.
@@ -231,6 +324,36 @@ struct ContentView: View {
 private final class EmailDispatcherCache {
     var dispatcher: AnyHashableReviewActionDispatcher?
 }
+
+#if DEBUG
+private extension NavigationItem {
+    init?(launchArgument: String) {
+        switch launchArgument.lowercased().filter(\.isLetter) {
+        case "home":
+            self = .home
+        case "chat", "chats":
+            self = .chats
+        case "workspace":
+            self = .workspace
+        case "deepresearch", "research":
+            self = .deepResearch
+        case "setting", "settings":
+            self = .settings
+        default:
+            return nil
+        }
+    }
+}
+
+extension ProcessInfo {
+    func argumentValue(after name: String) -> String? {
+        guard let index = arguments.firstIndex(of: name) else { return nil }
+        let valueIndex = arguments.index(after: index)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        return arguments[valueIndex]
+    }
+}
+#endif
 
 #Preview {
     ContentView()

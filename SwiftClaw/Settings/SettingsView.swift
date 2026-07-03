@@ -7,6 +7,7 @@ private enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
     case providers = "Providers"
     case behaviors = "Model Behaviors"
     case email = "Email"
+    case tools = "Tools"
 
     var id: String { rawValue }
 
@@ -18,19 +19,60 @@ private enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .providers: "server.rack"
         case .behaviors: "slider.horizontal.3"
         case .email: "envelope"
+        case .tools: "wrench.and.screwdriver"
         }
     }
 }
 
+#if DEBUG
+private extension SettingsSection {
+    init?(launchArgument: String) {
+        switch launchArgument.lowercased().filter(\.isLetter) {
+        case "appearance":
+            self = .appearance
+        case "persona":
+            self = .persona
+        case "personality":
+            self = .personality
+        case "providers":
+            self = .providers
+        case "behaviors", "modelbehaviors":
+            self = .behaviors
+        case "email":
+            self = .email
+        case "tools":
+            self = .tools
+        default:
+            return nil
+        }
+    }
+}
+#endif
+
 struct SettingsView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
     @State private var selectedSection: SettingsSection? = .appearance
+    @State private var compactNavigationPath: [SettingsSection] = []
     @State private var backStack: [SettingsSection] = []
     @State private var forwardStack: [SettingsSection] = []
+    @State private var hasAppliedLaunchSettingsSection = false
     /// Set right before a back/forward assignment so the `onChange` observer
     /// knows not to treat that assignment as a new user navigation.
     @State private var isNavigatingViaHistory = false
 
     var body: some View {
+        Group {
+            if horizontalSizeClass == .compact {
+                compactBody
+            } else {
+                regularBody
+            }
+        }
+        .onAppear(perform: applyLaunchSettingsSectionIfNeeded)
+    }
+
+    private var regularBody: some View {
         NavigationSplitView {
             List(selection: $selectedSection) {
                 ForEach(SettingsSection.allCases) { section in
@@ -41,14 +83,16 @@ struct SettingsView: View {
             }
             .listStyle(.sidebar)
             .frame(minWidth: 180)
+            #if os(macOS)
             .toolbar(removing: .sidebarToggle)
+            #endif
         } detail: {
             detailContent
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .navigationTitle(selectedSection?.rawValue ?? "Settings")
         }
-        .frame(minWidth: 640, minHeight: 560)
         .toolbar {
+            #if os(macOS)
             ToolbarItemGroup(placement: .navigation) {
                 Button("Back", systemImage: "chevron.left", action: goBack)
                     .disabled(backStack.isEmpty)
@@ -57,7 +101,11 @@ struct SettingsView: View {
                     .disabled(forwardStack.isEmpty)
                     .keyboardShortcut("]", modifiers: .command)
             }
+            #endif
         }
+        #if os(macOS)
+        .frame(minWidth: 640, minHeight: 560)
+        #endif
         .onChange(of: selectedSection) { oldValue, _ in
             guard !isNavigatingViaHistory else {
                 isNavigatingViaHistory = false
@@ -66,6 +114,21 @@ struct SettingsView: View {
             if let oldValue {
                 backStack.append(oldValue)
                 forwardStack.removeAll()
+            }
+        }
+    }
+
+    private var compactBody: some View {
+        NavigationStack(path: $compactNavigationPath) {
+            List(SettingsSection.allCases) { section in
+                NavigationLink(value: section) {
+                    Label(section.rawValue, systemImage: section.systemImage)
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationDestination(for: SettingsSection.self) { section in
+                sectionContent(for: section)
+                    .navigationTitle(section.rawValue)
             }
         }
     }
@@ -84,9 +147,36 @@ struct SettingsView: View {
         selectedSection = next
     }
 
+    private func applyLaunchSettingsSectionIfNeeded() {
+        #if DEBUG
+        guard !hasAppliedLaunchSettingsSection else { return }
+        hasAppliedLaunchSettingsSection = true
+
+        guard let requestedSection = ProcessInfo.processInfo.argumentValue(after: "-SwiftClawInitialSettingsSection"),
+              let section = SettingsSection(launchArgument: requestedSection) else { return }
+
+        selectedSection = section
+        if horizontalSizeClass == .compact {
+            compactNavigationPath = [section]
+        }
+        #else
+        hasAppliedLaunchSettingsSection = true
+        #endif
+    }
+
     @ViewBuilder
     private var detailContent: some View {
-        switch selectedSection {
+        if let selectedSection {
+            sectionContent(for: selectedSection)
+        } else {
+            Text("Select a settings section")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func sectionContent(for section: SettingsSection) -> some View {
+        switch section {
         case .appearance:
             AppearanceSettingsView()
         case .persona:
@@ -99,9 +189,8 @@ struct SettingsView: View {
             BehaviorSettingsView()
         case .email:
             EmailSettingsView()
-        case nil:
-            Text("Select a settings section")
-                .foregroundStyle(.secondary)
+        case .tools:
+            ToolsView()
         }
     }
 }

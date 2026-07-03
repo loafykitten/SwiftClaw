@@ -11,7 +11,7 @@ struct AppRouterUnreadChatTests {
         defer { router.resetForTesting() }
 
         let chatID = UUID()
-        router.selectedNavigationItem = .email
+        router.selectedNavigationItem = .workspace
 
         router.noteNewChatMessages(in: chatID)
 

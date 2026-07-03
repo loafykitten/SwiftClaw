@@ -36,6 +36,7 @@ struct EmailSettingsView: View {
     @State private var presentingNewAccount: Bool = false
     @State private var dailyReviewTimes = SettingsStorage.loadEmailReviewDailyTimes()
     @State private var syncMonitor = MailSyncMonitor.shared
+    @State private var hasAppliedLaunchPresentation = false
 
     /// Picker selection binding for the review interval. Reads the nearest
     /// offered option to the stored seconds (so a stale value still shows a
@@ -288,6 +289,7 @@ struct EmailSettingsView: View {
             SettingsStorage.saveEmailReviewDailyTimes(newValue)
             notifyReviewScheduleChanged()
         }
+        .onAppear(perform: applyLaunchPresentationIfNeeded)
     }
 
     private var dailyTimesEditor: some View {
@@ -346,6 +348,19 @@ struct EmailSettingsView: View {
     private func removeDailyTime(at index: Int) {
         guard dailyReviewTimes.indices.contains(index), dailyReviewTimes.count > 1 else { return }
         dailyReviewTimes.remove(at: index)
+    }
+
+    private func applyLaunchPresentationIfNeeded() {
+        #if DEBUG
+        guard !hasAppliedLaunchPresentation else { return }
+        hasAppliedLaunchPresentation = true
+
+        if ProcessInfo.processInfo.arguments.contains("-SwiftClawPresentEmailAddAccount") {
+            presentingNewAccount = true
+        }
+        #else
+        hasAppliedLaunchPresentation = true
+        #endif
     }
 
     private func notifyReviewScheduleChanged() {

@@ -1,6 +1,8 @@
+import Foundation
+import Observation
 #if os(macOS)
 import AppKit
-import Observation
+#endif
 
 @MainActor
 @Observable
@@ -8,6 +10,7 @@ final class ImageAttachmentComposerController {
     var attachments: [ImageAttachmentRecord] = []
     var errorMessage: String?
     var isDropTargeted = false
+    var isFileImporterPresented = false
     var previewSelection: ImageAttachmentPreviewSelection?
 
     @ObservationIgnored private let store: ImageAttachmentStore
@@ -51,6 +54,7 @@ final class ImageAttachmentComposerController {
 
     @discardableResult
     func pasteImagesFromClipboard(isEnabled: Bool) -> Bool {
+        #if os(macOS)
         guard isEnabled else {
             return false
         }
@@ -62,6 +66,9 @@ final class ImageAttachmentComposerController {
 
         startImport(.sources(sources))
         return true
+        #else
+        false
+        #endif
     }
 
     func chooseImageAttachments(isEnabled: Bool) {
@@ -69,6 +76,7 @@ final class ImageAttachmentComposerController {
             return
         }
 
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.allowedContentTypes = ImageImportPipeline.openPanelContentTypes
         panel.allowsMultipleSelection = true
@@ -81,6 +89,26 @@ final class ImageAttachmentComposerController {
         }
 
         startImport(.fileURLs(panel.urls))
+        #else
+        isFileImporterPresented = true
+        #endif
+    }
+
+    func completeFileImport(_ result: Result<[URL], any Error>, isEnabled: Bool) {
+        guard isEnabled else {
+            return
+        }
+
+        switch result {
+        case .success(let urls):
+            guard !urls.isEmpty else {
+                return
+            }
+
+            startImport(.fileURLs(urls))
+        case .failure(let error):
+            errorMessage = error.localizedDescription
+        }
     }
 
     func removeAttachment(_ attachment: ImageAttachmentRecord) {
@@ -163,7 +191,7 @@ final class ImageAttachmentComposerController {
         }
     }
 
-    private func images(for request: ImageAttachmentImportRequest) async throws -> [NSImage] {
+    private func images(for request: ImageAttachmentImportRequest) async throws -> [PlatformImage] {
         switch request {
         case .sources(let sources):
             try await ImageImportPipeline.images(fromSources: sources)
@@ -193,4 +221,3 @@ private enum ImageAttachmentImportRequest: Sendable {
         }
     }
 }
-#endif

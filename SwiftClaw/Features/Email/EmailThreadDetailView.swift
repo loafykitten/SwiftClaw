@@ -255,9 +255,10 @@ struct EmailMessageCard: View {
                     }
                     .buttonStyle(.borderless)
                     .help("Show notes")
-                    .popover(isPresented: $showingNotes) {
-                        EmailNotesPopover(emails: [email])
-                    }
+                    .emailNotesPresentation(
+                        isPresented: $showingNotes,
+                        emails: [email]
+                    )
                 }
                 Button {
                     onToggleFlag()
@@ -362,7 +363,9 @@ struct EmailNoteEditor: View {
                 save()
             }
         }
+        #if os(macOS)
         .frame(minWidth: 440, minHeight: 360)
+        #endif
     }
 
     private func save() {

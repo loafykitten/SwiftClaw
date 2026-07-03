@@ -1,5 +1,7 @@
-import AppKit
+import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 struct ImageAttachmentLimits: Sendable {
     var maxImageCount = 10
@@ -71,7 +73,7 @@ final class ImageAttachmentStore {
     }
 
     func importImages(
-        _ images: [NSImage],
+        _ images: [PlatformImage],
         existingAttachments: [ImageAttachmentRecord]
     ) throws -> [ImageAttachmentRecord] {
         guard !images.isEmpty else {
@@ -190,8 +192,8 @@ final class ImageAttachmentStore {
         rootDirectory.appendingPathComponent("ChatImages", isDirectory: true)
     }
 
-    private func normalizedJPEGData(from image: NSImage) throws -> (data: Data, width: Int, height: Int) {
-        guard let sourceImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+    private func normalizedJPEGData(from image: PlatformImage) throws -> (data: Data, width: Int, height: Int) {
+        guard let sourceImage = image.attachmentCGImage else {
             throw ImageAttachmentError.noReadableImage
         }
 
@@ -241,7 +243,7 @@ final class ImageAttachmentStore {
         }
 
         let rect = CGRect(x: 0, y: 0, width: width, height: height)
-        context.setFillColor(NSColor.white.cgColor)
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         context.fill(rect)
         context.interpolationQuality = .high
         context.draw(image, in: rect)
@@ -249,11 +251,23 @@ final class ImageAttachmentStore {
     }
 
     private func jpegData(from image: CGImage, quality: Double) -> Data? {
-        let representation = NSBitmapImageRep(cgImage: image)
-        return representation.representation(
-            using: .jpeg,
-            properties: [.compressionFactor: quality]
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            data,
+            UTType.jpeg.identifier as CFString,
+            1,
+            nil
+        ) else {
+            return nil
+        }
+
+        CGImageDestinationAddImage(
+            destination,
+            image,
+            [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary
         )
+
+        return CGImageDestinationFinalize(destination) ? data as Data : nil
     }
 
     private func createDirectoryIfNeeded(_ url: URL) throws {

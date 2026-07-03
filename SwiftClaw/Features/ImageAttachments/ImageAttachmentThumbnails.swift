@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// Horizontal strip of removable thumbnails shown in the composer for the
@@ -106,8 +105,8 @@ private struct ImageAttachmentThumbnail: View {
 
     var body: some View {
         ZStack {
-            if let image = NSImage(contentsOf: attachment.fileURL) {
-                Image(nsImage: image)
+            if let image = PlatformImage.attachmentImage(contentsOf: attachment.fileURL) {
+                Image(platformImage: image)
                     .resizable()
                     .interpolation(.high)
                     .scaledToFill()

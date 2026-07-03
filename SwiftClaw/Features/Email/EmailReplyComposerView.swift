@@ -49,7 +49,9 @@ struct EmailReplyComposerView: View {
                 startSending()
             }
         }
+        #if os(macOS)
         .frame(minWidth: 520, minHeight: 480)
+        #endif
         .onAppear(perform: prefill)
         .onDisappear {
             sendTask?.cancel()

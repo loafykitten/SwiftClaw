@@ -21,7 +21,9 @@ struct ModelCapabilitySelector: View {
                         }
                     )
                 )
+                #if os(macOS)
                 .toggleStyle(.checkbox)
+                #endif
             }
         }
         .font(.caption)

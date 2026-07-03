@@ -1,3 +1,4 @@
+#if os(macOS)
 import AppKit
 import SwiftUI
 
@@ -100,3 +101,4 @@ private extension NSEvent {
             || modifiers.contains(.option)
     }
 }
+#endif

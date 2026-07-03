@@ -1,5 +1,3 @@
-#if os(macOS)
-import AppKit
 import CoreTransferable
 import Foundation
 import UniformTypeIdentifiers
@@ -106,7 +104,7 @@ struct ImageImportTransfer: Transferable, Sendable {
     private nonisolated static func temporaryImportDirectory(fileManager: FileManager) throws -> URL {
         let baseDirectory = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser
+            ?? fileManager.temporaryDirectory
 
         let directoryURL = baseDirectory
             .appendingPathComponent("SwiftClaw", isDirectory: true)
@@ -175,4 +173,3 @@ struct ImageImportSource: Sendable {
         try? fileManager.removeItem(at: temporaryDirectoryURL)
     }
 }
-#endif

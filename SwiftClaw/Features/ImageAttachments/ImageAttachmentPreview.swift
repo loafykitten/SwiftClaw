@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// Identifies the set of attachments and the starting image for a full-size
@@ -98,6 +97,7 @@ struct ImageAttachmentPreviewer: View {
                 .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         }
         .shadow(color: .black.opacity(0.35), radius: 24, x: 0, y: 12)
+        #if os(macOS)
         .background {
             ImagePreviewKeyMonitor(
                 isEnabled: true,
@@ -107,13 +107,14 @@ struct ImageAttachmentPreviewer: View {
             )
             .frame(width: 0, height: 0)
         }
+        #endif
     }
 
     @ViewBuilder
     private var currentImage: some View {
         if let attachment = attachments[safe: selectedIndex],
-           let image = NSImage(contentsOf: attachment.fileURL) {
-            Image(nsImage: image)
+           let image = PlatformImage.attachmentImage(contentsOf: attachment.fileURL) {
+            Image(platformImage: image)
                 .resizable()
                 .interpolation(.high)
                 .scaledToFit()

@@ -1,7 +1,10 @@
-#if os(macOS)
-import AppKit
 import Foundation
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#elseif os(iOS)
+import UIKit
+#endif
 
 @MainActor
 enum ImageImportPipeline {
@@ -22,11 +25,11 @@ enum ImageImportPipeline {
 
     static let openPanelContentTypes: [UTType] = preferredImageContentTypes + [.image]
 
-    static func images(from transfers: [ImageImportTransfer]) async throws -> [NSImage] {
+    static func images(from transfers: [ImageImportTransfer]) async throws -> [PlatformImage] {
         try await images(fromSources: transfers.map(\.source))
     }
 
-    static func images(fromFileURLs urls: [URL]) async throws -> [NSImage] {
+    static func images(fromFileURLs urls: [URL]) async throws -> [PlatformImage] {
         try await images(
             fromSources: urls.map {
                 .fileURL(
@@ -38,9 +41,10 @@ enum ImageImportPipeline {
         )
     }
 
+    #if os(macOS)
     static func imagesForPaste(
         from pasteboard: NSPasteboard = .general
-    ) async throws -> [NSImage] {
+    ) async throws -> [PlatformImage] {
         try await images(fromSources: pasteboardSources(from: pasteboard))
     }
 
@@ -59,8 +63,9 @@ enum ImageImportPipeline {
 
         return collectedSources
     }
+    #endif
 
-    static func images(fromSources sources: [ImageImportSource]) async throws -> [NSImage] {
+    static func images(fromSources sources: [ImageImportSource]) async throws -> [PlatformImage] {
         defer {
             removeTemporaryFiles(from: sources)
         }
@@ -73,13 +78,13 @@ enum ImageImportPipeline {
         return images
     }
 
-    static func images(fromProviders providers: [NSItemProvider]) async -> [NSImage] {
+    static func images(fromProviders providers: [NSItemProvider]) async -> [PlatformImage] {
         let sources = await providerSources(from: providers)
         return await bestEffortImages(fromSources: sources)
     }
 
-    private static func decodeImages(fromSources sources: [ImageImportSource]) async throws -> [NSImage] {
-        var images: [NSImage] = []
+    private static func decodeImages(fromSources sources: [ImageImportSource]) async throws -> [PlatformImage] {
+        var images: [PlatformImage] = []
 
         for source in sources {
             try Task.checkCancellation()
@@ -94,12 +99,12 @@ enum ImageImportPipeline {
         return images
     }
 
-    private static func bestEffortImages(fromSources sources: [ImageImportSource]) async -> [NSImage] {
+    private static func bestEffortImages(fromSources sources: [ImageImportSource]) async -> [PlatformImage] {
         defer {
             removeTemporaryFiles(from: sources)
         }
 
-        var images: [NSImage] = []
+        var images: [PlatformImage] = []
 
         for source in sources {
             guard !Task.isCancelled, let image = image(from: source) else {
@@ -112,14 +117,14 @@ enum ImageImportPipeline {
         return images
     }
 
-    private static func image(from source: ImageImportSource) -> NSImage? {
+    private static func image(from source: ImageImportSource) -> PlatformImage? {
         switch source.payload {
         case .data(let data, let contentTypeIdentifier):
             guard isSupportedImageContentType(contentTypeIdentifier) else {
                 return nil
             }
 
-            return NSImage(data: data)
+            return PlatformImage(data: data)
 
         case .fileURL(let url, let contentTypeIdentifier, let requiresSecurityScopedAccess, _):
             guard url.isFileURL else {
@@ -145,10 +150,11 @@ enum ImageImportPipeline {
                 return nil
             }
 
-            return NSImage(data: data)
+            return PlatformImage(data: data)
         }
     }
 
+    #if os(macOS)
     private static func sources(fromPasteboardItem item: NSPasteboardItem) -> [ImageImportSource] {
         if let url = fileURL(from: item) {
             return [
@@ -191,6 +197,7 @@ enum ImageImportPipeline {
 
         return nil
     }
+    #endif
 
     private static func removeTemporaryFiles(from sources: [ImageImportSource]) {
         for source in sources {
@@ -271,4 +278,3 @@ private extension NSItemProvider {
         registeredTypeIdentifiers.compactMap(UTType.init)
     }
 }
-#endif

@@ -6,6 +6,7 @@ let package = Package(
     name: "SwiftClaw",
     platforms: [
         .macOS("27.0"),
+        .iOS("27.0"),
     ],
     products: [
         .executable(

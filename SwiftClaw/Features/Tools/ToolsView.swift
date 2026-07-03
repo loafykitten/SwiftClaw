@@ -33,7 +33,7 @@ struct ToolsView: View {
                     } header: {
                         Text("Features")
                     } footer: {
-                        Text("Features can be enabled or disabled; enabled features appear in the sidebar.")
+                        Text("Features can be enabled or disabled; enabled workspace features appear in Workspace.")
                             .font(.caption)
                     }
                 }

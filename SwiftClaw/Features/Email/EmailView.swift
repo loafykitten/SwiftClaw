@@ -3,6 +3,7 @@ import SwiftData
 import SwiftUI
 
 struct EmailView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
 
@@ -88,11 +89,20 @@ struct EmailView: View {
             } else if !hasAnyMail {
                 emptyState
             } else {
-                threadLayout(
-                    filtered: filtered,
-                    selected: selected,
-                    visibleMailboxes: visibleMailboxes
-                )
+                if horizontalSizeClass == .compact {
+                    compactThreadLayout(
+                        inbox: inbox,
+                        archive: archive,
+                        trash: trash,
+                        visibleMailboxes: visibleMailboxes
+                    )
+                } else {
+                    threadLayout(
+                        filtered: filtered,
+                        selected: selected,
+                        visibleMailboxes: visibleMailboxes
+                    )
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -120,7 +130,7 @@ struct EmailView: View {
                 // Open Settings → Email directly rather than via a sheet
                 // containing only a "Open Settings" link (which forces a
                 // second click to reach the real settings pane).
-                SettingsLink {
+                AppSettingsButton {
                     Label("Email Settings", systemImage: "gear")
                 }
                 .help("Open Email settings")
@@ -197,6 +207,79 @@ struct EmailView: View {
         }
     }
 
+    private func compactThreadLayout(
+        inbox: [EmailThread],
+        archive: [EmailThread],
+        trash: [EmailThread],
+        visibleMailboxes: [EmailMailbox]
+    ) -> some View {
+        let allThreads = inbox + archive + trash
+
+        // No NavigationStack here: in compact widths this view is pushed onto
+        // the Workspace stack, so mailboxes and threads push onto that stack.
+        return List {
+            Section {
+                ForEach(visibleMailboxes) { mailbox in
+                    NavigationLink(value: mailbox) {
+                        Label(mailbox.rawValue, systemImage: mailbox.systemImage)
+                    }
+                }
+            } footer: {
+                if let status = MailSyncMonitor.shared.statusLabel, !status.isEmpty {
+                    Label(status, systemImage: MailSyncMonitor.shared.isSyncing ? "arrow.triangle.2.circlepath" : "info.circle")
+                } else if let lastSyncDate = MailSyncMonitor.shared.lastSyncDate {
+                    Label("Synced \(lastSyncDate.formatted(.relative(presentation: .named)))", systemImage: "checkmark.circle")
+                }
+            }
+        }
+        .navigationDestination(for: EmailMailbox.self) { mailbox in
+            EmailThreadNavigationList(
+                mailbox: mailbox,
+                threads: threads(
+                    for: mailbox,
+                    inbox: inbox,
+                    archive: archive,
+                    trash: trash
+                )
+            )
+            .navigationTitle(mailbox.rawValue)
+        }
+        .navigationDestination(for: UUID.self) { threadID in
+            if let thread = allThreads.first(where: { $0.id == threadID }) {
+                EmailThreadDetailView(
+                    thread: thread,
+                    onReply: { email in composingReplyFor = email }
+                )
+                .navigationTitle(thread.latestMessage?.subject ?? "(no subject)")
+                .toolbarTitleDisplayMode(.inline)
+            } else {
+                FeaturePlaceholderView(
+                    systemImage: "envelope.open",
+                    title: "No thread selected",
+                    message: "Pick one from the list."
+                )
+            }
+        }
+    }
+
+    private func threads(
+        for mailbox: EmailMailbox,
+        inbox: [EmailThread],
+        archive: [EmailThread],
+        trash: [EmailThread]
+    ) -> [EmailThread] {
+        switch mailbox {
+        case .inbox:
+            inbox
+        case .flagged:
+            inbox.filter { $0.isFlagged }
+        case .archive:
+            archive
+        case .trash:
+            trash
+        }
+    }
+
     private var unconfiguredState: some View {
         FeaturePlaceholderView(
             systemImage: "envelope",
@@ -204,7 +287,7 @@ struct EmailView: View {
             message: "Add IMAP and SMTP credentials in Settings → Email."
         )
         .overlay(alignment: .bottom) {
-            SettingsLink {
+            AppSettingsButton {
                 Text("Open Email Settings")
             }
             .buttonStyle(.borderedProminent)
@@ -338,6 +421,7 @@ private struct EmailMailboxSidebar: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
 
+            #if os(macOS)
             List(selection: $selectedMailbox) {
                 ForEach(visibleMailboxes) { mailbox in
                     Label(mailbox.rawValue, systemImage: mailbox.systemImage)
@@ -346,6 +430,20 @@ private struct EmailMailboxSidebar: View {
                 }
             }
             .listStyle(.sidebar)
+            #else
+            List {
+                ForEach(visibleMailboxes) { mailbox in
+                    Button {
+                        selectedMailbox = mailbox
+                    } label: {
+                        Label(mailbox.rawValue, systemImage: mailbox.systemImage)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selectedMailbox == mailbox ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+                }
+            }
+            .listStyle(.sidebar)
+            #endif
 
             footer
         }
@@ -408,6 +506,7 @@ private struct EmailThreadListView: View {
                     message: "This mailbox is empty."
                 )
             } else {
+                #if os(macOS)
                 List(selection: $selectedThreadID) {
                     ForEach(threads) { thread in
                         EmailThreadRow(
@@ -420,6 +519,52 @@ private struct EmailThreadListView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                #else
+                List {
+                    ForEach(threads) { thread in
+                        Button {
+                            selectedThreadID = thread.id
+                        } label: {
+                            EmailThreadRow(
+                                thread: thread,
+                                isSelected: thread.id == selectedThreadID
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .sidebarRowState(isEmphasized: thread.unreadCount > 0)
+                        .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
+                    }
+                }
+                .listStyle(.sidebar)
+                #endif
+            }
+        }
+    }
+}
+
+private struct EmailThreadNavigationList: View {
+    let mailbox: EmailMailbox
+    let threads: [EmailThread]
+
+    var body: some View {
+        Group {
+            if threads.isEmpty {
+                FeaturePlaceholderView(
+                    systemImage: mailbox.systemImage,
+                    title: "Nothing here",
+                    message: "This mailbox is empty."
+                )
+            } else {
+                List {
+                    ForEach(threads) { thread in
+                        NavigationLink(value: thread.id) {
+                            EmailThreadRow(
+                                thread: thread,
+                                isSelected: false
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -466,9 +611,10 @@ private struct EmailThreadRow: View {
                     }
                     .buttonStyle(.borderless)
                     .help("Show notes")
-                    .popover(isPresented: $showingNotes) {
-                        EmailNotesPopover(emails: thread.sortedMessages)
-                    }
+                    .emailNotesPresentation(
+                        isPresented: $showingNotes,
+                        emails: thread.sortedMessages
+                    )
                 }
             }
             Text(latest?.subject ?? "(no subject)")

@@ -19,10 +19,6 @@ final class AppRouter {
 
     private init() {}
 
-    deinit {
-        notificationObservers.forEach(NotificationCenter.default.removeObserver)
-    }
-
     func startNotificationBridge() {
         notificationBridgeUseCount += 1
         guard notificationObservers.isEmpty else { return }
@@ -69,7 +65,7 @@ final class AppRouter {
 
     func showEmail(_ emailID: UUID) {
         pendingEmailViewID = emailID
-        selectedNavigationItem = .email
+        selectedNavigationItem = .workspace
     }
 
     func clearPendingEmailView() {
