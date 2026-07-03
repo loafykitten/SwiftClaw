@@ -13,12 +13,19 @@ enum NavigationItem: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var navigationLabel: String {
+        switch self {
+        case .deepResearch: "Research"
+        default: rawValue
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .home: "house"
         case .chats: "bubble.left.and.bubble.right"
         case .workspace: "square.grid.2x2"
-        case .deepResearch: "magnifyingglass"
+        case .deepResearch: "doc.text.magnifyingglass"
         case .settings: "gear"
         }
     }
@@ -139,7 +146,7 @@ struct ContentView: View {
                     get: { router.selectedNavigationItem },
                     set: { router.selectedNavigationItem = $0 }
                 ),
-                title: { $0.rawValue },
+                title: { $0.navigationLabel },
                 systemImage: { $0.systemImage },
                 showsBadge: { $0 == .chats && router.hasUnreadChats }
             )
@@ -165,7 +172,7 @@ struct ContentView: View {
             ForEach(compactNavigationItems) { item in
                 compactDestination(for: item)
                     .tabItem {
-                        Label(item.rawValue, systemImage: item.systemImage)
+                        Label(item.navigationLabel, systemImage: item.systemImage)
                     }
                     .badge(item == .chats ? router.unreadChatIDs.count : 0)
                     .tag(item)

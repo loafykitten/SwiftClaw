@@ -1,3 +1,4 @@
+import SwiftData
 import SwiftUI
 
 private enum WorkspaceItem: String, CaseIterable, Hashable, Identifiable {
@@ -27,6 +28,8 @@ struct WorkspaceView: View {
     var pendingEmailID: UUID?
     var onEmailPresented: () -> Void = {}
 
+    @Query(sort: \Email.date, order: .reverse)
+    private var emails: [Email]
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
 
     @State private var navigationPath = NavigationPath()
@@ -36,12 +39,32 @@ struct WorkspaceView: View {
         WorkspaceItem.allCases
     }
 
+    private var widgetColumns: [GridItem] {
+        #if os(iOS)
+        [GridItem(.adaptive(minimum: 220), spacing: 16)]
+        #else
+        [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 16)]
+        #endif
+    }
+
     var body: some View {
+        let emailSummary = WorkspaceEmailSummary(emails: emails)
+
         NavigationStack(path: $navigationPath) {
-            List(visibleItems) { item in
-                NavigationLink(value: item) {
-                    Label(item.rawValue, systemImage: item.systemImage)
+            ScrollView {
+                LazyVGrid(
+                    columns: widgetColumns,
+                    alignment: .leading,
+                    spacing: 16
+                ) {
+                    ForEach(visibleItems) { item in
+                        NavigationLink(value: item) {
+                            WorkspaceWidgetPanel(item: item, emailSummary: emailSummary)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
+                .padding(20)
             }
             .navigationTitle("Workspace")
             .navigationDestination(for: WorkspaceItem.self) { item in
@@ -131,4 +154,91 @@ private extension WorkspaceItem {
 
 #Preview {
     WorkspaceView()
+}
+
+private struct WorkspaceWidgetPanel: View {
+    let item: WorkspaceItem
+    let emailSummary: WorkspaceEmailSummary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                Image(systemName: item.systemImage)
+                    .font(.title2)
+                    .foregroundStyle(.tint)
+                    .frame(width: 28, height: 28)
+
+                Text(item.rawValue)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+            }
+
+            if item == .email {
+                WorkspaceEmailStatsView(summary: emailSummary)
+            } else {
+                Text("Coming soon")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
+        .padding(18)
+        .glassEffect(in: .rect(cornerRadius: 16.0))
+        .contentShape(.rect(cornerRadius: 16.0))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct WorkspaceEmailStatsView: View {
+    let summary: WorkspaceEmailSummary
+
+    var body: some View {
+        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+            WorkspaceEmailStatRow(
+                systemImage: "envelope.badge",
+                count: summary.unreadCount,
+                label: "Unread"
+            )
+            WorkspaceEmailStatRow(
+                systemImage: "sparkles",
+                count: summary.newCount,
+                label: "New since review"
+            )
+            WorkspaceEmailStatRow(
+                systemImage: "flag",
+                count: summary.flaggedCount,
+                label: "Flagged"
+            )
+            WorkspaceEmailStatRow(
+                systemImage: "note.text",
+                count: summary.notatedCount,
+                label: "Notated"
+            )
+        }
+    }
+}
+
+private struct WorkspaceEmailStatRow: View {
+    let systemImage: String
+    let count: Int
+    let label: String
+
+    var body: some View {
+        GridRow {
+            Image(systemName: systemImage)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .frame(width: 20, height: 20)
+            Text(count, format: .number)
+                .font(.subheadline.monospacedDigit())
+                .fontWeight(.semibold)
+                .frame(minWidth: 24, alignment: .leading)
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
 }
