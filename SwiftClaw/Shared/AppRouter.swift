@@ -11,6 +11,7 @@ final class AppRouter {
 
     var selectedNavigationItem: NavigationItem? = .home
     var selectedChatID: UUID?
+    var pendingSettingsSection: SettingsSection?
     private(set) var unreadChatIDs: Set<UUID> = []
     var pendingEmailViewID: UUID?
 
@@ -68,6 +69,18 @@ final class AppRouter {
         selectedNavigationItem = .workspace
     }
 
+    func openSettings(section: SettingsSection? = nil) {
+        pendingSettingsSection = section
+        #if os(iOS)
+        selectedNavigationItem = .settings
+        #endif
+    }
+
+    func clearPendingSettingsSection(_ section: SettingsSection) {
+        guard pendingSettingsSection == section else { return }
+        pendingSettingsSection = nil
+    }
+
     func clearPendingEmailView() {
         pendingEmailViewID = nil
     }
@@ -120,6 +133,7 @@ final class AppRouter {
     func resetForTesting() {
         selectedNavigationItem = .home
         selectedChatID = nil
+        pendingSettingsSection = nil
         unreadChatIDs.removeAll()
         pendingEmailViewID = nil
         syncDockBadge()

@@ -1207,6 +1207,16 @@ private struct UserAvatarView: View {
     }
 
     var body: some View {
+        AppSettingsButton(section: .persona) {
+            avatarContent
+        }
+        .buttonStyle(.plain)
+        .help("Open Persona settings")
+        .accessibilityLabel(displayName)
+        .accessibilityHint("Opens Persona settings")
+    }
+
+    private var avatarContent: some View {
         ZStack {
             #if os(macOS)
             if let image {
@@ -1230,7 +1240,7 @@ private struct UserAvatarView: View {
         }
         .frame(width: ChatAvatarMetrics.size, height: ChatAvatarMetrics.size)
         .clipShape(Circle())
-        .accessibilityLabel(displayName)
+        .contentShape(Circle())
     }
 }
 

@@ -67,4 +67,14 @@ struct AppRouterUnreadChatTests {
         #expect(router.hasUnreadMessages(in: chatID) == false)
         #expect(router.hasUnreadChats == false)
     }
+
+    @Test func openingSettingsStoresRequestedSection() {
+        let router = AppRouter.shared
+        router.resetForTesting()
+        defer { router.resetForTesting() }
+
+        router.openSettings(section: .persona)
+
+        #expect(router.pendingSettingsSection == .persona)
+    }
 }

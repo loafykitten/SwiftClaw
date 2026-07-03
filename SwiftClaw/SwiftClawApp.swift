@@ -30,6 +30,7 @@ struct SwiftClawApp: App {
 
         Window("SwiftClaw Settings", id: Self.settingsWindowID) {
             SettingsView()
+                .environment(AppRouter.shared)
                 .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
         }
         .windowResizability(.contentMinSize)
@@ -196,6 +197,7 @@ private struct OpenSettingsButton: View {
 
     var body: some View {
         Button("Settings…") {
+            AppRouter.shared.openSettings()
             openWindow(id: windowID)
         }
         .keyboardShortcut(",", modifiers: .command)

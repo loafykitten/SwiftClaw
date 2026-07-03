@@ -2,6 +2,12 @@ import Foundation
 import os
 
 enum HomeDayGreetingGenerator {
+    struct UserNameHighlightParts: Equatable {
+        let prefix: String
+        let userName: String
+        let suffix: String
+    }
+
     static let logger = AppLog.make("HomeDayGreeting")
 
     static let initial = " "
@@ -93,6 +99,43 @@ enum HomeDayGreetingGenerator {
         }
 
         return formattedGreeting(from: cleaned, userName: userName)
+    }
+
+    static func userNameHighlightParts(
+        in greeting: String,
+        userName rawUserName: String = currentUserName
+    ) -> UserNameHighlightParts? {
+        guard let userName = sanitizedUserName(rawUserName) else { return nil }
+
+        let trimmedGreeting = greeting.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedGreeting.isEmpty else { return nil }
+
+        let punctuation = CharacterSet(charactersIn: ".!?")
+        var phrase = trimmedGreeting
+        var suffix = ""
+        if let lastScalar = phrase.unicodeScalars.last, punctuation.contains(lastScalar) {
+            suffix = String(lastScalar)
+            phrase.removeLast()
+            phrase = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        guard let nameRange = phrase.range(
+            of: userName,
+            options: [.caseInsensitive, .anchored, .backwards]
+        ) else {
+            return nil
+        }
+
+        if nameRange.lowerBound > phrase.startIndex {
+            let previousIndex = phrase.index(before: nameRange.lowerBound)
+            guard phrase[previousIndex].isWhitespace else { return nil }
+        }
+
+        return UserNameHighlightParts(
+            prefix: String(phrase[..<nameRange.lowerBound]),
+            userName: String(phrase[nameRange]),
+            suffix: suffix
+        )
     }
 
     private static func formattedGreeting(from rawPhrase: String, userName: String) -> String {

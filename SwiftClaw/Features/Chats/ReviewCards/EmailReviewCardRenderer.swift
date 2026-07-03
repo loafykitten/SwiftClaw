@@ -69,18 +69,13 @@ struct EmailReviewCardRenderer: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(payload.items) { item in
-                    EmailReviewCardRow(
-                        item: item,
-                        slideAction: slideAction,
-                        selectAction: { action in selectAction(action, for: item) },
-                        performAction: { action in perform(action: action, for: item) },
-                        viewEmail: { onItemView(item.itemID) }
-                    )
-                    if item.id != payload.items.last?.id {
-                        Divider()
-                    }
-                }
+                EmailReviewCardItemList(
+                    items: payload.items,
+                    slideAction: slideAction,
+                    selectAction: selectAction,
+                    performAction: perform,
+                    viewEmail: onItemView
+                )
             }
         }
         .padding(.horizontal, 14)
@@ -146,9 +141,137 @@ struct EmailReviewCardRenderer: View {
     }
 }
 
+private struct EmailReviewCardItemList: View {
+    let items: [ReviewItem]
+    let slideAction: ReviewActionToken
+    let selectAction: (ReviewActionToken, ReviewItem) -> Void
+    let performAction: (ReviewActionToken, ReviewItem) -> Void
+    let viewEmail: (UUID) -> Void
+
+    @State private var itemHeights: [UUID: CGFloat] = [:]
+
+    private let visibleItemCount = 3.5
+    private let itemSpacing: CGFloat = 12
+    private let fallbackItemHeight: CGFloat = 96
+
+    private var shouldClamp: Bool {
+        items.count > 3
+    }
+
+    private var fullHeight: CGFloat {
+        let heights = items.map { itemHeights[$0.id] ?? fallbackItemHeight }
+        let spacing = itemSpacing * CGFloat(max(0, items.count - 1))
+        return heights.reduce(0, +) + spacing
+    }
+
+    private var clampedHeight: CGFloat {
+        let fullItems = Int(visibleItemCount.rounded(.down))
+        let partialItem = visibleItemCount - Double(fullItems)
+        let visibleItems = min(items.count, fullItems + (partialItem > 0 ? 1 : 0))
+        guard visibleItems > 0 else { return 0 }
+
+        let visibleHeights = items.prefix(visibleItems).enumerated().map { index, item in
+            let height = itemHeights[item.id] ?? fallbackItemHeight
+            return index == fullItems ? height * partialItem : height
+        }
+        let visibleSpacing = itemSpacing * CGFloat(max(0, visibleItems - 1))
+        return visibleHeights.reduce(0, +) + visibleSpacing
+    }
+
+    var body: some View {
+        #if os(iOS)
+        iosItemList
+            .onPreferenceChange(EmailReviewCardItemHeightKey.self) { itemHeights = $0 }
+        #else
+        Group {
+            if shouldClamp {
+                ScrollView {
+                    itemStack
+                }
+                .frame(maxHeight: clampedHeight)
+                #if os(macOS)
+                .scrollIndicators(.visible)
+                #else
+                .scrollIndicators(.automatic)
+                #endif
+            } else {
+                itemStack
+            }
+        }
+        .onPreferenceChange(EmailReviewCardItemHeightKey.self) { itemHeights = $0 }
+        #endif
+    }
+
+    #if os(iOS)
+    private var iosItemList: some View {
+        List {
+            ForEach(items) { item in
+                itemRow(for: item, usesNativeSwipeActionsOnIOS: true)
+                    // Bottom inset stands in for the stack's inter-row
+                    // spacing; the height math above adds the same amount.
+                    .listRowInsets(EdgeInsets(
+                        top: 0,
+                        leading: 0,
+                        bottom: item.id == items.last?.id ? 0 : itemSpacing,
+                        trailing: 0
+                    ))
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .scrollIndicators(shouldClamp ? .automatic : .hidden)
+        .scrollDisabled(!shouldClamp)
+        .frame(height: shouldClamp ? clampedHeight : fullHeight)
+    }
+    #endif
+
+    private var itemStack: some View {
+        VStack(alignment: .leading, spacing: itemSpacing) {
+            ForEach(items) { item in
+                itemRow(for: item, usesNativeSwipeActionsOnIOS: false)
+            }
+        }
+    }
+
+    private func itemRow(for item: ReviewItem, usesNativeSwipeActionsOnIOS: Bool) -> some View {
+        VStack(alignment: .leading, spacing: itemSpacing) {
+            EmailReviewCardRow(
+                item: item,
+                slideAction: slideAction,
+                usesNativeSwipeActionsOnIOS: usesNativeSwipeActionsOnIOS,
+                selectAction: { action in selectAction(action, item) },
+                performAction: { action in performAction(action, item) },
+                viewEmail: { viewEmail(item.itemID) }
+            )
+            if item.id != items.last?.id {
+                Divider()
+            }
+        }
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: EmailReviewCardItemHeightKey.self,
+                    value: [item.id: proxy.size.height]
+                )
+            }
+        }
+    }
+}
+
+private struct EmailReviewCardItemHeightKey: PreferenceKey {
+    static var defaultValue: [UUID: CGFloat] = [:]
+
+    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+
 private struct EmailReviewCardRow: View {
     let item: ReviewItem
     let slideAction: ReviewActionToken
+    var usesNativeSwipeActionsOnIOS = false
     let selectAction: (ReviewActionToken) -> Void
     let performAction: (ReviewActionToken) -> Void
     let viewEmail: () -> Void
@@ -160,6 +283,7 @@ private struct EmailReviewCardRow: View {
     var body: some View {
         EmailQuickActionSwipe(
             action: slideAction,
+            usesNativeSwipeActionsOnIOS: usesNativeSwipeActionsOnIOS,
             onPerform: { action in
                 performAction(action)
                 if action == .review {

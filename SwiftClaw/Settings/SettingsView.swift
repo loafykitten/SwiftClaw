@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
+enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
     case appearance = "Appearance"
     case persona = "Persona"
     case personality = "Personality"
@@ -52,6 +52,7 @@ private extension SettingsSection {
 struct SettingsView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
+    @State private var router = AppRouter.shared
     @State private var selectedSection: SettingsSection? = .appearance
     @State private var compactNavigationPath: [SettingsSection] = []
     @State private var backStack: [SettingsSection] = []
@@ -70,6 +71,10 @@ struct SettingsView: View {
             }
         }
         .onAppear(perform: applyLaunchSettingsSectionIfNeeded)
+        .onAppear(perform: applyRequestedSettingsSectionIfNeeded)
+        .onChange(of: router.pendingSettingsSection) { _, _ in
+            applyRequestedSettingsSectionIfNeeded()
+        }
     }
 
     private var regularBody: some View {
@@ -162,6 +167,16 @@ struct SettingsView: View {
         #else
         hasAppliedLaunchSettingsSection = true
         #endif
+    }
+
+    private func applyRequestedSettingsSectionIfNeeded() {
+        guard let requestedSection = router.pendingSettingsSection else { return }
+
+        selectedSection = requestedSection
+        if horizontalSizeClass == .compact {
+            compactNavigationPath = [requestedSection]
+        }
+        router.clearPendingSettingsSection(requestedSection)
     }
 
     @ViewBuilder

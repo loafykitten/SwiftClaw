@@ -139,7 +139,7 @@ struct EmailView: View {
                 // Open Settings → Email directly rather than via a sheet
                 // containing only a "Open Settings" link (which forces a
                 // second click to reach the real settings pane).
-                AppSettingsButton {
+                AppSettingsButton(section: .email) {
                     Label("Email Settings", systemImage: "gear")
                 }
                 .help("Open Email settings")
@@ -385,7 +385,7 @@ struct EmailView: View {
             message: "Add IMAP and SMTP credentials in Settings → Email."
         )
         .overlay(alignment: .bottom) {
-            AppSettingsButton {
+            AppSettingsButton(section: .email) {
                 Text("Open Email Settings")
             }
             .buttonStyle(.borderedProminent)
