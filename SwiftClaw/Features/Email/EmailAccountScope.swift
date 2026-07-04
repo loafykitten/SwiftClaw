@@ -71,6 +71,24 @@ struct EmailThreadScopeSnapshot {
         })
     }
 
+    /// The sidebar's mailbox list. Empty mailboxes stay hidden except
+    /// Inbox + Flagged, the primary navigation anchors. Custom folders are
+    /// per-account — the unified multi-account view passes
+    /// `showCustomFolders: false` so two accounts' folder lists don't
+    /// interleave into one long sidebar.
+    func visibleMailboxes(showCustomFolders: Bool) -> [EmailMailbox] {
+        var mailboxes: [EmailMailbox] = [.inbox, .flagged]
+        if !sent.isEmpty { mailboxes.append(.sent) }
+        if !drafts.isEmpty { mailboxes.append(.drafts) }
+        if !junk.isEmpty { mailboxes.append(.junk) }
+        if !archive.isEmpty { mailboxes.append(.archive) }
+        if !trash.isEmpty { mailboxes.append(.trash) }
+        if showCustomFolders {
+            mailboxes.append(contentsOf: customFolderNames.map(EmailMailbox.custom))
+        }
+        return mailboxes
+    }
+
     func threads(for mailbox: EmailMailbox) -> [EmailThread] {
         switch mailbox {
         case .inbox:

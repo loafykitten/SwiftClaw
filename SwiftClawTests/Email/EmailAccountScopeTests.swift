@@ -63,6 +63,15 @@ struct EmailAccountScopeTests {
         #expect(snapshot.threads(for: .custom("Work/Receipts")).count == 1)
     }
 
+    @Test func visibleMailboxesGateCustomFolders() {
+        let accountID = UUID()
+        let custom = Self.email(accountID: accountID, subject: "Receipts", mailbox: "Work/Receipts", role: .custom)
+        let snapshot = EmailThreadScopeSnapshot(emails: [custom], accountScope: .all)
+
+        #expect(snapshot.visibleMailboxes(showCustomFolders: true).contains(.custom("Work/Receipts")))
+        #expect(snapshot.visibleMailboxes(showCustomFolders: false) == [.inbox, .flagged])
+    }
+
     @Test func removedSelectedAccountFallsBackToAllAccounts() {
         let existing = UUID()
         let removed = UUID()

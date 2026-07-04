@@ -46,24 +46,17 @@ struct EmailView: View {
         let accountScope = selectedAccountScope.normalized(availableAccounts: accounts)
         let accountLabeler = EmailAccountLabeler(accountScope: accountScope, accounts: accounts)
         let snapshot = EmailThreadScopeSnapshot(emails: emails, accountScope: accountScope)
-        let sent = snapshot.sent
-        let drafts = snapshot.drafts
-        let junk = snapshot.junk
-        let archive = snapshot.archive
-        let trash = snapshot.trash
 
         let searched = snapshot.search(selectedMailbox, with: emailSearchText)
         let selected = searched.first { $0.id == selectedThreadID } ?? searched.first
 
-        // Empty mailboxes stay hidden except Inbox + Flagged, which are the
-        // primary navigation anchors.
-        var visibleMailboxes: [EmailMailbox] = [.inbox, .flagged]
-        if !sent.isEmpty { visibleMailboxes.append(.sent) }
-        if !drafts.isEmpty { visibleMailboxes.append(.drafts) }
-        if !junk.isEmpty { visibleMailboxes.append(.junk) }
-        if !archive.isEmpty { visibleMailboxes.append(.archive) }
-        if !trash.isEmpty { visibleMailboxes.append(.trash) }
-        visibleMailboxes.append(contentsOf: snapshot.customFolderNames.map(EmailMailbox.custom))
+        // Custom folders only show for a single account's view: in "All
+        // Accounts" with several accounts they'd interleave into one long
+        // list. Single-account setups keep them — the picker is hidden and
+        // the scope stays `.all` there.
+        let visibleMailboxes = snapshot.visibleMailboxes(
+            showCustomFolders: !accountScope.isUnified || accounts.count == 1
+        )
 
         // True when the account has *any* mail anywhere (Inbox / Archive /
         // Trash). Gates the full-screen empty state — the per-mailbox "no
@@ -147,6 +140,21 @@ struct EmailView: View {
         }
         .onChange(of: accounts.map(\.id)) { _, _ in
             normalizeAccountScope()
+        }
+        .onChange(of: selectedAccountScope) { _, newScope in
+            // A custom folder can vanish from the sidebar on scope change
+            // (hidden in the unified multi-account view, or absent from the
+            // newly selected account); fall back to Inbox instead of
+            // stranding the selection on an invisible mailbox.
+            guard selectedMailbox.isCustom else { return }
+            let scope = newScope.normalized(availableAccounts: accounts)
+            let snapshot = EmailThreadScopeSnapshot(emails: emails, accountScope: scope)
+            let visible = snapshot.visibleMailboxes(
+                showCustomFolders: !scope.isUnified || accounts.count == 1
+            )
+            if !visible.contains(selectedMailbox) {
+                selectedMailbox = .inbox
+            }
         }
         .onChange(of: pendingEmailID) { _, emailID in
             handlePendingEmailSelection(emailID)
@@ -285,11 +293,17 @@ struct EmailView: View {
         if !selectedAccountScope.includes(email) {
             selectedAccountScope = .all
         }
-        selectedMailbox = mailbox(for: email)
+        let targetMailbox = mailbox(for: email)
+        // Custom folders are hidden in the unified multi-account view, so
+        // landing on one means scoping to the email's account first.
+        if targetMailbox.isCustom, selectedAccountScope.isUnified, completeAccounts.count > 1 {
+            selectedAccountScope = .account(email.accountID)
+        }
+        selectedMailbox = targetMailbox
         selectedThreadID = thread.id
 
         if horizontalSizeClass == .compact {
-            openCompactThread?(mailbox(for: email), thread.id)
+            openCompactThread?(targetMailbox, thread.id)
         }
 
         onPendingEmailHandled()
