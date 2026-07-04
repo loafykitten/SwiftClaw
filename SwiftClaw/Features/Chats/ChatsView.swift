@@ -16,6 +16,7 @@ struct ChatsView: View {
     @State private var isShowingArchivedChats = false
     @State private var shouldShowChatListOnly = false
     @State private var compactNavigationPath: [UUID] = []
+    @State private var chatSearchText = ""
     @State private var pendingCompactDelete: Chat?
     @State private var presentedError: PresentedAppError?
     #if DEBUG
@@ -34,6 +35,14 @@ struct ChatsView: View {
         isShowingArchivedChats ? orderedArchivedChats : orderedActiveChats
     }
 
+    private var searchableDisplayedChats: [Chat] {
+        displayedChats.filter { $0.matchesSearch(chatSearchText) }
+    }
+
+    private var isSearchingChats: Bool {
+        SearchQuery.isActive(chatSearchText)
+    }
+
     private var historyTitle: String {
         isShowingArchivedChats ? "Archived" : "History"
     }
@@ -44,7 +53,7 @@ struct ChatsView: View {
 
     private var selectedChat: Chat? {
         guard let selectedChatID else { return nil }
-        return displayedChats.first { $0.id == selectedChatID }
+        return searchableDisplayedChats.first { $0.id == selectedChatID }
     }
 
     private var selectedChatBinding: Binding<UUID?> {
@@ -102,8 +111,10 @@ struct ChatsView: View {
         HStack(spacing: 0) {
             ChatHistoryView(
                 title: historyTitle,
-                chats: displayedChats,
+                chats: searchableDisplayedChats,
                 selectedChatID: selectedChatBinding,
+                searchText: $chatSearchText,
+                emptyKind: emptyListKindForCurrentSearch,
                 hasUnreadMessages: { router.hasUnreadMessages(in: $0) },
                 togglePin: togglePin,
                 archiveChat: archiveChat,
@@ -124,12 +135,14 @@ struct ChatsView: View {
                 )
                     .id(selectedChat.id)
             } else {
-                EmptyChatsView(displayedChats.isEmpty ? emptyListKind : .selection)
+                // The history column owns the empty/no-results messaging;
+                // the detail pane only ever reports the missing selection.
+                EmptyChatsView(.selection)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: selectFallbackChatIfNeeded)
-        .onChange(of: displayedChats.map(\.id)) { _, _ in
+        .onChange(of: searchableDisplayedChats.map(\.id)) { _, _ in
             selectFallbackChatIfNeeded()
         }
         .onChange(of: isShowingArchivedChats) { _, _ in
@@ -140,11 +153,11 @@ struct ChatsView: View {
     private var compactBody: some View {
         NavigationStack(path: $compactNavigationPath) {
             Group {
-                if displayedChats.isEmpty {
-                    EmptyChatsView(emptyListKind)
+                if searchableDisplayedChats.isEmpty {
+                    EmptyChatsView(emptyListKindForCurrentSearch)
                 } else {
                     List {
-                        ForEach(displayedChats) { chat in
+                        ForEach(searchableDisplayedChats) { chat in
                             NavigationLink(value: chat.id) {
                                 CompactChatHistoryRow(
                                     chat: chat,
@@ -189,6 +202,7 @@ struct ChatsView: View {
                 }
             }
             .navigationTitle(isShowingArchivedChats ? "Archived Chats" : "Chats")
+            .searchable(text: $chatSearchText, prompt: "Search Chats")
             .toolbar { chatToolbarItems }
             .navigationDestination(for: UUID.self) { chatID in
                 if let chat = displayedChats.first(where: { $0.id == chatID }) {
@@ -232,6 +246,10 @@ struct ChatsView: View {
         )
     }
 
+    private var emptyListKindForCurrentSearch: EmptyChatsView.Kind {
+        isSearchingChats ? .search : emptyListKind
+    }
+
     /// `-SwiftClawOpenFirstChat` pushes the most recent chat's transcript in
     /// compact widths, so simulator runs can exercise it without tapping.
     private func openFirstChatIfRequested() {
@@ -249,15 +267,16 @@ struct ChatsView: View {
 
     private func selectFallbackChatIfNeeded() {
         guard !shouldShowChatListOnly else { return }
-        guard selectedChatID == nil || !displayedChats.contains(where: { $0.id == selectedChatID }) else {
+        guard selectedChatID == nil || !searchableDisplayedChats.contains(where: { $0.id == selectedChatID }) else {
             return
         }
 
-        selectedChatID = displayedChats.first?.id
+        selectedChatID = searchableDisplayedChats.first?.id
     }
 
     private func createChat() {
         isShowingArchivedChats = false
+        chatSearchText = ""
         shouldShowChatListOnly = false
         let chat = Chat(
             title: "New Chat",
@@ -282,6 +301,7 @@ struct ChatsView: View {
 
     private func toggleArchivedChats() {
         isShowingArchivedChats.toggle()
+        chatSearchText = ""
         shouldShowChatListOnly = false
         compactNavigationPath.removeAll()
     }
@@ -323,7 +343,7 @@ struct ChatsView: View {
     }
 
     private func deleteChat(_ chat: Chat) {
-        let fallback = displayedChats.first { $0.id != chat.id }?.id
+        let fallback = searchableDisplayedChats.first { $0.id != chat.id }?.id
         let chatID = chat.id
 
         ChatTaskCoordinator.shared.cancelTasks(for: chatID)
@@ -395,6 +415,8 @@ private struct ChatHistoryView: View {
     let title: String
     let chats: [Chat]
     @Binding var selectedChatID: UUID?
+    @Binding var searchText: String
+    let emptyKind: EmptyChatsView.Kind
     let hasUnreadMessages: (UUID) -> Bool
     let togglePin: (Chat) -> Void
     let archiveChat: (Chat) -> Void
@@ -413,47 +435,36 @@ private struct ChatHistoryView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
 
-            #if os(macOS)
-            List(selection: $selectedChatID) {
-                ForEach(chats) { chat in
-                    ChatHistoryRow(
-                        chat: chat,
-                        isSelected: chat.id == selectedChatID,
-                        hasUnreadMessages: hasUnreadMessages(chat.id),
-                        togglePin: { togglePin(chat) },
-                        archiveChat: { archiveChat(chat) },
-                        unarchiveChat: { unarchiveChat(chat) },
-                        deleteChat: { pendingDelete = chat }
-                    )
-                    .tag(chat.id)
-                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
-                }
-            }
-            .listStyle(.sidebar)
-            #else
-            List {
-                ForEach(chats) { chat in
-                    Button {
-                        selectedChatID = chat.id
-                    } label: {
-                        ChatHistoryRow(
-                            chat: chat,
-                            isSelected: chat.id == selectedChatID,
-                            hasUnreadMessages: hasUnreadMessages(chat.id),
-                            togglePin: { togglePin(chat) },
-                            archiveChat: { archiveChat(chat) },
-                            unarchiveChat: { unarchiveChat(chat) },
-                            deleteChat: { pendingDelete = chat }
-                        )
+            if chats.isEmpty {
+                EmptyChatsView(emptyKind)
+            } else {
+                #if os(macOS)
+                List(selection: $selectedChatID) {
+                    ForEach(chats) { chat in
+                        row(for: chat)
+                            .tag(chat.id)
+                            .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                     }
-                    .buttonStyle(.plain)
-                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                 }
+                .listStyle(.sidebar)
+                #else
+                List {
+                    ForEach(chats) { chat in
+                        Button {
+                            selectedChatID = chat.id
+                        } label: {
+                            row(for: chat)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+                    }
+                }
+                .listStyle(.sidebar)
+                #endif
             }
-            .listStyle(.sidebar)
-            #endif
         }
         .frame(width: 260)
+        .searchable(text: $searchText, prompt: "Search Chats")
         .confirmingAction(
             item: $pendingDelete,
             copy: ConfirmationDialogCopy(
@@ -462,6 +473,18 @@ private struct ChatHistoryView: View {
                 message: "The chat and its image attachments will be removed from SwiftClaw."
             ),
             action: deleteChat
+        )
+    }
+
+    private func row(for chat: Chat) -> ChatHistoryRow {
+        ChatHistoryRow(
+            chat: chat,
+            isSelected: chat.id == selectedChatID,
+            hasUnreadMessages: hasUnreadMessages(chat.id),
+            togglePin: { togglePin(chat) },
+            archiveChat: { archiveChat(chat) },
+            unarchiveChat: { unarchiveChat(chat) },
+            deleteChat: { pendingDelete = chat }
         )
     }
 }
@@ -1438,6 +1461,7 @@ private struct EmptyChatsView: View {
         case active
         case archived
         case selection
+        case search
     }
 
     let kind: Kind
@@ -1446,39 +1470,24 @@ private struct EmptyChatsView: View {
         self.kind = kind
     }
 
-    private var title: String {
-        switch kind {
-        case .active: "No Chats Yet"
-        case .archived: "No Archived Chats"
-        case .selection: "No Chat Selected"
-        }
-    }
-
-    private var systemImage: String {
-        switch kind {
-        case .active: "bubble.left.and.bubble.right"
-        case .archived: "archivebox"
-        case .selection: "bubble.left"
-        }
-    }
-
-    private var description: String? {
-        switch kind {
-        case .active: "Create a chat to start a new conversation."
-        case .archived: "Archived chats will appear here."
-        case .selection: nil
-        }
-    }
-
     var body: some View {
-        if let description {
+        switch kind {
+        case .active:
             ContentUnavailableView(
-                title,
-                systemImage: systemImage,
-                description: Text(description)
+                "No Chats Yet",
+                systemImage: "bubble.left.and.bubble.right",
+                description: Text("Create a chat to start a new conversation.")
             )
-        } else {
-            ContentUnavailableView(title, systemImage: systemImage)
+        case .archived:
+            ContentUnavailableView(
+                "No Archived Chats",
+                systemImage: "archivebox",
+                description: Text("Archived chats will appear here.")
+            )
+        case .selection:
+            ContentUnavailableView("No Chat Selected", systemImage: "bubble.left")
+        case .search:
+            ContentUnavailableView.search
         }
     }
 }

@@ -114,6 +114,16 @@ enum ChatListOrdering {
     }
 }
 
+extension Chat {
+    func matchesSearch(_ searchText: String) -> Bool {
+        SearchQuery.matches(searchText, in: searchValues)
+    }
+
+    private var searchValues: [String] {
+        [title, modelSelection] + visibleMessages.map(\.content)
+    }
+}
+
 @Model
 final class ChatMessage {
     @Attribute(.unique) var id: UUID

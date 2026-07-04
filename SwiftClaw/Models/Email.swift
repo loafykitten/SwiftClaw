@@ -100,6 +100,10 @@ final class EmailThread {
         let unique = Array(NSOrderedSet(array: addresses)).compactMap { $0 as? String }
         return unique.prefix(3).joined(separator: ", ")
     }
+
+    func matchesSearch(_ searchText: String) -> Bool {
+        SearchQuery.matches(searchText, in: messages.flatMap(\.searchValues))
+    }
 }
 
 @Model
@@ -264,6 +268,18 @@ final class Email {
         }
         ids.append(contentsOf: referencesRaw.filter { !$0.isEmpty })
         return ids
+    }
+
+    /// User-visible text that mailbox search runs over. Internal routing
+    /// fields (mailbox name, message IDs, references) are deliberately
+    /// excluded so queries only match content the user can see.
+    var searchValues: [String] {
+        [subject, fromAddress, plainTextBody]
+            + toAddresses
+            + ccAddresses
+            + bccAddresses
+            + notes.map(\.content)
+            + attachments.map(\.filename)
     }
 }
 

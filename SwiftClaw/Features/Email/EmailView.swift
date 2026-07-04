@@ -12,6 +12,7 @@ struct EmailView: View {
 
     @State private var selectedThreadID: UUID?
     @State private var selectedMailbox: EmailMailbox = .inbox
+    @State private var emailSearchText = ""
     @State private var composingReplyFor: Email?
     @State private var manualSyncCoordinator = EmailManualSyncCoordinator.shared
     @State private var manualReviewCoordinator = EmailManualReviewCoordinator.shared
@@ -76,7 +77,8 @@ struct EmailView: View {
         case .trash:
             filtered = trash
         }
-        let selected = filtered.first { $0.id == selectedThreadID } ?? filtered.first
+        let searched = search(filtered, with: emailSearchText)
+        let selected = searched.first { $0.id == selectedThreadID } ?? searched.first
 
         // Archive / Trash are hidden when empty so the sidebar never
         // advertises dead mailboxes; Inbox + Flagged are always present.
@@ -107,7 +109,7 @@ struct EmailView: View {
                     )
                 } else {
                     threadLayout(
-                        filtered: filtered,
+                        filtered: searched,
                         selected: selected,
                         visibleMailboxes: visibleMailboxes
                     )
@@ -153,9 +155,9 @@ struct EmailView: View {
                     .padding()
             }
         }
-        .onChange(of: filtered.first?.id) { _, _ in
+        .onChange(of: searched.first?.id) { _, _ in
             if selectedThreadID == nil {
-                selectedThreadID = filtered.first?.id
+                selectedThreadID = searched.first?.id
             }
         }
         .onAppear {
@@ -196,6 +198,8 @@ struct EmailView: View {
                     get: { selected?.id },
                     set: { selectedThreadID = $0 }
                 ),
+                searchText: $emailSearchText,
+                isSearching: isSearchingEmails,
                 onQuickAction: performQuickAction
             )
             .frame(width: 280)
@@ -245,13 +249,18 @@ struct EmailView: View {
         .navigationDestination(for: EmailMailbox.self) { mailbox in
             EmailThreadNavigationList(
                 mailbox: mailbox,
-                threads: threads(
-                    for: mailbox,
-                    inbox: inbox,
-                    archive: archive,
-                    trash: trash
+                threads: search(
+                    threads(
+                        for: mailbox,
+                        inbox: inbox,
+                        archive: archive,
+                        trash: trash
+                    ),
+                    with: emailSearchText
                 ),
                 quickAction: quickAction,
+                searchText: $emailSearchText,
+                isSearching: isSearchingEmails,
                 onQuickAction: performQuickAction
             )
             .navigationTitle(mailbox.rawValue)
@@ -290,6 +299,14 @@ struct EmailView: View {
         case .trash:
             trash
         }
+    }
+
+    private var isSearchingEmails: Bool {
+        SearchQuery.isActive(emailSearchText)
+    }
+
+    private func search(_ threads: [EmailThread], with searchText: String) -> [EmailThread] {
+        threads.filter { $0.matchesSearch(searchText) }
     }
 
     private func handlePendingEmailSelection(_ emailID: UUID? = nil) {
@@ -586,6 +603,8 @@ private struct EmailThreadListView: View {
     let mailbox: EmailMailbox
     let quickAction: ReviewActionToken
     @Binding var selectedThreadID: UUID?
+    @Binding var searchText: String
+    let isSearching: Bool
     let onQuickAction: (ReviewActionToken, EmailThread, EmailMailbox) -> Void
 
     var body: some View {
@@ -601,11 +620,7 @@ private struct EmailThreadListView: View {
             if threads.isEmpty {
                 // Per-mailbox empty placeholder — keeps the sidebar live so
                 // the user can switch back to Inbox without leaving the tab.
-                FeaturePlaceholderView(
-                    systemImage: "tray",
-                    title: "Nothing here",
-                    message: "This mailbox is empty."
-                )
+                EmptyMailboxView(isSearching: isSearching, mailboxImage: "tray")
             } else {
                 #if os(macOS)
                 List(selection: $selectedThreadID) {
@@ -644,6 +659,7 @@ private struct EmailThreadListView: View {
                 #endif
             }
         }
+        .searchable(text: $searchText, prompt: Text("Search \(mailbox.rawValue)"))
     }
 
     private func quickActionRow<Content: View>(
@@ -661,20 +677,37 @@ private struct EmailThreadListView: View {
     }
 }
 
+/// Empty state for a thread list: the system search placeholder while a
+/// query is active, otherwise the app's per-mailbox placeholder.
+private struct EmptyMailboxView: View {
+    let isSearching: Bool
+    let mailboxImage: String
+
+    var body: some View {
+        if isSearching {
+            ContentUnavailableView.search
+        } else {
+            FeaturePlaceholderView(
+                systemImage: mailboxImage,
+                title: "Nothing here",
+                message: "This mailbox is empty."
+            )
+        }
+    }
+}
+
 private struct EmailThreadNavigationList: View {
     let mailbox: EmailMailbox
     let threads: [EmailThread]
     let quickAction: ReviewActionToken
+    @Binding var searchText: String
+    let isSearching: Bool
     let onQuickAction: (ReviewActionToken, EmailThread, EmailMailbox) -> Void
 
     var body: some View {
         Group {
             if threads.isEmpty {
-                FeaturePlaceholderView(
-                    systemImage: mailbox.systemImage,
-                    title: "Nothing here",
-                    message: "This mailbox is empty."
-                )
+                EmptyMailboxView(isSearching: isSearching, mailboxImage: mailbox.systemImage)
             } else {
                 List {
                     ForEach(threads) { thread in
@@ -696,6 +729,7 @@ private struct EmailThreadNavigationList: View {
                 }
             }
         }
+        .searchable(text: $searchText, prompt: Text("Search \(mailbox.rawValue)"))
     }
 }
 
