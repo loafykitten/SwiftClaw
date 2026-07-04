@@ -11,6 +11,7 @@ final class Chat {
     var updatedAt: Date
     var isGenerating: Bool
     var isPinned: Bool = false
+    var isArchived: Bool = false
     var errorMessage: String?
 
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.chat)
@@ -35,6 +36,7 @@ final class Chat {
         updatedAt: Date = .now,
         isGenerating: Bool = false,
         isPinned: Bool = false,
+        isArchived: Bool = false,
         errorMessage: String? = nil,
         messages: [ChatMessage] = []
     ) {
@@ -46,6 +48,7 @@ final class Chat {
         self.updatedAt = updatedAt
         self.isGenerating = isGenerating
         self.isPinned = isPinned
+        self.isArchived = isArchived
         self.errorMessage = errorMessage
         self.messages = messages
     }
@@ -64,6 +67,13 @@ final class Chat {
         }
     }
 
+    var latestVisibleMessageDate: Date {
+        messages.lazy
+            .filter { $0.role != .system }
+            .map(\.createdAt)
+            .max() ?? updatedAt
+    }
+
     func appendMessage(
         role: ChatMessageRole,
         content: String,
@@ -79,6 +89,28 @@ final class Chat {
         message.chat = self
         messages.append(message)
         updatedAt = .now
+    }
+}
+
+enum ChatListOrdering {
+    static func sorted(_ chats: [Chat], pinnedFirst: Bool = true) -> [Chat] {
+        chats.sorted { lhs, rhs in
+            if pinnedFirst, lhs.isPinned != rhs.isPinned {
+                return lhs.isPinned
+            }
+
+            let lhsDate = lhs.latestVisibleMessageDate
+            let rhsDate = rhs.latestVisibleMessageDate
+            if lhsDate != rhsDate {
+                return lhsDate > rhsDate
+            }
+
+            if lhs.createdAt != rhs.createdAt {
+                return lhs.createdAt > rhs.createdAt
+            }
+
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
     }
 }
 

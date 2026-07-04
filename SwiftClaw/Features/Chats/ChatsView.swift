@@ -13,6 +13,8 @@ struct ChatsView: View {
     @Binding private var selectedChatID: UUID?
     @Query(sort: \Chat.updatedAt, order: .reverse) private var chats: [Chat]
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
+    @State private var isShowingArchivedChats = false
+    @State private var shouldShowChatListOnly = false
     @State private var compactNavigationPath: [UUID] = []
     @State private var pendingCompactDelete: Chat?
     @State private var presentedError: PresentedAppError?
@@ -20,23 +22,41 @@ struct ChatsView: View {
     @State private var hasAppliedLaunchTranscript = false
     #endif
 
-    private var orderedChats: [Chat] {
-        chats.sorted { lhs, rhs in
-            if lhs.isPinned != rhs.isPinned {
-                return lhs.isPinned
-            }
+    private var orderedActiveChats: [Chat] {
+        ChatListOrdering.sorted(chats.filter { !$0.isArchived })
+    }
 
-            return lhs.updatedAt > rhs.updatedAt
-        }
+    private var orderedArchivedChats: [Chat] {
+        ChatListOrdering.sorted(chats.filter(\.isArchived), pinnedFirst: false)
+    }
+
+    private var displayedChats: [Chat] {
+        isShowingArchivedChats ? orderedArchivedChats : orderedActiveChats
+    }
+
+    private var historyTitle: String {
+        isShowingArchivedChats ? "Archived" : "History"
+    }
+
+    private var emptyListKind: EmptyChatsView.Kind {
+        isShowingArchivedChats ? .archived : .active
     }
 
     private var selectedChat: Chat? {
-        if let selectedChatID,
-           let chat = orderedChats.first(where: { $0.id == selectedChatID }) {
-            return chat
-        }
+        guard let selectedChatID else { return nil }
+        return displayedChats.first { $0.id == selectedChatID }
+    }
 
-        return orderedChats.first
+    private var selectedChatBinding: Binding<UUID?> {
+        Binding(
+            get: { selectedChatID },
+            set: { newValue in
+                selectedChatID = newValue
+                if newValue != nil {
+                    shouldShowChatListOnly = false
+                }
+            }
+        )
     }
 
     init(selectedChatID: Binding<UUID?> = .constant(nil), emailDispatcher: AnyHashableReviewActionDispatcher? = nil) {
@@ -55,29 +75,39 @@ struct ChatsView: View {
         .toolbar {
             #if os(iOS)
             if horizontalSizeClass != .compact {
-                newChatToolbarItem
+                chatToolbarItems
             }
             #else
-            newChatToolbarItem
+            chatToolbarItems
             #endif
         }
         .appErrorAlert($presentedError)
     }
 
-    private var newChatToolbarItem: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
+    private var chatToolbarItems: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
             Button("New Chat", systemImage: "square.and.pencil", action: createChat)
                 .help("Create a new chat")
+
+            Button(
+                isShowingArchivedChats ? "Chats" : "Archived Chats",
+                systemImage: isShowingArchivedChats ? "bubble.left.and.bubble.right" : "archivebox",
+                action: toggleArchivedChats
+            )
+            .help(isShowingArchivedChats ? "Show active chats" : "Show archived chats")
         }
     }
 
     private var regularBody: some View {
         HStack(spacing: 0) {
             ChatHistoryView(
-                chats: orderedChats,
-                selectedChatID: $selectedChatID,
+                title: historyTitle,
+                chats: displayedChats,
+                selectedChatID: selectedChatBinding,
                 hasUnreadMessages: { router.hasUnreadMessages(in: $0) },
                 togglePin: togglePin,
+                archiveChat: archiveChat,
+                unarchiveChat: unarchiveChat,
                 deleteChat: deleteChat
             )
 
@@ -88,16 +118,21 @@ struct ChatsView: View {
                     chat: selectedChat,
                     emailDispatcherProvider: { [emailDispatcher] in
                         emailDispatcher
-                    }
+                    },
+                    archiveChat: archiveChat,
+                    unarchiveChat: unarchiveChat
                 )
                     .id(selectedChat.id)
             } else {
-                EmptyChatsView()
+                EmptyChatsView(displayedChats.isEmpty ? emptyListKind : .selection)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear(perform: selectFallbackChatIfNeeded)
-        .onChange(of: chats.map(\.id)) { _, _ in
+        .onChange(of: displayedChats.map(\.id)) { _, _ in
+            selectFallbackChatIfNeeded()
+        }
+        .onChange(of: isShowingArchivedChats) { _, _ in
             selectFallbackChatIfNeeded()
         }
     }
@@ -105,11 +140,11 @@ struct ChatsView: View {
     private var compactBody: some View {
         NavigationStack(path: $compactNavigationPath) {
             Group {
-                if orderedChats.isEmpty {
-                    EmptyChatsView()
+                if displayedChats.isEmpty {
+                    EmptyChatsView(emptyListKind)
                 } else {
                     List {
-                        ForEach(orderedChats) { chat in
+                        ForEach(displayedChats) { chat in
                             NavigationLink(value: chat.id) {
                                 CompactChatHistoryRow(
                                     chat: chat,
@@ -117,38 +152,63 @@ struct ChatsView: View {
                                 )
                             }
                             .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    pendingCompactDelete = chat
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
+                                if chat.isArchived {
+                                    Button {
+                                        unarchiveChat(chat)
+                                    } label: {
+                                        Label("Unarchive", systemImage: "archivebox")
+                                    }
+                                    .tint(.accentColor)
+                                } else {
+                                    Button(role: .destructive) {
+                                        pendingCompactDelete = chat
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
 
-                                Button {
-                                    togglePin(chat)
-                                } label: {
-                                    Label(chat.isPinned ? "Unpin" : "Pin", systemImage: chat.isPinned ? "pin.slash" : "pin")
+                                    Button {
+                                        archiveChat(chat)
+                                    } label: {
+                                        Label("Archive", systemImage: "archivebox")
+                                    }
+                                    .tint(.secondary)
+
+                                    Button {
+                                        togglePin(chat)
+                                    } label: {
+                                        Label(
+                                            chat.isPinned ? "Unpin" : "Pin",
+                                            systemImage: chat.isPinned ? "pin.slash" : "pin"
+                                        )
+                                    }
+                                    .tint(.accentColor)
                                 }
-                                .tint(.accentColor)
                             }
                         }
                     }
                 }
             }
-            .navigationTitle("Chats")
-            .toolbar { newChatToolbarItem }
+            .navigationTitle(isShowingArchivedChats ? "Archived Chats" : "Chats")
+            .toolbar { chatToolbarItems }
             .navigationDestination(for: UUID.self) { chatID in
-                if let chat = orderedChats.first(where: { $0.id == chatID }) {
+                if let chat = displayedChats.first(where: { $0.id == chatID }) {
                     ChatTranscriptView(
                         chat: chat,
                         emailDispatcherProvider: { [emailDispatcher] in
                             emailDispatcher
-                        }
+                        },
+                        archiveChat: archiveChat,
+                        unarchiveChat: unarchiveChat
                     )
                     .id(chat.id)
                     .navigationTitle(chat.title)
-                    .modifier(CompactChatTranscriptChrome(chat: chat))
+                    .modifier(CompactChatTranscriptChrome(
+                        chat: chat,
+                        archiveChat: archiveChat,
+                        unarchiveChat: unarchiveChat
+                    ))
                 } else {
-                    EmptyChatsView()
+                    EmptyChatsView(emptyListKind)
                 }
             }
         }
@@ -157,6 +217,7 @@ struct ChatsView: View {
             // pushed transcript so unread state clears correctly.
             if let chatID = path.last {
                 selectedChatID = chatID
+                shouldShowChatListOnly = false
             }
         }
         .onAppear(perform: openFirstChatIfRequested)
@@ -179,7 +240,7 @@ struct ChatsView: View {
         hasAppliedLaunchTranscript = true
 
         guard ProcessInfo.processInfo.arguments.contains("-SwiftClawOpenFirstChat"),
-              let chat = orderedChats.first else { return }
+              let chat = displayedChats.first else { return }
 
         selectedChatID = chat.id
         compactNavigationPath = [chat.id]
@@ -187,14 +248,17 @@ struct ChatsView: View {
     }
 
     private func selectFallbackChatIfNeeded() {
-        guard selectedChatID == nil || !chats.contains(where: { $0.id == selectedChatID }) else {
+        guard !shouldShowChatListOnly else { return }
+        guard selectedChatID == nil || !displayedChats.contains(where: { $0.id == selectedChatID }) else {
             return
         }
 
-        selectedChatID = orderedChats.first?.id
+        selectedChatID = displayedChats.first?.id
     }
 
     private func createChat() {
+        isShowingArchivedChats = false
+        shouldShowChatListOnly = false
         let chat = Chat(
             title: "New Chat",
             modelSelection: swiftModel,
@@ -216,13 +280,50 @@ struct ChatsView: View {
         }
     }
 
+    private func toggleArchivedChats() {
+        isShowingArchivedChats.toggle()
+        shouldShowChatListOnly = false
+        compactNavigationPath.removeAll()
+    }
+
     private func togglePin(_ chat: Chat) {
+        guard !chat.isArchived else { return }
         chat.isPinned.toggle()
         saveChatListChange()
     }
 
+    private func archiveChat(_ chat: Chat) {
+        guard !chat.isArchived else { return }
+        let wasViewingChat = selectedChatID == chat.id || compactNavigationPath.last == chat.id
+        chat.isArchived = true
+        chat.isPinned = false
+        router.clearUnreadMessages(in: chat.id)
+
+        if wasViewingChat {
+            shouldShowChatListOnly = true
+            selectedChatID = nil
+            compactNavigationPath.removeAll()
+        }
+
+        saveChatListChange()
+    }
+
+    private func unarchiveChat(_ chat: Chat) {
+        guard chat.isArchived else { return }
+        chat.isArchived = false
+        chat.isPinned = false
+        isShowingArchivedChats = false
+        shouldShowChatListOnly = false
+        selectedChatID = chat.id
+        if horizontalSizeClass == .compact {
+            compactNavigationPath = [chat.id]
+        }
+
+        saveChatListChange()
+    }
+
     private func deleteChat(_ chat: Chat) {
-        let fallback = orderedChats.first { $0.id != chat.id }?.id
+        let fallback = displayedChats.first { $0.id != chat.id }?.id
         let chatID = chat.id
 
         ChatTaskCoordinator.shared.cancelTasks(for: chatID)
@@ -282,7 +383,7 @@ private struct CompactChatHistoryRow: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
 
-            Text(chat.updatedAt.formatted(date: .abbreviated, time: .shortened))
+            Text(chat.latestVisibleMessageDate.formatted(date: .abbreviated, time: .shortened))
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -291,10 +392,13 @@ private struct CompactChatHistoryRow: View {
 }
 
 private struct ChatHistoryView: View {
+    let title: String
     let chats: [Chat]
     @Binding var selectedChatID: UUID?
     let hasUnreadMessages: (UUID) -> Bool
     let togglePin: (Chat) -> Void
+    let archiveChat: (Chat) -> Void
+    let unarchiveChat: (Chat) -> Void
     let deleteChat: (Chat) -> Void
 
     @State private var pendingDelete: Chat?
@@ -302,7 +406,7 @@ private struct ChatHistoryView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("History")
+                Text(title)
                     .font(.headline)
                 Spacer()
             }
@@ -317,6 +421,8 @@ private struct ChatHistoryView: View {
                         isSelected: chat.id == selectedChatID,
                         hasUnreadMessages: hasUnreadMessages(chat.id),
                         togglePin: { togglePin(chat) },
+                        archiveChat: { archiveChat(chat) },
+                        unarchiveChat: { unarchiveChat(chat) },
                         deleteChat: { pendingDelete = chat }
                     )
                     .tag(chat.id)
@@ -335,6 +441,8 @@ private struct ChatHistoryView: View {
                             isSelected: chat.id == selectedChatID,
                             hasUnreadMessages: hasUnreadMessages(chat.id),
                             togglePin: { togglePin(chat) },
+                            archiveChat: { archiveChat(chat) },
+                            unarchiveChat: { unarchiveChat(chat) },
                             deleteChat: { pendingDelete = chat }
                         )
                     }
@@ -363,12 +471,18 @@ private struct ChatHistoryRow: View {
     let isSelected: Bool
     let hasUnreadMessages: Bool
     let togglePin: () -> Void
+    let archiveChat: () -> Void
+    let unarchiveChat: () -> Void
     let deleteChat: () -> Void
 
     @State private var isHovering = false
 
     private var showsActions: Bool {
         isSelected || isHovering || chat.isPinned
+    }
+
+    private var actionWidth: CGFloat {
+        chat.isArchived ? 46 : 70
     }
 
     var body: some View {
@@ -399,7 +513,7 @@ private struct ChatHistoryRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
 
-                Text(chat.updatedAt.formatted(date: .abbreviated, time: .shortened))
+                Text(chat.latestVisibleMessageDate.formatted(date: .abbreviated, time: .shortened))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -409,23 +523,44 @@ private struct ChatHistoryRow: View {
             .contentShape(Rectangle())
 
             HStack(spacing: 2) {
-                ChatHistoryActionButton(
-                    systemName: chat.isPinned ? "pin.fill" : "pin",
-                    label: chat.isPinned ? "Unpin chat" : "Pin chat",
-                    action: togglePin
-                )
+                if chat.isArchived {
+                    ChatHistoryActionButton(
+                        systemName: "archivebox",
+                        label: "Unarchive chat",
+                        action: unarchiveChat
+                    )
 
-                ChatHistoryActionButton(
-                    systemName: "trash",
-                    label: "Delete chat",
-                    role: .destructive,
-                    action: deleteChat
-                )
+                    ChatHistoryActionButton(
+                        systemName: "trash",
+                        label: "Delete chat",
+                        role: .destructive,
+                        action: deleteChat
+                    )
+                } else {
+                    ChatHistoryActionButton(
+                        systemName: chat.isPinned ? "pin.fill" : "pin",
+                        label: chat.isPinned ? "Unpin chat" : "Pin chat",
+                        action: togglePin
+                    )
+
+                    ChatHistoryActionButton(
+                        systemName: "archivebox",
+                        label: "Archive chat",
+                        action: archiveChat
+                    )
+
+                    ChatHistoryActionButton(
+                        systemName: "trash",
+                        label: "Delete chat",
+                        role: .destructive,
+                        action: deleteChat
+                    )
+                }
             }
             .opacity(showsActions ? 1 : 0)
             .disabled(!showsActions)
             .accessibilityHidden(!showsActions)
-            .frame(width: 46, alignment: .trailing)
+            .frame(width: actionWidth, alignment: .trailing)
             .padding(.trailing, 8)
             .padding(.vertical, 7)
         }
@@ -523,6 +658,8 @@ private struct ChatTranscriptView: View {
 
     let chat: Chat
     let emailDispatcherProvider: () -> AnyHashableReviewActionDispatcher?
+    let archiveChat: (Chat) -> Void
+    let unarchiveChat: (Chat) -> Void
     @State private var previewSelection: ImageAttachmentPreviewSelection?
     @State private var presentedError: PresentedAppError?
     @State private var scrollTask: Task<Void, Never>?
@@ -571,7 +708,11 @@ private struct ChatTranscriptView: View {
             // In compact widths the navigation bar carries the title, model,
             // and title actions, so the inline header would be redundant.
             if horizontalSizeClass != .compact {
-                ChatHeaderView(chat: chat)
+                ChatHeaderView(
+                    chat: chat,
+                    archiveChat: archiveChat,
+                    unarchiveChat: unarchiveChat
+                )
 
                 Divider()
             }
@@ -620,18 +761,20 @@ private struct ChatTranscriptView: View {
                     scrollToBottom(proxy)
                 }
                 .safeAreaBar(edge: .bottom) {
-                    ChatComposerView(
-                        isBusy: chat.isGenerating,
-                        chatReasoningEffort: chat.reasoningEffort,
-                        onReasoningEffortChange: { effort in
-                            chat.reasoningEffort = effort
-                            try? modelContext.save()
+                    if !chat.isArchived {
+                        ChatComposerView(
+                            isBusy: chat.isGenerating,
+                            chatReasoningEffort: chat.reasoningEffort,
+                            onReasoningEffortChange: { effort in
+                                chat.reasoningEffort = effort
+                                try? modelContext.save()
+                            }
+                        ) { submission in
+                            submitMessage(submission)
                         }
-                    ) { submission in
-                        submitMessage(submission)
+                        .padding(.horizontal, composerHorizontalPadding)
+                        .padding(.bottom, 20)
                     }
-                    .padding(.horizontal, composerHorizontalPadding)
-                    .padding(.bottom, 20)
                 }
             }
         }
@@ -674,7 +817,7 @@ private struct ChatTranscriptView: View {
 
     private func submitMessage(_ submission: ChatComposerSubmission) -> Bool {
         let input = submission.text
-        guard !input.isEmpty, !chat.isGenerating else {
+        guard !input.isEmpty, !chat.isGenerating, !chat.isArchived else {
             return false
         }
 
@@ -754,10 +897,11 @@ private enum ChatScrollTarget {
 
 private struct ChatHeaderView: View {
     let chat: Chat
+    let archiveChat: (Chat) -> Void
+    let unarchiveChat: (Chat) -> Void
 
     @Environment(\.modelContext) private var modelContext
 
-    @State private var isHovering = false
     @State private var isEditingTitle = false
     @State private var draftTitle = ""
     @State private var isGeneratingTitle = false
@@ -794,39 +938,46 @@ private struct ChatHeaderView: View {
 
             Spacer()
 
-            HStack(spacing: 2) {
-                if !isEmailReviewChat {
-                    if isGeneratingTitle {
-                        ProgressView()
-                            .controlSize(.small)
-                            .help("Generating title")
-                    } else {
-                        ChatHistoryActionButton(
-                            systemName: "sparkles",
-                            label: "Regenerate title",
-                            action: startRegeneratingTitle
-                        )
-                        .disabled(chat.isGenerating)
-                    }
-                }
-
-                ChatHistoryActionButton(
-                    systemName: "square.and.pencil",
-                    label: "Rename chat",
-                    action: { beginTitleEdit() }
-                )
-                .disabled(chat.isGenerating)
-                .opacity(isHovering && !isEditingTitle ? 1 : 0)
+            if isGeneratingTitle {
+                ProgressView()
+                    .controlSize(.small)
+                    .help("Generating title")
             }
 
             if chat.isGenerating {
                 ProgressView()
                     .controlSize(.small)
             }
+
+            Menu {
+                Button("Rename", systemImage: "square.and.pencil", action: beginTitleEdit)
+                    .disabled(chat.isGenerating)
+
+                if chat.isArchived {
+                    Button("Unarchive", systemImage: "archivebox") {
+                        unarchiveChat(chat)
+                    }
+                } else {
+                    Button("Archive", systemImage: "archivebox") {
+                        archiveChat(chat)
+                    }
+
+                    if !isEmailReviewChat {
+                        Divider()
+                        Button("Regenerate Title", systemImage: "sparkles", action: startRegeneratingTitle)
+                            .disabled(chat.isGenerating || isGeneratingTitle)
+                    }
+                }
+            } label: {
+                Label("Chat Options", systemImage: "ellipsis")
+                    .labelStyle(.iconOnly)
+            }
+            .menuStyle(.button)
+            .help("Chat options")
+            .disabled(isEditingTitle)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
-        .onHover { isHovering = $0 }
         .onChange(of: isEditingTitle) { _, isEditing in
             if isEditing {
                 isTitleFieldFocused = true
@@ -886,6 +1037,8 @@ private struct ChatHeaderView: View {
 /// regenerate-title actions that `ChatHeaderView` offers in regular widths.
 private struct CompactChatTranscriptChrome: ViewModifier {
     let chat: Chat
+    let archiveChat: (Chat) -> Void
+    let unarchiveChat: (Chat) -> Void
 
     @Environment(\.modelContext) private var modelContext
 
@@ -909,9 +1062,22 @@ private struct CompactChatTranscriptChrome: ViewModifier {
                             draftTitle = chat.title
                             isRenamePresented = true
                         }
+                        .disabled(chat.isGenerating)
 
-                        if !isEmailReviewChat {
-                            Button("Regenerate Title", systemImage: "sparkles", action: startRegeneratingTitle)
+                        if chat.isArchived {
+                            Button("Unarchive", systemImage: "archivebox") {
+                                unarchiveChat(chat)
+                            }
+                        } else {
+                            Button("Archive", systemImage: "archivebox") {
+                                archiveChat(chat)
+                            }
+
+                            if !isEmailReviewChat {
+                                Divider()
+                                Button("Regenerate Title", systemImage: "sparkles", action: startRegeneratingTitle)
+                                    .disabled(chat.isGenerating || isGeneratingTitle)
+                            }
                         }
                     } label: {
                         if isGeneratingTitle {
@@ -920,7 +1086,6 @@ private struct CompactChatTranscriptChrome: ViewModifier {
                             Label("Chat Options", systemImage: "ellipsis")
                         }
                     }
-                    .disabled(chat.isGenerating)
                 }
             }
             .alert("Rename Chat", isPresented: $isRenamePresented) {
@@ -1269,12 +1434,52 @@ private enum ChatAvatarMetrics {
 }
 
 private struct EmptyChatsView: View {
+    enum Kind {
+        case active
+        case archived
+        case selection
+    }
+
+    let kind: Kind
+
+    init(_ kind: Kind = .active) {
+        self.kind = kind
+    }
+
+    private var title: String {
+        switch kind {
+        case .active: "No Chats Yet"
+        case .archived: "No Archived Chats"
+        case .selection: "No Chat Selected"
+        }
+    }
+
+    private var systemImage: String {
+        switch kind {
+        case .active: "bubble.left.and.bubble.right"
+        case .archived: "archivebox"
+        case .selection: "bubble.left"
+        }
+    }
+
+    private var description: String? {
+        switch kind {
+        case .active: "Create a chat to start a new conversation."
+        case .archived: "Archived chats will appear here."
+        case .selection: nil
+        }
+    }
+
     var body: some View {
-        ContentUnavailableView(
-            "No Chats Yet",
-            systemImage: "bubble.left.and.bubble.right",
-            description: Text("Create a chat to start a new conversation.")
-        )
+        if let description {
+            ContentUnavailableView(
+                title,
+                systemImage: systemImage,
+                description: Text(description)
+            )
+        } else {
+            ContentUnavailableView(title, systemImage: systemImage)
+        }
     }
 }
 
