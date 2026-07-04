@@ -711,10 +711,10 @@ final class EmailRepository {
         let email = Email(
             messageID: message.messageID,
             subject: message.subject,
-            fromAddress: message.fromAddress,
-            toAddresses: message.toAddresses,
-            ccAddresses: message.ccAddresses,
-            bccAddresses: message.bccAddresses,
+            fromAddress: EmailAddressDisplayFormatter.string(message.fromAddress),
+            toAddresses: message.toAddresses.map(EmailAddressDisplayFormatter.string),
+            ccAddresses: message.ccAddresses.map(EmailAddressDisplayFormatter.string),
+            bccAddresses: message.bccAddresses.map(EmailAddressDisplayFormatter.string),
             date: message.date,
             receivedAt: message.internalDate ?? message.date,
             bodyText: message.bodyText,
@@ -769,6 +769,10 @@ final class EmailRepository {
         if existing.needsFlagSync {
             return
         }
+        existing.fromAddress = EmailAddressDisplayFormatter.string(fetched.fromAddress)
+        existing.toAddresses = fetched.toAddresses.map(EmailAddressDisplayFormatter.string)
+        existing.ccAddresses = fetched.ccAddresses.map(EmailAddressDisplayFormatter.string)
+        existing.bccAddresses = fetched.bccAddresses.map(EmailAddressDisplayFormatter.string)
         existing.isRead = fetched.isRead
         existing.isFlagged = fetched.isFlagged
         // Refresh body in case server-side edits happened.

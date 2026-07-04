@@ -327,7 +327,7 @@ private struct EmailReviewCardRow: View {
             if let accountLabel = item.accountLabel, !accountLabel.isEmpty {
                 EmailAccountBadge(label: accountLabel)
             }
-            let metadata = [item.sender, item.date]
+            let metadata = [item.sender.map(EmailAddressDisplayFormatter.string), item.date]
                 .compactMap { $0 }
                 .filter { !$0.isEmpty }
                 .joined(separator: " · ")

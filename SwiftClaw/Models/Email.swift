@@ -101,7 +101,7 @@ final class EmailThread {
     }
 
     private func participantSummary(for messages: [Email]) -> String {
-        let addresses = messages.flatMap { [$0.fromAddress] + $0.toAddresses }
+        let addresses = messages.flatMap { [$0.displayFromAddress] + $0.displayToAddresses }
         let unique = Array(NSOrderedSet(array: addresses)).compactMap { $0 as? String }
         return unique.prefix(3).joined(separator: ", ")
     }
@@ -279,10 +279,10 @@ final class Email {
     /// fields (mailbox name, message IDs, references) are deliberately
     /// excluded so queries only match content the user can see.
     var searchValues: [String] {
-        [subject, fromAddress, plainTextBody]
-            + toAddresses
-            + ccAddresses
-            + bccAddresses
+        [subject, displayFromAddress, plainTextBody]
+            + displayToAddresses
+            + ccAddresses.map(EmailAddressDisplayFormatter.string)
+            + bccAddresses.map(EmailAddressDisplayFormatter.string)
             + notes.map(\.content)
             + attachments.map(\.filename)
     }

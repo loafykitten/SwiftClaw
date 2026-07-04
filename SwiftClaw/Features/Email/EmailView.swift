@@ -759,7 +759,7 @@ private struct EmailThreadRow: View {
                         .foregroundStyle(.yellow)
                         .font(.caption)
                 }
-                Text(latest?.fromAddress ?? "Unknown")
+                Text(latest?.displayFromAddress ?? "Unknown")
                     .font(.subheadline)
                     .fontWeight(unread > 0 ? .semibold : .regular)
                     .lineLimit(1)

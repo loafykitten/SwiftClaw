@@ -26,7 +26,7 @@ nonisolated struct EmailReviewThreadDescriptor: Codable, Sendable {
             EmailReviewMessageDescriptor(
                 messageID: message.id,
                 subject: message.subject,
-                fromAddress: message.fromAddress,
+                fromAddress: message.displayFromAddress,
                 date: EmailReviewDateFormatter.string(from: message.date),
                 snippet: message.snippet,
                 isRead: message.isRead,

@@ -149,7 +149,7 @@ final class EmailReviewNotifyTool: Tool {
                 if let email = repository.fetchEmail(by: uuid) {
                     emailMetadata[uuid] = (
                         email.subject,
-                        email.fromAddress,
+                        email.displayFromAddress,
                         EmailReviewDateFormatter.string(from: email.date),
                         self.accountLabelProvider(email.accountID)
                     )

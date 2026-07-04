@@ -61,8 +61,8 @@ enum EmailReviewFollowUpContextBuilder {
         """
         email_guid: \(email.id.uuidString)
         subject: \(email.subject)
-        from: \(email.fromAddress)
-        to: \(email.toAddresses.joined(separator: ", "))
+        from: \(email.displayFromAddress)
+        to: \(email.displayToAddresses.joined(separator: ", "))
         date: \(EmailReviewDateFormatter.string(from: email.date))
         read: \(email.isRead)
         flagged: \(email.isFlagged)

@@ -243,7 +243,7 @@ struct EmailMessageCard: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(email.fromAddress)
+                    Text(email.displayFromAddress)
                         .font(.subheadline)
                         .fontWeight(.semibold)
                     Text(EmailDisplayDateFormatter.label(for: email.date))

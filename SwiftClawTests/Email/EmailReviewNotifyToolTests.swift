@@ -26,7 +26,7 @@ struct EmailReviewNotifyToolTests {
         let email = Email(
             messageID: "<triage@example.com>",
             subject: "Needs a reply",
-            fromAddress: "boss@example.com",
+            fromAddress: "\"Boss Person\" <boss@example.com>",
             toAddresses: ["me@example.com"],
             date: .now,
             bodyText: "Please reply by Friday."
@@ -80,7 +80,7 @@ struct EmailReviewNotifyToolTests {
         // review-card row with subject + sender — otherwise every card row
         // renders the literal placeholder "Email".
         #expect(card.items[0].subject == "Needs a reply")
-        #expect(card.items[0].sender == "boss@example.com")
+        #expect(card.items[0].sender == "Boss Person <boss@example.com>")
         #expect(card.items[0].date?.isEmpty == false)
         #expect(card.items[0].accountLabel == "Work")
 
