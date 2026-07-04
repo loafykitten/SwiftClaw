@@ -42,6 +42,27 @@ struct EmailAccountScopeTests {
         #expect(snapshot.search(.inbox, with: "Needle").map(\.latestMessage?.accountID) == [accountA])
     }
 
+    @Test func roleAwarePartitionsKeepSentInInboxAndExposeCustomFolders() {
+        let accountID = UUID()
+        let inbox = Self.email(accountID: accountID, subject: "Inbox")
+        let sent = Self.email(accountID: accountID, subject: "Sent", role: .sent)
+        let drafts = Self.email(accountID: accountID, subject: "Drafts", role: .drafts)
+        let junk = Self.email(accountID: accountID, subject: "Junk", role: .junk)
+        let custom = Self.email(accountID: accountID, subject: "Receipts", mailbox: "Work/Receipts", role: .custom)
+
+        let snapshot = EmailThreadScopeSnapshot(
+            emails: [inbox, sent, drafts, junk, custom],
+            accountScope: .account(accountID)
+        )
+
+        #expect(snapshot.threads(for: .inbox).count == 2)
+        #expect(snapshot.threads(for: .sent).count == 1)
+        #expect(snapshot.threads(for: .drafts).count == 1)
+        #expect(snapshot.threads(for: .junk).count == 1)
+        #expect(snapshot.customFolderNames == ["Work/Receipts"])
+        #expect(snapshot.threads(for: .custom("Work/Receipts")).count == 1)
+    }
+
     @Test func removedSelectedAccountFallsBackToAllAccounts() {
         let existing = UUID()
         let removed = UUID()
@@ -64,6 +85,8 @@ struct EmailAccountScopeTests {
     private static func email(
         accountID: UUID,
         subject: String,
+        mailbox: String = "INBOX",
+        role: MailFolderRole = .inbox,
         isFlagged: Bool = false,
         isArchived: Bool = false,
         isDeleted: Bool = false
@@ -72,6 +95,8 @@ struct EmailAccountScopeTests {
         let email = Email(
             subject: subject,
             bodyText: subject,
+            mailbox: mailbox,
+            role: role,
             isFlagged: isFlagged,
             isArchived: isArchived,
             isDeleted: isDeleted,

@@ -21,6 +21,7 @@ struct EmailReviewPromptTests {
                     subject: "Q3 planning",
                     fromAddress: "boss@example.com",
                     date: "Jun 24, 2026 at 10:00 PM",
+                    folder: "INBOX",
                     snippet: "Let's sync on the roadmap.",
                     isRead: false,
                     isFlagged: true,
@@ -48,6 +49,7 @@ struct EmailReviewPromptTests {
         #expect(json.contains("\"messageID\""))
         #expect(json.contains("\"fromAddress\""))
         #expect(json.contains("\"date\""))
+        #expect(json.contains("\"folder\""))
         #expect(json.contains("\"isRead\""))
         #expect(json.contains("\"notes\""))
         #expect(json.contains("\"author\""))
@@ -69,6 +71,7 @@ struct EmailReviewPromptTests {
                     subject: "Sprint review",
                     fromAddress: "team@example.com",
                     date: "Jun 24, 2026 at 10:00 PM",
+                    folder: "INBOX",
                     snippet: "Notes attached.",
                     isRead: true,
                     isFlagged: false,

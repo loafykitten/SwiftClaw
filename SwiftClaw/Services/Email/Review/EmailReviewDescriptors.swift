@@ -28,6 +28,7 @@ nonisolated struct EmailReviewThreadDescriptor: Codable, Sendable {
                 subject: message.subject,
                 fromAddress: message.displayFromAddress,
                 date: EmailReviewDateFormatter.string(from: message.date),
+                folder: message.mailbox,
                 snippet: message.snippet,
                 isRead: message.isRead,
                 isFlagged: message.isFlagged,
@@ -62,6 +63,7 @@ nonisolated struct EmailReviewMessageDescriptor: Codable, Sendable {
     let subject: String
     let fromAddress: String
     let date: String
+    let folder: String
     let snippet: String
     let isRead: Bool
     let isFlagged: Bool

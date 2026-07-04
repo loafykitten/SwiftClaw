@@ -25,7 +25,7 @@ struct EmailRepositoryTests {
             [Self.simpleMessage(uid: 99, messageID: "<a@example.com>", subject: "Hi")],
             mailbox: "Archive",
             accountID: Self.accountID,
-            isArchiveMailbox: true
+            role: .archive
         )
 
         let context = ModelContext(container)

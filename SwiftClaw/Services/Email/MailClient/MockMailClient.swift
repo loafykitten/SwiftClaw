@@ -20,6 +20,9 @@ actor MockMailClient: MailClient {
     var mockTrashMailbox: String? = nil
     var mockSentMailbox: String? = nil
     private(set) var specialUseResolutionCount: Int = 0
+    var mockFolders: [MailFolderDescriptor]? = nil
+    var listFoldersError: Error? = nil
+    private(set) var listFoldersCount: Int = 0
 
     nonisolated let isConfigured: Bool
     nonisolated let supportsIDLE = false
@@ -36,6 +39,14 @@ actor MockMailClient: MailClient {
         var existing = mailboxes[mailbox] ?? []
         existing.append(message)
         mailboxes[mailbox] = existing
+    }
+
+    func setFolders(_ folders: [MailFolderDescriptor]) {
+        mockFolders = folders
+    }
+
+    func setListFoldersError(_ error: Error?) {
+        listFoldersError = error
     }
 
     func testConnection() async throws {
@@ -99,6 +110,33 @@ actor MockMailClient: MailClient {
             uids: uids,
             flagsByUID: flagsByUID
         )
+    }
+
+    func listFolders() async throws -> [MailFolderDescriptor] {
+        listFoldersCount += 1
+        if let listFoldersError {
+            throw listFoldersError
+        }
+        if let mockFolders {
+            return mockFolders
+        }
+
+        var descriptors: [MailFolderDescriptor] = [
+            MailFolderDescriptor(name: "INBOX", role: .inbox, delimiter: nil),
+        ]
+        if let mockSentMailbox {
+            descriptors.append(MailFolderDescriptor(name: mockSentMailbox, role: .sent, delimiter: nil))
+        }
+        if let mockTrashMailbox {
+            descriptors.append(MailFolderDescriptor(name: mockTrashMailbox, role: .trash, delimiter: nil))
+        }
+        if let mockArchiveMailbox {
+            descriptors.append(MailFolderDescriptor(name: mockArchiveMailbox, role: .archive, delimiter: nil))
+        }
+        for name in mailboxes.keys.sorted() where !descriptors.contains(where: { $0.name == name }) {
+            descriptors.append(MailFolderDescriptor(name: name, role: .custom, delimiter: nil))
+        }
+        return descriptors
     }
 
     func setFlags(uid: Int, mailbox: String, updates: MailFlagUpdate) async throws {

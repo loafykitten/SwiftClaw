@@ -20,16 +20,24 @@ IMAP `LIST (SPECIAL-USE)` (Gmail's archive is `[Gmail]/All Mail`, not
 "Archive"), cached on `StoredEmailAccount`. `delete` is a recoverable move to
 Trash; `deletePermanently` is the explicit expunge.
 
+SwiftClaw also caches the account's selectable IMAP folder catalog. Sync covers
+INBOX, Sent, Drafts, Junk/Spam, Archive/Trash, and custom folders. Gmail system
+folders under `[Gmail]` / `[Google Mail]` that are not real SPECIAL-USE folders
+are skipped so unbounded All Mail does not get synced as a custom folder.
+Hierarchical folders render flat using their full path, such as
+`Work/Receipts`.
+
 ## Incremental sync
 
 `fetchMailbox(name:sinceUID:)` returns `MailboxFetchResult { messages,
 uidValidity, maxUID }`. `MailSyncWorker` keeps a per-`(account, mailbox)`
 high-water mark in `MailboxSyncStateStore`; it fetches `UID > lastSeenUID` when
 the recorded UIDVALIDITY still matches, and re-fetches the whole mailbox when it
-changed (folder rebuild). Per `syncOnce()` the worker iterates `[INBOX,
-account's resolved Sent folder]` and runs the upsert + reconciliation against
-each. Inject `clientFactory` / `syncStateProvider` / `syncStateUpdater` to test
-with `MockMailClient`.
+changed (folder rebuild). Per `syncOnce()` the worker lists or reads the cached
+folder catalog, then syncs each selectable folder sequentially for an account.
+Each mailbox keeps its own first-sync cap and high-water state. Inject
+`clientFactory` / `syncStateProvider` / `syncStateUpdater` to test with
+`MockMailClient`.
 
 ## Server-side reconciliation
 
@@ -41,8 +49,9 @@ true`) local rows whose UID is no longer on the server (preserves the row +
 `EmailNote`s + `EmailThread` linkage + `lastReviewedAt`; skipped for
 already-archived rows; surfaces in Trash), and
 `EmailRepository.reconcileFlagsFromSnapshot(...)` refreshes `\Seen`/`\Flagged`
-drift on persisting rows. MVP scope: INBOX only. Soft-deleted rows naturally
-clean up stale old-UID rows after a UIDVALIDITY-rebuild.
+drift on persisting rows. Drafts reconcile on every pass and hard-delete stale
+local draft rows, because editing drafts commonly deletes + re-appends them
+with new UIDs. Other synced folders use the normal soft-delete path.
 
 ## Threading
 
@@ -68,6 +77,13 @@ only after a successful inference call — a failure retries next pass instead o
 suppressing threads forever. Suppression is via `lastReviewedAt` plus
 `reviewedCount`; flagged/notated threads bypass it.
 
+Scheduled review always includes INBOX. Custom folders are excluded by default
+and can be opted in per account from Email settings. Junk/Spam, Sent, Drafts,
+Trash, and Archive are not scheduled-review folders, but the model can inspect
+them on request by calling `fetch_inbox_emails` with an explicit `folders`
+filter. The review prompt includes a short folder digest with unread counts
+instead of inlining bodies from every folder.
+
 ## Replies
 
 Replies populate `In-Reply-To` / `References` from the replied message and
@@ -80,14 +96,11 @@ duplicate insert.
 
 ## Known limitation
 
-Server→local reconciliation is **INBOX only** for the deletion-reconciliation
-pass that soft-deletes, plus per-account Sent for the upsert + flag/deletion
-reconciliation. The `MailSyncWorker.syncOnce()` runs the UID-set scan +
-deletion/flag reconciliation against every mailbox it syncs (INBOX + the
-account's resolved Sent folder). For Sent-mailbox reconciliation, the
-locally-synthetic rows `upsertSentMessage` produces are preserved until a real
-Sent-folder sync lands the matching Message-ID (recognized by the
-`isLocallySynthetic` flag, set on send and cleared on promotion). Extending to
-Archive/Trash belongs with further multi-mailbox-sync work — those mailboxes are
-reflected as local soft-delete flags today, so server-side membership
-reconciliation on them is lower priority.
+Folder rename on the server is treated as a new folder in the catalog. Rows
+under the old name are left alone until a later mailbox operation proves they no
+longer exist. That avoids data loss from transient LIST hiccups.
+
+Messages moved between folders in another client can briefly appear in their old
+local state until the destination folder sync lands. Archive has a Message-ID
+reclaim path; other cross-folder moves may show a temporary duplicate/Trash row
+until the next pass settles the store.

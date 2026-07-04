@@ -208,6 +208,46 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
         }
     }
 
+    func listFolders() async throws -> [MailFolderDescriptor] {
+        guard isConfigured else { throw MailClientError.notConfigured }
+
+        let server = makeIMAPServer()
+        do {
+            try await server.connect()
+            try await server.login(username: imapUsername, password: imapPassword ?? "")
+            let folders = Self.classify(try await server.listMailboxes())
+            try? await server.disconnect()
+
+            // Adopt catalog names when the server advertised the role, but
+            // keep already-resolved names when it didn't — servers without
+            // SPECIAL-USE resolve Sent/Trash via `resolveSpecialUseMailboxes`'s
+            // name heuristics, and Gmail's archive (`\All`) never appears in
+            // the catalog. Clobbering those with nil would break the Sent
+            // APPEND and archive paths.
+            var updated = account
+            updated.folders = folders
+            func catalogName(for role: MailFolderRole) -> String? {
+                folders.first { $0.role == role }?.name
+            }
+            updated.sentMailbox = catalogName(for: .sent) ?? updated.sentMailbox
+            updated.draftsMailbox = catalogName(for: .drafts) ?? updated.draftsMailbox
+            updated.trashMailbox = catalogName(for: .trash) ?? updated.trashMailbox
+            updated.archiveMailbox = catalogName(for: .archive) ?? updated.archiveMailbox
+            updated.junkMailbox = catalogName(for: .junk) ?? updated.junkMailbox
+            let accountToUpdate = updated
+            await MainActor.run {
+                EmailAccountStore.shared.update(accountToUpdate)
+            }
+            return folders
+        } catch {
+            try? await server.disconnect()
+            Self.logger.error("""
+                listFolders failed: \(String(describing: error))
+                """)
+            throw MailClientError.fetchFailed(error.localizedDescription)
+        }
+    }
+
     func setFlags(uid: Int, mailbox: String, updates: MailFlagUpdate) async throws {
         guard isConfigured else { throw MailClientError.notConfigured }
 
@@ -346,6 +386,11 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
         }
         guard isConfigured else { throw MailClientError.notConfigured }
 
+        if account.folders == nil {
+            _ = try await listFolders()
+            return
+        }
+
         let server = makeIMAPServer()
         do {
             try await server.connect()
@@ -482,6 +527,66 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    static func classify(_ infos: [Mailbox.Info]) -> [MailFolderDescriptor] {
+        var descriptors: [MailFolderDescriptor] = []
+        var seenNames = Set<String>()
+        var hasInbox = false
+
+        for info in infos {
+            guard info.isSelectable else { continue }
+            guard !info.attributes.contains(.flagged) else { continue }
+
+            let nameKey = info.name.lowercased()
+            guard seenNames.insert(nameKey).inserted else { continue }
+
+            let role: MailFolderRole
+            if info.name.caseInsensitiveCompare("INBOX") == .orderedSame {
+                guard !hasInbox else { continue }
+                hasInbox = true
+                role = .inbox
+            } else if info.attributes.contains(.inbox) {
+                guard !hasInbox else { continue }
+                hasInbox = true
+                role = .inbox
+            } else if info.attributes.contains(.sent) {
+                role = .sent
+            } else if info.attributes.contains(.drafts) {
+                role = .drafts
+            } else if info.attributes.contains(.trash) {
+                role = .trash
+            } else if info.attributes.contains(.archive) {
+                role = .archive
+            } else if info.attributes.contains(.junk) {
+                role = .junk
+            } else {
+                role = .custom
+            }
+
+            if role == .custom, isGmailSystemNamespace(info) {
+                continue
+            }
+
+            descriptors.append(MailFolderDescriptor(
+                name: info.name,
+                role: role,
+                delimiter: info.hierarchyDelimiter
+            ))
+        }
+
+        return descriptors
+    }
+
+    private static func isGmailSystemNamespace(_ info: Mailbox.Info) -> Bool {
+        let lowercased = info.name.lowercased()
+        let delimiters = [info.hierarchyDelimiter, "/", "."].compactMap(\.self)
+        for prefix in ["[gmail]", "[google mail]"] {
+            for delimiter in delimiters where lowercased.hasPrefix(prefix + delimiter) {
+                return true
+            }
+        }
+        return false
+    }
 
     private func makeIMAPServer() -> IMAPServer {
         IMAPServer(host: imapHost, port: imapPort)

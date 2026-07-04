@@ -40,14 +40,35 @@ enum EmailAccountScope: Hashable {
 @MainActor
 struct EmailThreadScopeSnapshot {
     let inbox: [EmailThread]
+    let sent: [EmailThread]
+    let drafts: [EmailThread]
+    let junk: [EmailThread]
     let archive: [EmailThread]
     let trash: [EmailThread]
+    let customFolders: [String: [EmailThread]]
+    let customFolderNames: [String]
 
     init(emails: [Email], accountScope: EmailAccountScope) {
         let scopedEmails = emails.filter { accountScope.includes($0) }
-        inbox = Self.threads(from: scopedEmails.filter { !$0.isArchived && !$0.isDeleted })
+        inbox = Self.threads(from: scopedEmails.filter {
+            !$0.isArchived
+                && !$0.isDeleted
+                && ($0.role == .inbox || $0.role == .sent)
+        })
+        sent = Self.threads(from: scopedEmails.filter { $0.role == .sent && !$0.isDeleted })
+        drafts = Self.threads(from: scopedEmails.filter { $0.role == .drafts && !$0.isDeleted })
+        junk = Self.threads(from: scopedEmails.filter { $0.role == .junk && !$0.isDeleted })
         archive = Self.threads(from: scopedEmails.filter { $0.isArchived && !$0.isDeleted })
         trash = Self.threads(from: scopedEmails.filter(\.isDeleted))
+
+        var groupedCustom: [String: [Email]] = [:]
+        for email in scopedEmails where email.role == .custom && !email.isArchived && !email.isDeleted {
+            groupedCustom[email.mailbox, default: []].append(email)
+        }
+        customFolderNames = groupedCustom.keys.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        customFolders = Dictionary(uniqueKeysWithValues: customFolderNames.map { name in
+            (name, Self.threads(from: groupedCustom[name] ?? []))
+        })
     }
 
     func threads(for mailbox: EmailMailbox) -> [EmailThread] {
@@ -56,10 +77,18 @@ struct EmailThreadScopeSnapshot {
             inbox
         case .flagged:
             inbox.filter { $0.isFlagged }
+        case .sent:
+            sent
+        case .drafts:
+            drafts
+        case .junk:
+            junk
         case .archive:
             archive
         case .trash:
             trash
+        case .custom(let name):
+            customFolders[name] ?? []
         }
     }
 
@@ -74,6 +103,12 @@ struct EmailThreadScopeSnapshot {
             guard seen.insert(thread.id).inserted else { return nil }
             return thread
         }
+    }
+
+    var allThreads: [EmailThread] {
+        var seen = Set<UUID>()
+        return (inbox + sent + drafts + junk + archive + trash + customFolderNames.flatMap { customFolders[$0] ?? [] })
+            .filter { seen.insert($0.id).inserted }
     }
 }
 

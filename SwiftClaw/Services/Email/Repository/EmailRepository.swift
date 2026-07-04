@@ -30,8 +30,7 @@ final class EmailRepository {
         _ fetched: [FetchedMessage],
         mailbox: String,
         accountID: UUID,
-        isDeletedMailbox: Bool = false,
-        isArchiveMailbox: Bool = false
+        role: MailFolderRole = .inbox
     ) -> Int {
         guard !fetched.isEmpty else { return 0 }
         var inserted = 0
@@ -63,7 +62,7 @@ final class EmailRepository {
         // by `messageID` across mailboxes and reclaim that row as archived,
         // rather than inserting a duplicate Archive copy and leaving a
         // wrongly-trashed INBOX row behind.
-        let reclaimable = isArchiveMailbox
+        let reclaimable = role == .archive
             ? fetchArchiveReclaimCandidates(
                 messageIDs: Array(messageIDsToFetched.keys),
                 archiveMailbox: mailbox,
@@ -85,6 +84,7 @@ final class EmailRepository {
                     existingEmail.uid = message.uid
                     existingEmail.isLocallySynthetic = false
                 }
+                existingEmail.role = role
                 reconcileFlags(existing: existingEmail, fetched: message)
             } else if let mid = message.messageID, !mid.isEmpty,
                       let synthetic = existingByMessageID[mid] {
@@ -93,6 +93,7 @@ final class EmailRepository {
                 // uid + clear `isLocallySynthetic` (see `upsertSentMessage`).
                 synthetic.uid = message.uid
                 synthetic.isLocallySynthetic = false
+                synthetic.role = role
                 reconcileFlags(existing: synthetic, fetched: message)
             } else if let mid = message.messageID, !mid.isEmpty,
                       let reclaimed = reclaimable[mid] {
@@ -103,14 +104,14 @@ final class EmailRepository {
                 reclaimed.mailbox = mailbox
                 reclaimed.isArchived = true
                 reclaimed.isDeleted = false
+                reclaimed.role = role
                 reconcileFlags(existing: reclaimed, fetched: message)
             } else {
                 insert(
                     message: message,
                     mailbox: mailbox,
                     accountID: accountID,
-                    isDeletedMailbox: isDeletedMailbox,
-                    isArchiveMailbox: isArchiveMailbox
+                    role: role
                 )
                 inserted += 1
             }
@@ -486,6 +487,7 @@ final class EmailRepository {
             bodyText: outgoing.bodyText,
             bodyHTML: outgoing.bodyHTML,
             mailbox: sentMailbox,
+            role: .sent,
             isRead: true,
             isFlagged: false,
             isArchived: false,
@@ -532,7 +534,8 @@ final class EmailRepository {
         serverUIDs: Set<UInt32>,
         mailbox: String,
         accountID: UUID,
-        preserveLocallySynthetic: Bool = false
+        preserveLocallySynthetic: Bool = false,
+        hardDelete: Bool = false
     ) -> Int {
         let descriptor = FetchDescriptor<Email>(
             predicate: #Predicate { email in
@@ -553,7 +556,11 @@ final class EmailRepository {
             // (see `upsertSentMessage`). Only the Sent-mailbox pass passes
             // `preserveLocallySynthetic: true`.
             if preserveLocallySynthetic && email.isLocallySynthetic { continue }
-            email.isDeleted = true
+            if hardDelete {
+                modelContext.delete(email)
+            } else {
+                email.isDeleted = true
+            }
             removed += 1
         }
         if removed > 0 {
@@ -610,7 +617,41 @@ final class EmailRepository {
         return changed
     }
 
+    @discardableResult
+    func backfillFolderRolesIfNeeded(
+        accounts: [StoredEmailAccount],
+        userDefaults: UserDefaults = .standard
+    ) -> Int {
+        let key = "email.folderRole.backfilled.v1"
+        guard !userDefaults.bool(forKey: key) else { return 0 }
+
+        // A failed fetch leaves the flag unset so the backfill retries on the
+        // next launch instead of silently never running.
+        guard let emails = try? modelContext.fetch(FetchDescriptor<Email>()) else { return 0 }
+
+        let accountsByID = Dictionary(uniqueKeysWithValues: accounts.map { ($0.id, $0) })
+        var changed = 0
+        for email in emails {
+            let targetRole = Self.backfillRole(for: email, account: accountsByID[email.accountID])
+            if email.role != targetRole {
+                email.role = targetRole
+                changed += 1
+            }
+        }
+        if changed > 0 {
+            save()
+        }
+        userDefaults.set(true, forKey: key)
+        return changed
+    }
+
     // MARK: - Internals
+
+    private static func backfillRole(for email: Email, account: StoredEmailAccount?) -> MailFolderRole {
+        if email.isArchived { return .archive }
+        if email.isDeleted { return .trash }
+        return account?.folderRole(forMailbox: email.mailbox) ?? .inbox
+    }
 
     private func fetchExistingMailboxIndex(uids: [Int], mailbox: String, accountID: UUID) -> [Int: Email] {
         guard !uids.isEmpty else { return [:] }
@@ -705,8 +746,7 @@ final class EmailRepository {
         message: FetchedMessage,
         mailbox: String,
         accountID: UUID,
-        isDeletedMailbox: Bool,
-        isArchiveMailbox: Bool = false
+        role: MailFolderRole
     ) {
         let email = Email(
             messageID: message.messageID,
@@ -720,10 +760,11 @@ final class EmailRepository {
             bodyText: message.bodyText,
             bodyHTML: message.bodyHTML,
             mailbox: mailbox,
+            role: role,
             isRead: message.isRead,
             isFlagged: message.isFlagged,
-            isArchived: isArchiveMailbox,
-            isDeleted: isDeletedMailbox,
+            isArchived: role == .archive,
+            isDeleted: role == .trash,
             inReplyTo: message.inReplyTo,
             referencesRaw: message.references,
             accountID: accountID,

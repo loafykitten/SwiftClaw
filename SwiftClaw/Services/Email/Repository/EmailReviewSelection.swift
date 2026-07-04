@@ -55,7 +55,8 @@ extension EmailRepository {
     ) -> [EmailThread] {
         let candidates = fetchReviewCandidateThreads(
             includeArchived: filter.includeArchived,
-            includeTrashed: filter.includeTrashed
+            includeTrashed: filter.includeTrashed,
+            folders: filter.folders
         )
 
         let ageWindow = TimeInterval(max(0, filter.maxAgeDays)) * 86_400
@@ -125,13 +126,22 @@ extension EmailRepository {
     /// preserving the "don't call the model when there's nothing to do"
     /// optimization the inlined pre-fetch used to give for free.
     func hasThreadsEligibleForReview(now: Date = .now) -> Bool {
-        let candidates = fetchReviewCandidateThreads(includeArchived: false, includeTrashed: false)
+        hasThreadsEligibleForReview(filter: EmailReviewFetchFilter(), now: now)
+    }
+
+    func hasThreadsEligibleForReview(filter: EmailReviewFetchFilter, now: Date = .now) -> Bool {
+        let candidates = fetchReviewCandidateThreads(
+            includeArchived: filter.includeArchived,
+            includeTrashed: filter.includeTrashed,
+            folders: filter.folders
+        )
         return candidates.contains { thread in
-            // Gate-level markers use reviewable messages only; the fetch path
-            // recalculates them from the caller's include flags.
-            Self.passesSuppression(
+            let considered = Self.consideredMessages(of: thread, filter: filter)
+            guard !considered.isEmpty else { return false }
+            let isMarker = considered.contains { $0.isFlagged || !$0.notes.isEmpty }
+            return Self.passesSuppression(
                 thread,
-                isMarker: thread.isReviewFlagged || thread.hasReviewNote,
+                isMarker: isMarker,
                 now: now
             )
         }
@@ -139,8 +149,16 @@ extension EmailRepository {
 
     private func fetchReviewCandidateThreads(
         includeArchived: Bool,
-        includeTrashed: Bool
+        includeTrashed: Bool,
+        folders: [String]? = nil
     ) -> [EmailThread] {
+        if !(folders ?? []).isEmpty {
+            let descriptor = FetchDescriptor<EmailThread>(
+                sortBy: [SortDescriptor(\.lastDate, order: .reverse)]
+            )
+            return (try? modelContext.fetch(descriptor)) ?? []
+        }
+
         let descriptor = FetchDescriptor<EmailThread>(
             predicate: #Predicate { thread in
                 thread.messages.contains { message in
@@ -155,16 +173,44 @@ extension EmailRepository {
     }
 
     /// The messages of `thread` that count toward review under `filter`:
-    /// inbox messages always, archived/trashed only when their include flag is
-    /// set. Sorted oldest-first so `.last` is the latest considered message.
+    /// explicitly requested folders always; otherwise archived/trashed only
+    /// when their include flag is set, and the rest per role eligibility
+    /// (inbox/sent always, opted-in custom folders, never junk/drafts).
+    /// Sorted oldest-first so `.last` is the latest considered message.
     private static func consideredMessages(
         of thread: EmailThread,
         filter: EmailReviewFetchFilter
     ) -> [Email] {
-        thread.sortedMessages.filter { message in
-            if message.isDeleted { return filter.includeTrashed }
-            if message.isArchived { return filter.includeArchived }
+        let explicitFolders = filter.normalizedFolders
+        return thread.sortedMessages.filter { message in
+            let mailbox = EmailReviewFetchFilter.normalizeFolderName(message.mailbox)
+            let explicitlyRequested = explicitFolders.contains(mailbox)
+            if explicitlyRequested {
+                return true
+            }
+            if message.isDeleted {
+                return filter.includeTrashed
+            }
+            if message.isArchived {
+                return filter.includeArchived
+            }
+            return isMessageReviewEligible(message, filter: filter)
+        }
+    }
+
+    private static func isMessageReviewEligible(_ message: Email, filter: EmailReviewFetchFilter) -> Bool {
+        switch message.role {
+        case .inbox, .sent:
             return true
+        case .custom:
+            let mailbox = EmailReviewFetchFilter.normalizeFolderName(message.mailbox)
+            return filter.includedCustomFoldersByAccount[message.accountID]?.contains(mailbox) == true
+        case .junk, .drafts:
+            return false
+        case .archive:
+            return filter.includeArchived
+        case .trash:
+            return filter.includeTrashed
         }
     }
 

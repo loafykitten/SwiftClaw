@@ -104,7 +104,11 @@ final class EmailReviewService {
         // last new mail. The forced/conversational path always proceeds — the
         // model + `fetch_inbox_emails` filters drive selection (including
         // archived/trashed steering the eligibility gate wouldn't see).
-        if !force, !repository.hasThreadsEligibleForReview() {
+        var gateFilter = EmailReviewFetchFilter()
+        gateFilter.includedCustomFoldersByAccount = EmailReviewFetchFilter.includedCustomFoldersByAccount(
+            from: EmailAccountStore.shared.accounts
+        )
+        if !force, !repository.hasThreadsEligibleForReview(filter: gateFilter) {
             // Distinguish "inbox has mail but everything was triaged in a prior
             // pass" (the suppression path — expected, not an error) from "inbox
             // genuinely has nothing to review" so the log doesn't read like the
@@ -138,7 +142,8 @@ final class EmailReviewService {
 
         let systemPrompt = Self.systemPrompt(
             isContinuation: targetChatID != nil,
-            userDefaults: userDefaults
+            userDefaults: userDefaults,
+            context: context
         )
         let userPrompt = Self.userPrompt()
 
@@ -235,7 +240,8 @@ final class EmailReviewService {
 
     private static func systemPrompt(
         isContinuation: Bool = false,
-        userDefaults: UserDefaults
+        userDefaults: UserDefaults,
+        context: ModelContext
     ) -> String {
         let resolvedPersona = AssistantPersona.personaPrompt(userDefaults: userDefaults)
         // When re-running inside an existing review chat the prior conversation
@@ -256,6 +262,7 @@ final class EmailReviewService {
         it as a standing rule.
         """ : ""
         let defaults = SettingsStorage.loadEmailReviewFetchDefaults(userDefaults: userDefaults)
+        let folderAwareness = folderAwarenessPrompt(context: context)
         return """
         \(resolvedPersona)
 
@@ -276,6 +283,8 @@ final class EmailReviewService {
         THEN review what comes back and decide which threads \
         need the user. You may call `fetch_inbox_emails` again with different filters if a first pull \
         clearly missed what the user is after.
+
+        \(folderAwareness)
 
         Lean toward surfacing. The user is working toward an inbox where every email is eventually either \
         deleted or archived, and they would much rather see a borderline thread than miss one that mattered. \
@@ -338,5 +347,48 @@ final class EmailReviewService {
         (use the defaults unless I've steered you otherwise), then tell me about anything that needs me. \
         For each thread, focus on the latest message.
         """
+    }
+
+    private static func folderAwarenessPrompt(context: ModelContext) -> String {
+        let accounts = EmailAccountStore.shared.accounts.filter(\.isComplete)
+        guard !accounts.isEmpty else {
+            return "Folders in scheduled review: INBOX. Available on request via `fetch_inbox_emails {\"folders\": [...]}`: none known yet."
+        }
+
+        let lines = accounts.map { account -> String in
+            let folders = account.folders ?? []
+            let includedCustom = Set((account.reviewIncludedMailboxes ?? []).map {
+                EmailReviewFetchFilter.normalizeFolderName($0)
+            })
+            func isScheduledCustom(_ folder: MailFolderDescriptor) -> Bool {
+                folder.role == .custom
+                    && includedCustom.contains(EmailReviewFetchFilter.normalizeFolderName(folder.name))
+            }
+            let scheduled = ["INBOX"] + folders.filter(isScheduledCustom).map(\.name)
+
+            let requestable = folders
+                .filter { $0.role != .inbox && !isScheduledCustom($0) }
+                .map { folder in
+                    let unread = unreadCount(accountID: account.id, folderName: folder.name, context: context)
+                    return unread > 0 ? "\(folder.name) (\(unread) unread)" : folder.name
+                }
+
+            let accountPrefix = accounts.count > 1 ? "\(account.effectiveDisplayName): " : ""
+            let requestableText = requestable.isEmpty ? "none known" : requestable.joined(separator: ", ")
+            return "\(accountPrefix)Folders in scheduled review: \(scheduled.joined(separator: ", ")). Available on request via `fetch_inbox_emails {\"folders\": [...]}`: \(requestableText)."
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private static func unreadCount(accountID: UUID, folderName: String, context: ModelContext) -> Int {
+        let descriptor = FetchDescriptor<Email>(
+            predicate: #Predicate { email in
+                email.accountID == accountID
+                    && email.mailbox == folderName
+                    && !email.isRead
+            }
+        )
+        return (try? context.fetchCount(descriptor)) ?? 0
     }
 }

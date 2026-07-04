@@ -39,6 +39,22 @@ nonisolated struct MailFlagSnapshot: Sendable, Hashable {
     }
 }
 
+nonisolated enum MailFolderRole: String, Codable, Sendable, Hashable {
+    case inbox
+    case sent
+    case drafts
+    case trash
+    case archive
+    case junk
+    case custom
+}
+
+nonisolated struct MailFolderDescriptor: Codable, Sendable, Hashable {
+    let name: String
+    let role: MailFolderRole
+    let delimiter: String?
+}
+
 /// Domain-level normalized representation of a fetched email, decoupled from any
 /// IMAP library type. The repository maps this into the SwiftData `Email` model.
 nonisolated struct FetchedMessage: Sendable, Hashable {
@@ -178,6 +194,10 @@ nonisolated protocol MailClient: Sendable {
     /// enough to run on every sync so the local store mirrors the server
     /// faithfully instead of drifting indefinitely between full re-fetches.
     func fetchMailboxUIDSet(name: String) async throws -> MailboxUIDSet
+
+    /// List selectable server folders and normalize provider-specific
+    /// SPECIAL-USE metadata into app-level roles.
+    func listFolders() async throws -> [MailFolderDescriptor]
 
     /// Apply flag changes (read / flagged) to a message identified by UID.
     func setFlags(uid: Int, mailbox: String, updates: MailFlagUpdate) async throws

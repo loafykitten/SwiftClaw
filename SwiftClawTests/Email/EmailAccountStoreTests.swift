@@ -190,6 +190,62 @@ struct EmailAccountStoreTests {
         #expect(snapshot.map(\.displayName).sorted() == ["A", "B"])
     }
 
+    @Test func folderCatalogFieldsRoundTripAndLegacyDecodeLeavesThemNil() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanup() }
+
+        let store = EmailAccountStore(userDefaults: fixture.defaults)
+        let account = StoredEmailAccount(
+            displayName: "Work",
+            imapHost: "imap.work.com",
+            imapUsername: "me@work.com",
+            smtpHost: "smtp.work.com",
+            smtpUsername: "me@work.com",
+            fromAddress: "me@work.com",
+            archiveMailbox: "Archive",
+            trashMailbox: "Trash",
+            sentMailbox: "Sent",
+            draftsMailbox: "Drafts",
+            junkMailbox: "Spam",
+            folders: [
+                MailFolderDescriptor(name: "INBOX", role: .inbox, delimiter: nil),
+                MailFolderDescriptor(name: "Projects", role: .custom, delimiter: "/"),
+            ],
+            reviewIncludedMailboxes: ["Projects"]
+        )
+        store.add(account)
+
+        let reload = EmailAccountStore(userDefaults: fixture.defaults)
+        let reloaded = try #require(reload.account(for: account.id))
+        #expect(reloaded.draftsMailbox == "Drafts")
+        #expect(reloaded.junkMailbox == "Spam")
+        #expect(reloaded.folders?.contains(MailFolderDescriptor(name: "Projects", role: .custom, delimiter: "/")) == true)
+        #expect(reloaded.reviewIncludedMailboxes == ["Projects"])
+
+        let legacyJSON = """
+        [{
+          "id": "\(UUID().uuidString)",
+          "displayName": "Legacy",
+          "imapHost": "imap.example.com",
+          "imapPort": 993,
+          "imapUsername": "legacy@example.com",
+          "smtpHost": "smtp.example.com",
+          "smtpPort": 587,
+          "smtpUsername": "legacy@example.com",
+          "fromAddress": "legacy@example.com"
+        }]
+        """
+        let legacyDefaults = try makeFixture()
+        defer { legacyDefaults.cleanup() }
+        legacyDefaults.defaults.set(legacyJSON.data(using: .utf8), forKey: SettingsKeys.emailAccounts)
+        let legacyStore = EmailAccountStore(userDefaults: legacyDefaults.defaults)
+        let legacy = try #require(legacyStore.accounts.first)
+        #expect(legacy.folders == nil)
+        #expect(legacy.draftsMailbox == nil)
+        #expect(legacy.junkMailbox == nil)
+        #expect(legacy.reviewIncludedMailboxes == nil)
+    }
+
     // MARK: - Helpers
 
     private func makeFixture() throws -> UserDefaultsFixture {

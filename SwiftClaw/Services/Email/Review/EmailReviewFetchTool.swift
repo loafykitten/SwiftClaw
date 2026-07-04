@@ -59,6 +59,12 @@ final class EmailReviewFetchTool: Tool {
         if let v = Self.boolArgument(arguments["include_unread"]) { filter.includeUnread = v }
         if let v = Self.boolArgument(arguments["include_archived"]) { filter.includeArchived = v }
         if let v = Self.boolArgument(arguments["include_trashed"]) { filter.includeTrashed = v }
+        if let folders = Self.stringArrayArgument(arguments["folders"]), !folders.isEmpty {
+            filter.folders = folders
+        }
+        filter.includedCustomFoldersByAccount = await MainActor.run {
+            EmailReviewFetchFilter.includedCustomFoldersByAccount(from: EmailAccountStore.shared.accounts)
+        }
 
         let filterToFetch = filter
         let (json, count): (String, Int) = await MainActor.run {
@@ -96,7 +102,10 @@ final class EmailReviewFetchTool: Tool {
         """
         Fetches a filtered slice of the user's inbox threads to review. Call this \
         first, before deciding what needs the user's attention. All parameters are \
-        optional; omitted parameters use the user's configured defaults. The user's \
+        optional; omitted parameters use the user's configured defaults. Omitted \
+        `folders` means scheduled-review folders only: INBOX plus any custom folders \
+        the user opted into. Pass `folders` with explicit folder names to inspect \
+        Junk, Sent, Drafts, Archive, Trash, or custom folders on request. The user's \
         current defaults are: max_age_days \(defaults.maxAgeDescription); \
         limit=\(defaults.limit) (max threads, though unread/flagged/notated \
         threads are always returned even beyond the limit); \
@@ -127,6 +136,7 @@ final class EmailReviewFetchTool: Tool {
             ToolParameter(name: "include_unread", type: .boolean, description: "Include unread threads. Default \(defaults.includeUnread)."),
             ToolParameter(name: "include_archived", type: .boolean, description: "Include archived threads. Default \(defaults.includeArchived)."),
             ToolParameter(name: "include_trashed", type: .boolean, description: "Include trashed threads. Default \(defaults.includeTrashed)."),
+            ToolParameter(name: "folders", type: .array, description: "Explicit folder names to inspect, such as Junk, Sent, Drafts, Archive, Trash, or a custom folder. Omit for the user's configured scheduled-review folders."),
         ]
     }
 
@@ -151,6 +161,26 @@ final class EmailReviewFetchTool: Tool {
             default: return nil
             }
         default: return nil
+        }
+    }
+
+    private static func stringArrayArgument(_ value: JSONValue?) -> [String]? {
+        switch value {
+        case .array(let values):
+            let strings = values.compactMap { item -> String? in
+                if case .string(let string) = item {
+                    return string.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                return nil
+            }
+            return strings.filter { !$0.isEmpty }
+        case .string(let string):
+            return string
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        default:
+            return nil
         }
     }
 }

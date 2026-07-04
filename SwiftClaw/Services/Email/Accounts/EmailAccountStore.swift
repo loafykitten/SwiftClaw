@@ -9,7 +9,7 @@ import Foundation
 /// time. Adding an account is additive; deleting one also removes its
 /// Keychain passwords.
 ///
-/// `archiveMailbox` / `trashMailbox` / `sentMailbox` cache the per-account
+/// `folders` and the special-use mailbox fields cache the per-account
 /// special-use folder names resolved via IMAP `LIST (SPECIAL-USE)` on first
 /// use. They're additive Codable fields and stay `nil` until the
 /// first `SwiftMailClient.resolveSpecialUseMailboxes()` call lands them —
@@ -34,6 +34,15 @@ nonisolated struct StoredEmailAccount: Codable, Identifiable, Sendable, Hashable
     /// Server-side Sent folder name. Used by the reply composer's APPEND path
     /// so sent mail shows up locally + on other clients. `nil` until resolved.
     var sentMailbox: String?
+    /// Server-side Drafts folder name. Drafts sync read-only.
+    var draftsMailbox: String?
+    /// Server-side Junk/Spam folder name. Synced and visible, but excluded from
+    /// scheduled review unless explicitly requested by folder name.
+    var junkMailbox: String?
+    /// Cached selectable server folder catalog from IMAP LIST.
+    var folders: [MailFolderDescriptor]?
+    /// Custom folder names opted into scheduled review. `nil` means none.
+    var reviewIncludedMailboxes: [String]?
 
     init(
         id: UUID = UUID(),
@@ -47,7 +56,11 @@ nonisolated struct StoredEmailAccount: Codable, Identifiable, Sendable, Hashable
         fromAddress: String = "",
         archiveMailbox: String? = nil,
         trashMailbox: String? = nil,
-        sentMailbox: String? = nil
+        sentMailbox: String? = nil,
+        draftsMailbox: String? = nil,
+        junkMailbox: String? = nil,
+        folders: [MailFolderDescriptor]? = nil,
+        reviewIncludedMailboxes: [String]? = nil
     ) {
         self.id = id
         self.displayName = displayName
@@ -61,6 +74,10 @@ nonisolated struct StoredEmailAccount: Codable, Identifiable, Sendable, Hashable
         self.archiveMailbox = archiveMailbox
         self.trashMailbox = trashMailbox
         self.sentMailbox = sentMailbox
+        self.draftsMailbox = draftsMailbox
+        self.junkMailbox = junkMailbox
+        self.folders = folders
+        self.reviewIncludedMailboxes = reviewIncludedMailboxes
     }
 
     /// Same as `imapUsername` for most providers. Used as the display label
@@ -80,6 +97,24 @@ nonisolated struct StoredEmailAccount: Codable, Identifiable, Sendable, Hashable
     /// Resolved Sent mailbox, or `nil` — the Sent APPEND path is best-effort
     /// and skipped entirely when there's no resolved Sent folder.
     var resolvedSentMailbox: String? { sentMailbox }
+
+    /// Maps a mailbox name to its folder role using the cached special-use
+    /// names first (they can out-resolve the catalog on servers without
+    /// SPECIAL-USE, where `resolveSpecialUseMailboxes` falls back to name
+    /// heuristics), then the cached folder catalog. `nil` when the name is
+    /// unknown to both.
+    func folderRole(forMailbox name: String) -> MailFolderRole? {
+        func matches(_ candidate: String?) -> Bool {
+            guard let candidate, !candidate.isEmpty else { return false }
+            return name.caseInsensitiveCompare(candidate) == .orderedSame
+        }
+        if matches(sentMailbox) { return .sent }
+        if matches(draftsMailbox) { return .drafts }
+        if matches(trashMailbox) { return .trash }
+        if matches(archiveMailbox) { return .archive }
+        if matches(junkMailbox) { return .junk }
+        return folders?.first { matches($0.name) }?.role
+    }
 
     /// True when all hosts/usernames/from address are present. Passwords
     /// aren't checked here — they live in the Keychain and a missing password

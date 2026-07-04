@@ -223,6 +223,32 @@ struct EmailSettingsView: View {
             }
             .disabled(!isEmailEnabled)
 
+            Section {
+                let accounts = accountStore.accounts.filter(\.isComplete)
+                if accounts.isEmpty {
+                    Text("Add an account to choose review folders.")
+                        .foregroundStyle(.secondary)
+                        .font(.callout)
+                } else if let account = accounts.first, accounts.count == 1 {
+                    NavigationLink("Review Folders") {
+                        EmailReviewFolderSettingsView(account: account)
+                    }
+                } else {
+                    ForEach(accounts) { account in
+                        NavigationLink(account.effectiveDisplayName) {
+                            EmailReviewFolderSettingsView(account: account)
+                        }
+                    }
+                }
+            } header: {
+                Text("Review Folders")
+            } footer: {
+                Text("Custom folders are off by default. Inbox is always reviewed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .disabled(!isEmailEnabled)
+
             // MARK: Default filters
 
             Section {

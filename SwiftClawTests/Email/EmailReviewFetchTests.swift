@@ -250,6 +250,48 @@ struct EmailReviewFetchTests {
         #expect(repository.fetchThreadsForReview(filter: includeTrashed).count == 1)
     }
 
+    @Test func customFoldersAreExcludedUnlessIncludedForScheduledReview() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let repository = EmailRepository(modelContext: ModelContext(container))
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 1, messageID: "<custom@example.com>", subject: "Custom folder")],
+            mailbox: "Projects",
+            accountID: Self.accountID,
+            role: .custom
+        )
+        repository.resolveThreads()
+
+        var filter = EmailReviewFetchFilter(applySuppression: false)
+        #expect(repository.fetchThreadsForReview(filter: filter).isEmpty)
+        #expect(repository.hasThreadsEligibleForReview(filter: filter) == false)
+
+        filter.includedCustomFoldersByAccount = [
+            Self.accountID: [EmailReviewFetchFilter.normalizeFolderName("Projects")]
+        ]
+        #expect(repository.fetchThreadsForReview(filter: filter).count == 1)
+        #expect(repository.hasThreadsEligibleForReview(filter: filter))
+    }
+
+    @Test func explicitFoldersReachJunkEvenWhenNotScheduled() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let repository = EmailRepository(modelContext: ModelContext(container))
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 1, messageID: "<junk@example.com>", subject: "Junk folder")],
+            mailbox: "Spam",
+            accountID: Self.accountID,
+            role: .junk
+        )
+        repository.resolveThreads()
+
+        var defaults = EmailReviewFetchFilter(applySuppression: false)
+        #expect(repository.fetchThreadsForReview(filter: defaults).isEmpty)
+
+        defaults.folders = ["spam"]
+        let fetched = repository.fetchThreadsForReview(filter: defaults)
+        #expect(fetched.count == 1)
+        #expect(fetched.first?.latestMessage?.subject == "Junk folder")
+    }
+
     @Test func eligibilityGateReflectsSuppression() async throws {
         let container = try EmailRepositoryTests.inMemoryContainer()
         let repository = EmailRepository(modelContext: ModelContext(container))
@@ -360,6 +402,29 @@ struct EmailReviewFetchTests {
         let result = try await tool.execute(arguments: [:])
         #expect(result.contains("Tool old read"))
         #expect(result.components(separatedBy: "\"threadID\"").count - 1 == 1)
+    }
+
+    @Test func fetchToolFoldersArgumentCanFetchJunk() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let repository = EmailRepository(modelContext: ModelContext(container))
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 1, messageID: "<tool-junk@example.com>", subject: "Tool junk")],
+            mailbox: "Spam",
+            accountID: Self.accountID,
+            role: .junk
+        )
+        repository.resolveThreads()
+
+        let tool = EmailReviewFetchTool(
+            modelContainer: container,
+            applySuppression: false,
+            defaults: Self.fetchDefaults(limit: 10)
+        )
+        let omitted = try await tool.execute(arguments: [:])
+        #expect(!omitted.contains("Tool junk"))
+
+        let requested = try await tool.execute(arguments: ["folders": .array([.string("Spam")])])
+        #expect(requested.contains("Tool junk"))
     }
 
     private static func fetchDefaults(limit: Int) -> EmailReviewFetchDefaults {

@@ -154,6 +154,53 @@ struct MailSyncWorkerIncrementalTests {
         #expect(finalState.lastSeenUID == 3)
     }
 
+    @Test func folderCatalogSyncsMultipleFoldersAndWritesFolderRole() async throws {
+        let container = try Self.inMemoryContainer()
+        let mock = MockMailClient()
+        let accountID = UUID()
+        let account = Self.completeAccount(id: accountID)
+        await mock.setUIDValidity(7)
+        await mock.setFolders([
+            MailFolderDescriptor(name: "INBOX", role: .inbox, delimiter: nil),
+            MailFolderDescriptor(name: "Spam", role: .junk, delimiter: nil),
+            MailFolderDescriptor(name: "Projects", role: .custom, delimiter: nil),
+        ])
+        await mock.setMailbox("INBOX", messages: [Self.message(uid: 1, accountID: accountID)])
+        await mock.setMailbox("Spam", messages: [Self.message(uid: 2, accountID: accountID)])
+        await mock.setMailbox("Projects", messages: [Self.message(uid: 3, accountID: accountID)])
+
+        var states: [String: MailboxSyncState] = [:]
+        let provider: @Sendable (UUID, String) async -> MailboxSyncState? = { id, mailbox in
+            await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] }
+        }
+        let updater: @Sendable (MailboxSyncState, UUID, String) async -> Void = { state, id, mailbox in
+            await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] = state }
+        }
+
+        let worker = MailSyncWorker(
+            accountsProvider: { [account] },
+            modelContainer: container,
+            clientFactory: { _ in mock },
+            syncStateProvider: provider,
+            syncStateUpdater: updater,
+            reconcileEveryNPasses: 1
+        )
+
+        let inserted = await worker.syncOnce()
+        #expect(inserted == 3)
+        let requests = await mock.fetchRequests.map(\.name)
+        #expect(requests.contains("INBOX"))
+        #expect(requests.contains("Spam"))
+        #expect(requests.contains("Projects"))
+
+        let context = ModelContext(container)
+        let emails = (try? context.fetch(FetchDescriptor<Email>())) ?? []
+        let rolesByMailbox = Dictionary(uniqueKeysWithValues: emails.map { ($0.mailbox, $0.role) })
+        #expect(rolesByMailbox["INBOX"] == .inbox)
+        #expect(rolesByMailbox["Spam"] == .junk)
+        #expect(rolesByMailbox["Projects"] == .custom)
+    }
+
     // MARK: - Helpers
 
     private static func completeAccount(id: UUID) -> StoredEmailAccount {

@@ -46,18 +46,24 @@ struct EmailView: View {
         let accountScope = selectedAccountScope.normalized(availableAccounts: accounts)
         let accountLabeler = EmailAccountLabeler(accountScope: accountScope, accounts: accounts)
         let snapshot = EmailThreadScopeSnapshot(emails: emails, accountScope: accountScope)
-        let inbox = snapshot.inbox
+        let sent = snapshot.sent
+        let drafts = snapshot.drafts
+        let junk = snapshot.junk
         let archive = snapshot.archive
         let trash = snapshot.trash
 
         let searched = snapshot.search(selectedMailbox, with: emailSearchText)
         let selected = searched.first { $0.id == selectedThreadID } ?? searched.first
 
-        // Archive / Trash are hidden when empty so the sidebar never
-        // advertises dead mailboxes; Inbox + Flagged are always present.
+        // Empty mailboxes stay hidden except Inbox + Flagged, which are the
+        // primary navigation anchors.
         var visibleMailboxes: [EmailMailbox] = [.inbox, .flagged]
+        if !sent.isEmpty { visibleMailboxes.append(.sent) }
+        if !drafts.isEmpty { visibleMailboxes.append(.drafts) }
+        if !junk.isEmpty { visibleMailboxes.append(.junk) }
         if !archive.isEmpty { visibleMailboxes.append(.archive) }
         if !trash.isEmpty { visibleMailboxes.append(.trash) }
+        visibleMailboxes.append(contentsOf: snapshot.customFolderNames.map(EmailMailbox.custom))
 
         // True when the account has *any* mail anywhere (Inbox / Archive /
         // Trash). Gates the full-screen empty state — the per-mailbox "no
@@ -66,7 +72,7 @@ struct EmailView: View {
         // with nothing flagged). Otherwise switching to an empty mailbox
         // replaces the whole pane with a centered placeholder and strands
         // the user with no way back to Inbox without leaving the Email tab.
-        let hasAnyMail = !inbox.isEmpty || !archive.isEmpty || !trash.isEmpty
+        let hasAnyMail = !snapshot.allThreads.isEmpty
         return Group {
             if !isConfigured {
                 unconfiguredState
@@ -212,7 +218,7 @@ struct EmailView: View {
         accounts: [StoredEmailAccount],
         accountLabeler: EmailAccountLabeler
     ) -> some View {
-        let allThreads = snapshot.inbox + snapshot.archive + snapshot.trash
+        let allThreads = snapshot.allThreads
 
         // No NavigationStack here: in compact widths this view is pushed onto
         // the Workspace stack, so mailboxes and threads push onto that stack.
@@ -225,7 +231,7 @@ struct EmailView: View {
             Section {
                 ForEach(visibleMailboxes) { mailbox in
                     NavigationLink(value: mailbox) {
-                        Label(mailbox.rawValue, systemImage: mailbox.systemImage)
+                        Label(mailbox.title, systemImage: mailbox.systemImage)
                     }
                 }
             } footer: {
@@ -246,7 +252,7 @@ struct EmailView: View {
                 accountLabeler: accountLabeler,
                 onQuickAction: performQuickAction
             )
-            .navigationTitle(mailbox.rawValue)
+            .navigationTitle(mailbox.title)
         }
         .navigationDestination(for: UUID.self) { threadID in
             if let thread = allThreads.first(where: { $0.id == threadID }) {
@@ -306,20 +312,45 @@ struct EmailView: View {
         if email.isFlagged {
             return .flagged
         }
+        switch email.role {
+        case .sent:
+            return .sent
+        case .drafts:
+            return .drafts
+        case .junk:
+            return .junk
+        case .custom:
+            return .custom(email.mailbox)
+        case .inbox, .trash, .archive:
+            break
+        }
         return .inbox
     }
 
     private func quickActionTarget(for thread: EmailThread, in mailbox: EmailMailbox) -> Email? {
         switch mailbox {
         case .inbox:
-            thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted }
+            thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted && ($0.role == .inbox || $0.role == .sent) }
         case .flagged:
             thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted && $0.isFlagged }
                 ?? thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted }
+        case .sent:
+            thread.sortedMessages.last { $0.role == .sent && !$0.isDeleted }
+        case .drafts:
+            thread.sortedMessages.last { $0.role == .drafts && !$0.isDeleted }
+        case .junk:
+            thread.sortedMessages.last { $0.role == .junk && !$0.isDeleted }
         case .archive:
             thread.sortedMessages.last { $0.isArchived && !$0.isDeleted }
         case .trash:
             thread.sortedMessages.last { $0.isDeleted }
+        case .custom(let name):
+            thread.sortedMessages.last {
+                $0.role == .custom
+                    && $0.mailbox.caseInsensitiveCompare(name) == .orderedSame
+                    && !$0.isArchived
+                    && !$0.isDeleted
+            }
         }
     }
 
@@ -327,6 +358,7 @@ struct EmailView: View {
         guard let email = quickActionTarget(for: thread, in: mailbox) else { return }
 
         if action == .reply {
+            guard mailbox != .drafts else { return }
             composingReplyFor = email
             return
         }
@@ -468,20 +500,57 @@ private final class EmailManualSyncCoordinator {
 
 // MARK: - Mailboxes
 
-enum EmailMailbox: String, CaseIterable, Identifiable {
-    case inbox = "Inbox"
-    case flagged = "Flagged"
-    case archive = "Archive"
-    case trash = "Trash"
+enum EmailMailbox: Hashable, Identifiable {
+    case inbox
+    case flagged
+    case sent
+    case drafts
+    case junk
+    case archive
+    case trash
+    case custom(String)
 
-    var id: String { rawValue }
+    var id: String {
+        switch self {
+        case .inbox: "inbox"
+        case .flagged: "flagged"
+        case .sent: "sent"
+        case .drafts: "drafts"
+        case .junk: "junk"
+        case .archive: "archive"
+        case .trash: "trash"
+        case .custom(let name): "custom:\(name)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .inbox: "Inbox"
+        case .flagged: "Flagged"
+        case .sent: "Sent"
+        case .drafts: "Drafts"
+        case .junk: "Junk"
+        case .archive: "Archive"
+        case .trash: "Trash"
+        case .custom(let name): name
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .inbox: "tray"
         case .flagged: "flag"
+        case .sent: "paperplane"
+        case .drafts: "doc.text"
+        case .junk: "xmark.bin"
         case .archive: "archivebox"
         case .trash: "trash"
+        case .custom: "folder"
         }
+    }
+
+    var isCustom: Bool {
+        if case .custom = self { true } else { false }
     }
 }
 
@@ -519,30 +588,49 @@ private struct EmailMailboxSidebar: View {
 
             #if os(macOS)
             List(selection: $selectedMailbox) {
-                ForEach(visibleMailboxes) { mailbox in
-                    Label(mailbox.rawValue, systemImage: mailbox.systemImage)
-                        .tag(mailbox)
-                        .listItemTint(.accentColor)
-                }
+                mailboxSections
             }
             .listStyle(.sidebar)
             #else
             List {
-                ForEach(visibleMailboxes) { mailbox in
-                    Button {
-                        selectedMailbox = mailbox
-                    } label: {
-                        Label(mailbox.rawValue, systemImage: mailbox.systemImage)
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(selectedMailbox == mailbox ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
-                }
+                mailboxSections
             }
             .listStyle(.sidebar)
             #endif
 
             footer
         }
+    }
+
+    /// Standard mailboxes first, then the dynamic "Folders" group for custom
+    /// IMAP folders. Shared by both platform Lists; only the row chrome
+    /// differs (macOS selection tags vs. iOS buttons).
+    @ViewBuilder
+    private var mailboxSections: some View {
+        ForEach(visibleMailboxes.filter { !$0.isCustom }, content: mailboxRow)
+        let customMailboxes = visibleMailboxes.filter(\.isCustom)
+        if !customMailboxes.isEmpty {
+            Section("Folders") {
+                ForEach(customMailboxes, content: mailboxRow)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func mailboxRow(_ mailbox: EmailMailbox) -> some View {
+        #if os(macOS)
+        Label(mailbox.title, systemImage: mailbox.systemImage)
+            .tag(mailbox)
+            .listItemTint(.accentColor)
+        #else
+        Button {
+            selectedMailbox = mailbox
+        } label: {
+            Label(mailbox.title, systemImage: mailbox.systemImage)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(selectedMailbox == mailbox ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary))
+        #endif
     }
 
     @ViewBuilder
@@ -659,7 +747,7 @@ private struct EmailThreadListView: View {
                 #endif
             }
         }
-        .searchable(text: $searchText, prompt: Text("Search \(mailbox.rawValue)"))
+        .searchable(text: $searchText, prompt: Text("Search \(mailbox.title)"))
     }
 
     private func quickActionRow<Content: View>(
@@ -731,7 +819,7 @@ private struct EmailThreadNavigationList: View {
                 }
             }
         }
-        .searchable(text: $searchText, prompt: Text("Search \(mailbox.rawValue)"))
+        .searchable(text: $searchText, prompt: Text("Search \(mailbox.title)"))
     }
 }
 

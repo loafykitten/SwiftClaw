@@ -135,7 +135,11 @@ actor MailSyncWorker {
         // is always attempted; Sent/Trash are skipped when the account can't
         // resolve one (a brand-new install + the user hasn't taken a
         // delete/archive/send action yet to cache the special-use name).
-        let mailboxes = await Self.mailboxesToSync(for: account, client: client)
+        let mailboxes = await Self.mailboxesToSync(
+            for: account,
+            client: client,
+            refreshCatalog: shouldReconcile
+        )
         var inserted = 0
         var removed = 0
         for mailbox in mailboxes {
@@ -146,10 +150,10 @@ actor MailSyncWorker {
                     client: client
                 )
                 // Reconcile per mailbox, throttled to every Nth pass.
-                if shouldReconcile {
+                if shouldReconcile || mailbox.role == .drafts {
                     removed += await reconcile(
                         client: client,
-                        mailbox: mailbox.name,
+                        mailbox: mailbox,
                         accountID: account.id
                     )
                 }
@@ -170,52 +174,65 @@ actor MailSyncWorker {
         return (inserted, removed)
     }
 
-    /// Returns INBOX (always) plus the account's resolved Sent/Trash folders
-    /// when available. Best-effort: if the special-use lookup throws the
-    /// worker still syncs INBOX alone; the next sync retries resolution.
+    /// Returns the account's folder catalog as the sync set, listing (or
+    /// re-listing on reconcile passes) from the server when needed.
+    /// Best-effort: a failed LIST falls back to the cached catalog, then to
+    /// INBOX plus whichever special-use names are already resolved.
     private static func mailboxesToSync(
         for account: StoredEmailAccount,
-        client: MailClient
+        client: MailClient,
+        refreshCatalog: Bool
     ) async -> [SyncedMailbox] {
-        var boxes = [SyncedMailbox(name: "INBOX", isDeletedMailbox: false)]
+        if account.folders == nil || refreshCatalog {
+            do {
+                return syncedMailboxes(from: try await client.listFolders(), account: account)
+            } catch {
+                if let cached = account.folders {
+                    return syncedMailboxes(from: cached, account: account)
+                }
+                return fallbackMailboxes(for: account)
+            }
+        }
 
-        func append(_ name: String?, isDeletedMailbox: Bool, isArchiveMailbox: Bool = false) {
-            guard let name, !name.isEmpty else { return }
-            if !boxes.contains(where: { $0.name == name }) {
+        return syncedMailboxes(from: account.folders ?? [], account: account)
+    }
+
+    private static func syncedMailboxes(
+        from folders: [MailFolderDescriptor],
+        account: StoredEmailAccount
+    ) -> [SyncedMailbox] {
+        var boxes: [SyncedMailbox] = []
+        for folder in folders where !folder.name.isEmpty {
+            if !boxes.contains(where: { $0.name.caseInsensitiveCompare(folder.name) == .orderedSame }) {
                 boxes.append(SyncedMailbox(
-                    name: name,
-                    isDeletedMailbox: isDeletedMailbox,
-                    isArchiveMailbox: isArchiveMailbox
+                    name: folder.name,
+                    role: account.folderRole(forMailbox: folder.name) ?? folder.role
                 ))
             }
         }
-
-        append(account.sentMailbox, isDeletedMailbox: false)
-        append(account.trashMailbox, isDeletedMailbox: true)
-        // Standard-IMAP only: sync a real `\Archive` SPECIAL-USE folder so mail
-        // archived from another client surfaces as archived rather than being
-        // reconciled as a Trash soft-delete. We pass the *raw* `archiveMailbox`
-        // (never the `resolvedArchiveMailbox` fallback) so this only fires when
-        // the server actually advertised `\Archive` — which excludes Gmail,
-        // whose archive target is the unbounded `\All` (All Mail) folder.
-        append(account.archiveMailbox, isDeletedMailbox: false, isArchiveMailbox: true)
-
-        // Use cached special-use names when present; otherwise trigger a
-        // one-shot resolve. The lookup also refreshes Archive names used by
-        // `MailClient.archive`.
-        if account.sentMailbox == nil || account.trashMailbox == nil {
-            do {
-                try await client.resolveSpecialUseMailboxes()
-            } catch {
-                return boxes
-            }
-            let refreshed = await MainActor.run {
-                EmailAccountStore.shared.account(for: account.id)
-            }
-            append(refreshed?.sentMailbox ?? account.resolvedSentMailbox, isDeletedMailbox: false)
-            append(refreshed?.trashMailbox ?? account.resolvedTrashMailbox, isDeletedMailbox: true)
-            append(refreshed?.archiveMailbox, isDeletedMailbox: false, isArchiveMailbox: true)
+        // INBOX always syncs, even off a pathological inbox-less catalog
+        // (RFC 3501 guarantees it exists server-side).
+        if !boxes.contains(where: { $0.role == .inbox }) {
+            boxes.insert(SyncedMailbox(name: "INBOX", role: .inbox), at: 0)
         }
+        return boxes
+    }
+
+    private static func fallbackMailboxes(for account: StoredEmailAccount) -> [SyncedMailbox] {
+        var boxes = [SyncedMailbox(name: "INBOX", role: .inbox)]
+
+        func append(_ name: String?, role: MailFolderRole) {
+            guard let name, !name.isEmpty else { return }
+            if !boxes.contains(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
+                boxes.append(SyncedMailbox(name: name, role: role))
+            }
+        }
+
+        append(account.sentMailbox, role: .sent)
+        append(account.draftsMailbox, role: .drafts)
+        append(account.trashMailbox, role: .trash)
+        append(account.archiveMailbox, role: .archive)
+        append(account.junkMailbox, role: .junk)
         return boxes
     }
 
@@ -288,8 +305,7 @@ actor MailSyncWorker {
             fetched: result.messages,
             mailbox: mailbox,
             accountID: account.id,
-            isDeletedMailbox: syncedMailbox.isDeletedMailbox,
-            isArchiveMailbox: syncedMailbox.isArchiveMailbox
+            role: syncedMailbox.role
         )
     }
 
@@ -297,8 +313,7 @@ actor MailSyncWorker {
         fetched: [FetchedMessage],
         mailbox: String,
         accountID: UUID,
-        isDeletedMailbox: Bool,
-        isArchiveMailbox: Bool
+        role: MailFolderRole
     ) async -> Int {
         await MainActor.run {
             let context = ModelContext(modelContainer)
@@ -307,8 +322,7 @@ actor MailSyncWorker {
                 fetched,
                 mailbox: mailbox,
                 accountID: accountID,
-                isDeletedMailbox: isDeletedMailbox,
-                isArchiveMailbox: isArchiveMailbox
+                role: role
             )
             // Only re-cluster when messages were actually inserted. The
             // incremental path commonly returns `[]` (no new mail), and
@@ -330,7 +344,7 @@ actor MailSyncWorker {
     // new + removed; flag changes are silent UI events).
     private func reconcile(
         client: MailClient,
-        mailbox: String,
+        mailbox: SyncedMailbox,
         accountID: UUID
     ) async -> Int {
         // `syncMailbox` already wrote the post-fetch state via
@@ -342,24 +356,22 @@ actor MailSyncWorker {
         // inbox early-return path above left state untouched). Harmless either
         // way — the cheap UID-set scan against a just-fetched mailbox simply
         // re-confirms the rows that were upserted a moment ago.
-        let stored = await syncStateProvider(accountID, mailbox)
+        let stored = await syncStateProvider(accountID, mailbox.name)
         guard (stored?.uidValidity ?? 0) > 0 else { return 0 }
 
         do {
-            let snapshot = try await client.fetchMailboxUIDSet(name: mailbox)
+            let snapshot = try await client.fetchMailboxUIDSet(name: mailbox.name)
             return await MainActor.run {
                 let context = ModelContext(modelContainer)
                 let repository = EmailRepository(modelContext: context)
-                repository.reconcileFlagsFromSnapshot(snapshot, mailbox: mailbox, accountID: accountID)
-                // Sent reconciliation must preserve locally-synthetic rows
-                // (see `EmailRepository.upsertSentMessage`); INBOX has none
-                // so the flag is a no-op there.
-                let preserveSynthetic = (mailbox != "INBOX")
+                repository.reconcileFlagsFromSnapshot(snapshot, mailbox: mailbox.name, accountID: accountID)
+                let preserveSynthetic = mailbox.role == .sent
                 return repository.reconcileDeletions(
                     serverUIDs: snapshot.uids,
-                    mailbox: mailbox,
+                    mailbox: mailbox.name,
                     accountID: accountID,
-                    preserveLocallySynthetic: preserveSynthetic
+                    preserveLocallySynthetic: preserveSynthetic,
+                    hardDelete: mailbox.role == .drafts
                 )
             }
         } catch {
@@ -367,7 +379,7 @@ actor MailSyncWorker {
             // fails the upsert already succeeded for this pass. Surface a
             // non-fatal log and move on — the next sync retries.
             Self.logger.notice("""
-                reconcile UID-set scan failed for \(mailbox, privacy: .public): \
+                reconcile UID-set scan failed for \(mailbox.name, privacy: .public): \
                 \(String(describing: error))
                 """)
             return 0
@@ -377,6 +389,5 @@ actor MailSyncWorker {
 
 private struct SyncedMailbox: Sendable {
     let name: String
-    let isDeletedMailbox: Bool
-    var isArchiveMailbox: Bool = false
+    let role: MailFolderRole
 }

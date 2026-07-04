@@ -23,8 +23,11 @@ Current local verification, June 27, 2026:
 - Incremental IMAP sync using UID high-water marks and UIDVALIDITY reset
   handling.
 - First sync body fetch capped to the newest 500 messages per mailbox.
-- Syncs INBOX plus resolved Sent/Trash folders.
+- Syncs the account's selectable IMAP folder catalog: INBOX, Sent, Drafts,
+  Junk/Spam, Archive/Trash, and custom folders.
 - Server-side deletion and flag reconciliation via cheap UID/flag snapshots.
+- Drafts reconcile on every pass and stale draft rows are hard-deleted to handle
+  provider delete+re-APPEND UID churn.
 - Sent reply echo rows reconcile to the real Sent UID by Message-ID.
 
 **Review and chat**
@@ -42,6 +45,10 @@ Current local verification, June 27, 2026:
   `limit`, "what's flagged" narrows to flagged only). Unread, flagged, and
   notated threads override the limit — they're never dropped by the cap;
   flagged/notated also bypass any explicit age window.
+- Scheduled review always includes INBOX. Per-account settings can opt custom
+  folders into scheduled review; custom folders default off. Junk/Spam, Sent,
+  Drafts, Trash, and Archive are synced and visible but only reviewed when the
+  model/user explicitly asks for them with the `folders` filter.
 - Review suppression via `EmailThread.lastReviewedAt` + `reviewedCount`: a thread
   is eligible when never reviewed, has new mail since its last review, or was last
   reviewed longer ago than its decayed resurface window. The window is
@@ -92,7 +99,8 @@ Current local verification, June 27, 2026:
   it for that pass only — overriding the default `delete` caution when asked.
 
 **UI**
-- `EmailView` includes Inbox, Flagged, Archive, and Trash.
+- `EmailView` includes Inbox, Flagged, Sent, Drafts, Junk, Archive, Trash, and a
+  dynamic Folders group for custom folders.
 - Thread list, detail view, read-on-view, flag/archive/delete, permanent
   delete from Trash, notes, attachments, HTML body rendering, and reply
   composer are implemented.
@@ -109,7 +117,8 @@ Current local verification, June 27, 2026:
 - Review cards include an updated-analysis button that appends a fresh manual
   email review to the same Chat instead of creating a separate review chat.
 - `EmailSettingsView` supports account list, add/edit, Test Connection, review
-  scheduling, and review-fetch defaults.
+  scheduling, review-fetch defaults, and per-account custom-folder review
+  inclusion.
 - Multi-account inbox: an account picker (All Accounts / per-account) in the
   sidebar and compact mailbox list scopes every mailbox via
   `EmailAccountScope` + `EmailThreadScopeSnapshot`; threads are account-scoped
@@ -155,7 +164,6 @@ return.
 ## Deferred
 
 - iOS target and `BGTaskScheduler` mail sync.
-- Archive mailbox sync as a first-class mailbox.
 - `EmailView` fetch paging/windowing for very large stores.
 - Per-operation IMAP/SMTP connection reuse.
 - Memory-backed email review context, such as sender-level preferences, once

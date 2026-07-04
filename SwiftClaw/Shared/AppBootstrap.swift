@@ -22,6 +22,8 @@ final class AppBootstrap {
 
         Keychain.migrateAPIKeysFromUserDefaults()
         EmailAccountStore.shared.migrateLegacyIfNeeded()
+        EmailRepository(modelContext: ModelContext(modelContainer))
+            .backfillFolderRolesIfNeeded(accounts: EmailAccountStore.shared.accounts)
 
         EmailWorkflowManager.shared.start(modelContainer: modelContainer)
         Self.logger.info("App bootstrap complete")

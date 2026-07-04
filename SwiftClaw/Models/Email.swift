@@ -53,7 +53,12 @@ final class EmailThread {
     }
 
     var reviewableMessages: [Email] {
-        sortedMessages.filter { !$0.isArchived && !$0.isDeleted }
+        sortedMessages.filter {
+            !$0.isArchived
+                && !$0.isDeleted
+                && $0.role != .junk
+                && $0.role != .drafts
+        }
     }
 
     var latestReviewableMessage: Email? {
@@ -125,6 +130,7 @@ final class Email {
     var bodyText: String
     var bodyHTML: String?
     var mailbox: String
+    var folderRole: String = MailFolderRole.inbox.rawValue
     var isRead: Bool
     var isFlagged: Bool
     var isArchived: Bool
@@ -170,6 +176,7 @@ final class Email {
         bodyText: String = "",
         bodyHTML: String? = nil,
         mailbox: String = "INBOX",
+        role: MailFolderRole = .inbox,
         isRead: Bool = false,
         isFlagged: Bool = false,
         isArchived: Bool = false,
@@ -194,6 +201,7 @@ final class Email {
         self.bodyText = bodyText
         self.bodyHTML = bodyHTML
         self.mailbox = mailbox
+        self.folderRole = role.rawValue
         self.isRead = isRead
         self.isFlagged = isFlagged
         self.isArchived = isArchived
@@ -213,6 +221,11 @@ final class Email {
             return ""
         }
         return trimmed.count > 140 ? String(trimmed.prefix(137)) + "..." : trimmed
+    }
+
+    var role: MailFolderRole {
+        get { MailFolderRole(rawValue: folderRole) ?? .inbox }
+        set { folderRole = newValue.rawValue }
     }
 
     /// Best-effort plain-text body for display. Prefers `bodyText` (server-

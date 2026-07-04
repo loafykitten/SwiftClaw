@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import SwiftData
+import SwiftMail
 @testable import SwiftClaw
 
 /// Regression coverage for the testConnection credential path on
@@ -67,6 +68,45 @@ struct SwiftMailClientTests {
             smtpPasswordOverride: "irrelevant"
         )
         #expect(!client.isConfigured)
+    }
+
+    @Test func classifyFoldersMapsSpecialUseAndSkipsGmailSystemCustoms() {
+        let infos: [Mailbox.Info] = [
+            Mailbox.Info(name: "Inbox", attributes: [], hierarchyDelimiter: "/"),
+            Mailbox.Info(name: "Projects", attributes: [], hierarchyDelimiter: "/"),
+            Mailbox.Info(name: "Sent Mail", attributes: [.sent], hierarchyDelimiter: "/"),
+            Mailbox.Info(name: "Drafts", attributes: [.drafts], hierarchyDelimiter: "/"),
+            Mailbox.Info(name: "Spam", attributes: [.junk], hierarchyDelimiter: "/"),
+            Mailbox.Info(name: "Archive", attributes: [.archive], hierarchyDelimiter: "/"),
+            Mailbox.Info(name: "Trash", attributes: [.trash], hierarchyDelimiter: "/"),
+            Mailbox.Info(name: "[Gmail]/All Mail", attributes: [], hierarchyDelimiter: "/"),
+            Mailbox.Info(name: "[Gmail]/Starred", attributes: [.flagged], hierarchyDelimiter: "/"),
+            Mailbox.Info(name: "[Gmail]", attributes: [.noSelect], hierarchyDelimiter: "/"),
+        ]
+
+        let folders = SwiftMailClient.classify(infos)
+        let rolesByName = Dictionary(uniqueKeysWithValues: folders.map { ($0.name, $0.role) })
+
+        #expect(rolesByName["Inbox"] == .inbox)
+        #expect(rolesByName["Projects"] == .custom)
+        #expect(rolesByName["Sent Mail"] == .sent)
+        #expect(rolesByName["Drafts"] == .drafts)
+        #expect(rolesByName["Spam"] == .junk)
+        #expect(rolesByName["Archive"] == .archive)
+        #expect(rolesByName["Trash"] == .trash)
+        #expect(rolesByName["[Gmail]/All Mail"] == nil)
+        #expect(rolesByName["[Gmail]/Starred"] == nil)
+        #expect(rolesByName["[Gmail]"] == nil)
+    }
+
+    @Test func classifyFoldersKeepsOneCaseInsensitiveInbox() {
+        let folders = SwiftMailClient.classify([
+            Mailbox.Info(name: "inbox", attributes: [], hierarchyDelimiter: nil),
+            Mailbox.Info(name: "INBOX", attributes: [.inbox], hierarchyDelimiter: nil),
+        ])
+
+        #expect(folders.filter { $0.role == .inbox }.count == 1)
+        #expect(folders.first?.name == "inbox")
     }
 
     // MARK: - Helpers
