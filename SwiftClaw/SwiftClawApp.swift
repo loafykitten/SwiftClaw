@@ -79,6 +79,7 @@ struct SwiftClawApp: App {
                 #if DEBUG
                 MainActor.assumeIsolated {
                     SampleChatSeeder.seedIfRequested(into: container)
+                    SampleEmailSeeder.seedIfRequested(into: container)
                 }
                 #endif
                 return .success(container)

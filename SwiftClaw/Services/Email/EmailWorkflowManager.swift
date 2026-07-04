@@ -30,6 +30,7 @@ final class EmailWorkflowManager {
     private var lastReviewRun: Date?
     private var reviewScheduleObserver: NSObjectProtocol?
     private var userDefaults: UserDefaults = .standard
+    private var accountAddedRefreshHandler: (@MainActor () async -> Void)?
     private var schedulerFactory: SchedulerFactory = { worker, intervalProvider in
         MailSyncSchedulerFactory.make(worker: worker, intervalProvider: intervalProvider)
     }
@@ -49,13 +50,15 @@ final class EmailWorkflowManager {
             Bool,
             UUID?,
             Bool
-        ) async -> Bool)? = nil
+        ) async -> Bool)? = nil,
+        accountAddedRefreshHandler: (@MainActor () async -> Void)? = nil
     ) {
         self.userDefaults = userDefaults
         if let schedulerFactory {
             self.schedulerFactory = schedulerFactory
         }
         self.reviewRunHandler = reviewRunHandler
+        self.accountAddedRefreshHandler = accountAddedRefreshHandler
     }
 
     func resetForTesting() {
@@ -65,6 +68,7 @@ final class EmailWorkflowManager {
             MailSyncSchedulerFactory.make(worker: worker, intervalProvider: intervalProvider)
         }
         reviewRunHandler = nil
+        accountAddedRefreshHandler = nil
         lastReviewRun = nil
     }
     #endif
@@ -139,6 +143,19 @@ final class EmailWorkflowManager {
             _ = await worker.syncOnce()
         }
         await runReviewOnce()
+    }
+
+    /// Called after a complete email account is added. Fire-and-forget so the
+    /// settings sheet can close immediately while sync starts in the background.
+    func refreshAfterAccountAdded() {
+        guard !ProcessInfo.processInfo.isRunningInPreview else { return }
+        Task { @MainActor in
+            if let accountAddedRefreshHandler {
+                await accountAddedRefreshHandler()
+            } else {
+                await refreshNow()
+            }
+        }
     }
 
     /// Kicks an immediate review pass only (no mail sync). Wired to the

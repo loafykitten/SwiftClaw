@@ -52,6 +52,7 @@ nonisolated struct ReviewItem: Codable, Sendable, Identifiable, Hashable {
     var subject: String?
     var sender: String?
     var date: String?
+    var accountLabel: String?
 
     init(
         id: UUID = UUID(),
@@ -61,7 +62,8 @@ nonisolated struct ReviewItem: Codable, Sendable, Identifiable, Hashable {
         summary: String? = nil,
         subject: String? = nil,
         sender: String? = nil,
-        date: String? = nil
+        date: String? = nil,
+        accountLabel: String? = nil
     ) {
         self.id = id
         self.itemID = itemID
@@ -71,6 +73,7 @@ nonisolated struct ReviewItem: Codable, Sendable, Identifiable, Hashable {
         self.subject = subject
         self.sender = sender
         self.date = date
+        self.accountLabel = accountLabel
     }
 
     var action: ReviewActionToken? {

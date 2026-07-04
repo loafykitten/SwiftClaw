@@ -77,7 +77,10 @@ struct WorkspaceView: View {
     }
 
     var body: some View {
-        let emailSummary = WorkspaceEmailSummary(emails: emails)
+        let emailContent = WorkspaceEmailWidgetContent(
+            emails: emails,
+            accounts: EmailAccountStore.shared.accounts
+        )
 
         NavigationStack(path: $navigationPath) {
             ScrollView {
@@ -89,7 +92,7 @@ struct WorkspaceView: View {
                     ) {
                         ForEach(visibleItems) { item in
                             NavigationLink(value: item) {
-                                WorkspaceWidgetPanel(item: item, emailSummary: emailSummary)
+                                WorkspaceWidgetPanel(item: item, emailContent: emailContent)
                             }
                             .buttonStyle(.plain)
                         }
@@ -238,7 +241,7 @@ private struct WorkspaceDisabledFeaturesList: View {
 
 private struct WorkspaceWidgetPanel: View {
     let item: WorkspaceItem
-    let emailSummary: WorkspaceEmailSummary
+    let emailContent: WorkspaceEmailWidgetContent
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -253,10 +256,17 @@ private struct WorkspaceWidgetPanel: View {
                     .lineLimit(1)
 
                 Spacer(minLength: 0)
+
+                if item == .email {
+                    Text(accountCountLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
 
             if item == .email {
-                WorkspaceEmailStatsView(summary: emailSummary)
+                WorkspaceEmailStatsView(summary: emailContent.summary)
             } else {
                 Text("Coming soon")
                     .font(.subheadline)
@@ -268,6 +278,11 @@ private struct WorkspaceWidgetPanel: View {
         .glassEffect(in: .rect(cornerRadius: 16.0))
         .contentShape(.rect(cornerRadius: 16.0))
         .accessibilityElement(children: .combine)
+    }
+
+    private var accountCountLabel: String {
+        let count = emailContent.completeAccountCount
+        return "\(count) \(count == 1 ? "account" : "accounts")"
     }
 }
 

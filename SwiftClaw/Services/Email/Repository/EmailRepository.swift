@@ -227,29 +227,23 @@ final class EmailRepository {
 
     // MARK: - Threading
 
-    /// Re-clusters visible (non-archived/non-deleted) messages into threads
+    /// Re-clusters messages into account-scoped threads
     /// using an identity-stable, incremental algorithm:
     ///
-    /// 1. Snapshot, per visible message, which `EmailThread` it currently
+    /// 1. Snapshot, per message, which `EmailThread` it currently
     ///    belongs to (so `EmailThread.id` survives a re-cluster).
-    /// 2. Run `ThreadResolver.cluster(...)` purely for its message grouping.
+    /// 2. Group messages by `Email.accountID`, then run
+    ///    `ThreadResolver.cluster(...)` per account purely for its message
+    ///    grouping.
     /// 3. For each cluster, reuse the prior thread that the *most* messages
-    ///    in that cluster already belonged to (stable identity). A prior
-    ///    thread can be claimed by at most one cluster — subsequent clusters
-    ///    that also pointed at it get fresh threads. Clusters that map to
-    ///    no prior thread get a freshly-allocated `EmailThread`.
-    /// 4. Re-attach visible messages to their canonical thread by id.
-    /// 5. Delete prior threads that are now truly empty (no visible AND no
-    ///    archived/deleted stragglers still attached).
-    ///
-    /// Archived/deleted messages are never fetched here, so they remain
-    /// attached to whatever threads they were on — their threads are
-    /// preserved as long as they still own at least one message.
+    ///    in that cluster already belonged to, but only when the prior thread
+    ///    is for the same account or has no account yet. A prior thread can be
+    ///    claimed by at most one cluster, so old mixed-account threads split:
+    ///    one account keeps the old id, the rest get new rows.
+    /// 4. Re-attach messages to their canonical account thread by id.
+    /// 5. Delete prior threads that are now empty.
     func resolveThreads() {
-        let descriptor = FetchDescriptor<Email>(
-            predicate: #Predicate { !$0.isArchived && !$0.isDeleted }
-        )
-        guard let messages = try? modelContext.fetch(descriptor),
+        guard let messages = try? modelContext.fetch(FetchDescriptor<Email>()),
               !messages.isEmpty else {
             return
         }
@@ -264,19 +258,24 @@ final class EmailRepository {
             uniquingKeysWith: { first, _ in first }
         )
 
-        // Compute fresh cluster groupings. We use `ThreadResolver.cluster`
-        // only for its grouping logic; the freshly-allocated `EmailThread`
-        // objects it returns are discarded (we reassign messages to either
-        // an existing reused thread or a fresh thread we control).
-        let freshClusters = ThreadResolver.cluster(messages)
-        let groupings: [(messageIDs: [UUID], subject: String, firstDate: Date, lastDate: Date)] =
-            freshClusters.map { cluster in
-                (
-                    messageIDs: cluster.messages.map(\.id),
-                    subject: cluster.subjectNormalized,
-                    firstDate: cluster.firstDate,
-                    lastDate: cluster.lastDate
-                )
+        // Compute fresh cluster groupings per account. We use
+        // `ThreadResolver.cluster` only for its grouping logic; the
+        // freshly-allocated `EmailThread` objects it returns are discarded.
+        let messagesByAccount = Dictionary(grouping: messages, by: \.accountID)
+        let groupings: [ResolvedThreadGrouping] = messagesByAccount
+            .keys
+            .sorted { $0.uuidString < $1.uuidString }
+            .flatMap { accountID -> [ResolvedThreadGrouping] in
+                let accountMessages = messagesByAccount[accountID] ?? []
+                return ThreadResolver.cluster(accountMessages).map { cluster in
+                    ResolvedThreadGrouping(
+                        accountID: accountID,
+                        messageIDs: cluster.messages.map(\.id),
+                        subject: cluster.subjectNormalized,
+                        firstDate: cluster.firstDate,
+                        lastDate: cluster.lastDate
+                    )
+                }
             }
 
         let messagesByID: [UUID: Email] = Dictionary(
@@ -284,7 +283,7 @@ final class EmailRepository {
             uniquingKeysWith: { first, _ in first }
         )
 
-        // Detach ALL visible messages from any thread (including the
+        // Detach ALL messages from any thread (including the
         // freshly-allocated ones ThreadResolver attached them to). We're
         // about to reassign them deliberately.
         for message in messages {
@@ -301,35 +300,61 @@ final class EmailRepository {
         }
         var claimedExistingThreadIDs: Set<UUID> = []
 
-        for grouping in groupings {
+        // Order clusters by the strength of their prior-thread claim so that
+        // when two clusters point at the same prior thread, the one with more
+        // of its messages wins the id. The claim strength is computed once per
+        // grouping (not inside the sort comparator).
+        let orderedGroupings = groupings
+            .map { grouping in
+                (
+                    grouping: grouping,
+                    priorCount: bestPriorThreadCandidate(
+                        for: grouping,
+                        priorThreadByMessageID: priorThreadByMessageID,
+                        claimedExistingThreadIDs: []
+                    )?.count ?? 0
+                )
+            }
+            .sorted { lhs, rhs in
+                if lhs.priorCount != rhs.priorCount { return lhs.priorCount > rhs.priorCount }
+                if lhs.grouping.accountID != rhs.grouping.accountID {
+                    return lhs.grouping.accountID.uuidString < rhs.grouping.accountID.uuidString
+                }
+                if lhs.grouping.lastDate != rhs.grouping.lastDate {
+                    return lhs.grouping.lastDate > rhs.grouping.lastDate
+                }
+                return lhs.grouping.subject < rhs.grouping.subject
+            }
+            .map(\.grouping)
+
+        for grouping in orderedGroupings {
             // Pick the prior thread that the largest number of this
             // cluster's messages already belonged to. Only existing
-            // (un-claimed) threads are eligible — a prior thread gets
-            // reused for exactly one cluster so identity stays stable.
-            let candidateCount: [UUID: Int] = grouping.messageIDs.reduce(into: [:]) { counts, mid in
-                if let thread = priorThreadByMessageID[mid] {
-                    counts[thread.id, default: 0] += 1
-                }
-            }
-            let canonicalID = candidateCount
-                .filter { !claimedExistingThreadIDs.contains($0.key) }
-                .max(by: { $0.value < $1.value })?
-                .key
+            // same-account or legacy nil-account threads are eligible — a
+            // prior thread gets reused for exactly one cluster so identity
+            // stays stable and mixed legacy threads split.
+            let canonicalID = bestPriorThreadCandidate(
+                for: grouping,
+                priorThreadByMessageID: priorThreadByMessageID,
+                claimedExistingThreadIDs: claimedExistingThreadIDs
+            )?.threadID
 
             let canonical: EmailThread
             if let canonicalID, let existing = existingThreadByID[canonicalID] {
                 canonical = existing
                 claimedExistingThreadIDs.insert(canonicalID)
-                // Absorb new messages into the reused thread by widening its
-                // date window and refreshing its normalized subject (in case
-                // the cluster boundary changed).
-                canonical.firstDate = min(existing.firstDate, grouping.firstDate)
-                canonical.lastDate = max(existing.lastDate, grouping.lastDate)
+                // Refresh the reused thread to the exact account-local
+                // cluster boundary. This also repairs legacy mixed threads
+                // whose old date window included another account's messages.
+                canonical.accountID = grouping.accountID
+                canonical.firstDate = grouping.firstDate
+                canonical.lastDate = grouping.lastDate
                 canonical.subjectNormalized = grouping.subject
             } else {
                 // Genuinely new cluster — none of its messages had a prior
                 // thread (or all prior candidates were already claimed).
                 let fresh = EmailThread(
+                    accountID: grouping.accountID,
                     subjectNormalized: grouping.subject,
                     messages: [],
                     firstDate: grouping.firstDate,
@@ -348,10 +373,7 @@ final class EmailRepository {
             }
         }
 
-        // Delete prior threads that are now truly empty: their visible
-        // messages moved on AND they have no archived/deleted stragglers
-        // still attached (those would keep `thread.messages` non-empty and
-        // the thread alive — correct, since we never touch them here).
+        // Delete prior threads that are now truly empty.
         for (id, thread) in existingThreadByID where !claimedExistingThreadIDs.contains(id) {
             if thread.messages.isEmpty {
                 modelContext.delete(thread)
@@ -359,6 +381,36 @@ final class EmailRepository {
         }
 
         save()
+    }
+
+    private struct ResolvedThreadGrouping {
+        let accountID: UUID
+        let messageIDs: [UUID]
+        let subject: String
+        let firstDate: Date
+        let lastDate: Date
+    }
+
+    private func bestPriorThreadCandidate(
+        for grouping: ResolvedThreadGrouping,
+        priorThreadByMessageID: [UUID: EmailThread],
+        claimedExistingThreadIDs: Set<UUID>
+    ) -> (threadID: UUID, count: Int)? {
+        let candidateCount: [UUID: Int] = grouping.messageIDs.reduce(into: [:]) { counts, mid in
+            guard let thread = priorThreadByMessageID[mid],
+                  !claimedExistingThreadIDs.contains(thread.id),
+                  thread.accountID == nil || thread.accountID == grouping.accountID else {
+                return
+            }
+            counts[thread.id, default: 0] += 1
+        }
+
+        return candidateCount
+            .max { lhs, rhs in
+                if lhs.value != rhs.value { return lhs.value < rhs.value }
+                return lhs.key.uuidString > rhs.key.uuidString
+            }
+            .map { (threadID: $0.key, count: $0.value) }
     }
 
     // MARK: - Fetch helpers

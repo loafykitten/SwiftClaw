@@ -86,8 +86,44 @@ struct WorkspaceEmailSummaryTests {
         #expect(summary.notatedThreadCount == 0)
     }
 
+    @Test func summaryStaysUnifiedAcrossAccounts() {
+        let accountA = UUID()
+        let accountB = UUID()
+        let first = Self.email(
+            thread: EmailThread(accountID: accountA, subjectNormalized: "a"),
+            accountID: accountA,
+            isRead: false
+        )
+        let second = Self.email(
+            thread: EmailThread(accountID: accountB, subjectNormalized: "b"),
+            accountID: accountB,
+            isRead: false
+        )
+        first.thread?.messages = [first]
+        second.thread?.messages = [second]
+
+        let summary = WorkspaceEmailSummary(emails: [first, second])
+
+        #expect(summary.unreadCount == 2)
+        #expect(summary.inboxThreadCount == 2)
+    }
+
+    @Test func widgetContentCountsCompleteAccountsEvenWithNoMail() {
+        let accounts = [
+            Self.completeAccount(displayName: "A"),
+            Self.completeAccount(displayName: "B"),
+            StoredEmailAccount(displayName: "Incomplete")
+        ]
+
+        let content = WorkspaceEmailWidgetContent(emails: [], accounts: accounts)
+
+        #expect(content.completeAccountCount == 2)
+        #expect(content.summary == .empty)
+    }
+
     private static func email(
         thread: EmailThread? = nil,
+        accountID: UUID = UUID(),
         isRead: Bool,
         isFlagged: Bool = false,
         isArchived: Bool = false,
@@ -101,11 +137,23 @@ struct WorkspaceEmailSummaryTests {
             isFlagged: isFlagged,
             isArchived: isArchived,
             isDeleted: isDeleted,
+            accountID: accountID,
             thread: thread
         )
         email.notes = (0..<noteCount).map { index in
             EmailNote(email: email, content: "Note \(index)")
         }
         return email
+    }
+
+    private static func completeAccount(displayName: String) -> StoredEmailAccount {
+        StoredEmailAccount(
+            displayName: displayName,
+            imapHost: "imap.\(displayName).example.com",
+            imapUsername: "\(displayName)@example.com",
+            smtpHost: "smtp.\(displayName).example.com",
+            smtpUsername: "\(displayName)@example.com",
+            fromAddress: "\(displayName)@example.com"
+        )
     }
 }

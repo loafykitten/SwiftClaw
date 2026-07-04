@@ -110,6 +110,18 @@ Current local verification, June 27, 2026:
   email review to the same Chat instead of creating a separate review chat.
 - `EmailSettingsView` supports account list, add/edit, Test Connection, review
   scheduling, and review-fetch defaults.
+- Multi-account inbox: an account picker (All Accounts / per-account) in the
+  sidebar and compact mailbox list scopes every mailbox via
+  `EmailAccountScope` + `EmailThreadScopeSnapshot`; threads are account-scoped
+  (`EmailThread.accountID`, legacy mixed threads split on next resolve).
+- Unified ("All Accounts") view labels each thread row, thread detail, and
+  chat review-card row with its account name (`EmailAccountLabeler`) — labels
+  only appear when more than one account is configured.
+- Adding a complete account kicks an immediate sync + review pass
+  (`EmailWorkflowManager.refreshAfterAccountAdded()`, triggered from the
+  account editor sheet), so the first mail appears without waiting for the
+  schedule.
+- The Workspace email widget shows the configured-account count.
 
 ## Remaining Work
 

@@ -4,6 +4,9 @@ import SwiftData
 @Model
 final class EmailThread {
     @Attribute(.unique) var id: UUID
+    /// Account that owns this thread. Optional so older stores migrate, then
+    /// `EmailRepository.resolveThreads()` backfills/splits legacy rows.
+    var accountID: UUID?
     var subjectNormalized: String
     @Relationship(deleteRule: .cascade, inverse: \Email.thread)
     var messages: [Email]
@@ -23,6 +26,7 @@ final class EmailThread {
 
     init(
         id: UUID = UUID(),
+        accountID: UUID? = nil,
         subjectNormalized: String,
         messages: [Email] = [],
         firstDate: Date = .now,
@@ -31,6 +35,7 @@ final class EmailThread {
         reviewedCount: Int = 0
     ) {
         self.id = id
+        self.accountID = accountID
         self.subjectNormalized = subjectNormalized
         self.messages = messages
         self.firstDate = firstDate

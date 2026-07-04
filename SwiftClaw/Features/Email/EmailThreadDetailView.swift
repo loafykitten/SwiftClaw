@@ -5,6 +5,7 @@ import SwiftData
 /// Extracted from `EmailView.swift` along the detail-pane concern boundary.
 struct EmailThreadDetailView: View {
     let thread: EmailThread
+    var accountLabel: String?
     let onReply: (Email) -> Void
 
     @Environment(\.modelContext) private var modelContext
@@ -36,6 +37,10 @@ struct EmailThreadDetailView: View {
                     Text(thread.participantSummary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let accountLabel {
+                        EmailAccountBadge(label: accountLabel)
+                            .padding(.top, 2)
+                    }
                 }
                 Spacer()
             }
@@ -284,44 +289,12 @@ struct EmailMessageCard: View {
                 EmailAttachmentList(attachments: email.attachments, emailID: email.id)
             }
 
-            HStack(spacing: 8) {
-                Button {
-                    onReply()
-                } label: {
-                    Label("Reply", systemImage: "arrowshape.turn.up.left")
-                }
-                Button {
-                    onAddNote()
-                } label: {
-                    Label("Add Note", systemImage: "note.text")
-                }
-                Button {
-                    onArchive()
-                } label: {
-                    Label("Archive", systemImage: "archivebox")
-                }
-                // Hide the recoverable Delete on rows already in the Trash
-                // mailbox — `delete` there is a no-op (re-sets `isDeleted`
-                // which is already true). The permanent-delete affordance
-                // below is the meaningful action for trashed rows.
-                if !email.isDeleted {
-                    Button(role: .destructive) {
-                        onDelete()
-                    } label: {
-                        Label("Delete", systemImage: "trash")
-                    }
-                }
-                // The permanent-delete affordance only renders for rows that
-                // are already in the Trash mailbox (`isDeleted == true`) —
-                // otherwise the recoverable Delete above is the right action.
-                if email.isDeleted {
-                    Button(role: .destructive) {
-                        onPermanentDelete()
-                    } label: {
-                        Label("Delete Permanently", systemImage: "xmark.bin.fill")
-                    }
-                }
-                Spacer()
+            // Full labels when the card is wide enough, icon-only when it
+            // isn't — a fixed row hyphen-wraps button titles ("Ar-chive") at
+            // compact widths.
+            ViewThatFits(in: .horizontal) {
+                actionRow(iconOnly: false)
+                actionRow(iconOnly: true)
             }
             .padding(.top, 4)
         }
@@ -331,6 +304,56 @@ struct EmailMessageCard: View {
                 .fill(email.isRead ? Color.secondary.opacity(0.08) : Color.accentColor.opacity(0.08))
         }
         .onAppear { onMarkRead() }
+    }
+
+    @ViewBuilder
+    private func actionRow(iconOnly: Bool) -> some View {
+        let row = HStack(spacing: 8) {
+            Button {
+                onReply()
+            } label: {
+                Label("Reply", systemImage: "arrowshape.turn.up.left")
+            }
+            Button {
+                onAddNote()
+            } label: {
+                Label("Add Note", systemImage: "note.text")
+            }
+            Button {
+                onArchive()
+            } label: {
+                Label("Archive", systemImage: "archivebox")
+            }
+            // Hide the recoverable Delete on rows already in the Trash
+            // mailbox — `delete` there is a no-op (re-sets `isDeleted`
+            // which is already true). The permanent-delete affordance
+            // below is the meaningful action for trashed rows.
+            if !email.isDeleted {
+                Button(role: .destructive) {
+                    onDelete()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
+            // The permanent-delete affordance only renders for rows that
+            // are already in the Trash mailbox (`isDeleted == true`) —
+            // otherwise the recoverable Delete above is the right action.
+            if email.isDeleted {
+                Button(role: .destructive) {
+                    onPermanentDelete()
+                } label: {
+                    Label("Delete Permanently", systemImage: "xmark.bin.fill")
+                }
+            }
+            Spacer()
+        }
+        .lineLimit(1)
+
+        if iconOnly {
+            row.labelStyle(.iconOnly)
+        } else {
+            row.labelStyle(.titleAndIcon)
+        }
     }
 }
 

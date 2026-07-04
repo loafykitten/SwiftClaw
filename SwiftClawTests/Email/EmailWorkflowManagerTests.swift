@@ -7,6 +7,28 @@ import Testing
 @Suite(.serialized)
 struct EmailWorkflowManagerTests {
     @Test
+    func accountAddedRefreshRunsInjectedHandler() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        let manager = EmailWorkflowManager.shared
+        manager.resetForTesting()
+        defer { manager.resetForTesting() }
+
+        let probe = AccountAddedRefreshProbe()
+        manager.configureForTesting(
+            userDefaults: fixture.defaults,
+            accountAddedRefreshHandler: {
+                await probe.record()
+            }
+        )
+
+        manager.refreshAfterAccountAdded()
+
+        #expect(try await Self.waitForRefresh(in: probe) == 1)
+    }
+
+    @Test
     func overdueIntervalReviewRunsWhenWorkflowStarts() async throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
@@ -63,12 +85,35 @@ struct EmailWorkflowManagerTests {
         return await probe.firstRun()
     }
 
+    private static func waitForRefresh(
+        in probe: AccountAddedRefreshProbe,
+        timeout: TimeInterval = 1
+    ) async throws -> Int {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let count = await probe.count
+            if count > 0 {
+                return count
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return await probe.count
+    }
+
     private static func inMemoryContainer() throws -> ModelContainer {
         try ModelContainer(
             for: Item.self, Chat.self, ChatMessage.self,
             Email.self, EmailThread.self, EmailNote.self, EmailAttachment.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
+    }
+}
+
+private actor AccountAddedRefreshProbe {
+    private(set) var count = 0
+
+    func record() {
+        count += 1
     }
 }
 

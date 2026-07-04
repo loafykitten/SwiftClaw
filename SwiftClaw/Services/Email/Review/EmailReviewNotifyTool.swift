@@ -48,6 +48,7 @@ final class EmailReviewNotifyTool: Tool {
     /// Surfaces the model's `message` back to the caller so a conversational
     /// refresh can relay it as the assistant's reply.
     private let onSummaryProduced: (@MainActor (String) -> Void)?
+    private let accountLabelProvider: @MainActor (UUID) -> String?
 
     /// Idempotency guard against the agentic loop calling this tool more
     /// than once per `EmailReviewService.runOnce()` pass: the first call
@@ -62,13 +63,22 @@ final class EmailReviewNotifyTool: Tool {
         targetChatID: UUID? = nil,
         suppressInlineSummary: Bool = false,
         onReviewCreated: (@MainActor (UUID) -> Void)? = nil,
-        onSummaryProduced: (@MainActor (String) -> Void)? = nil
+        onSummaryProduced: (@MainActor (String) -> Void)? = nil,
+        // Labels match the inbox convention: only shown when more than one
+        // account is configured — a single-account card never needs one.
+        accountLabelProvider: @escaping @MainActor (UUID) -> String? = { accountID in
+            let store = EmailAccountStore.shared
+            guard store.accounts.count > 1 else { return nil }
+            return store.account(for: accountID)?.effectiveDisplayName
+                ?? EmailAccountLabeler.removedAccountLabel
+        }
     ) {
         self.modelContainer = modelContainer
         self.targetChatID = targetChatID
         self.suppressInlineSummary = suppressInlineSummary
         self.onReviewCreated = onReviewCreated
         self.onSummaryProduced = onSummaryProduced
+        self.accountLabelProvider = accountLabelProvider
     }
 
     func execute(arguments: [String: JSONValue]) async throws -> String {
@@ -134,13 +144,14 @@ final class EmailReviewNotifyTool: Tool {
 
             // Batch-fetch subjects + senders in the same context the chat
             // insert will use — one `ModelContext` for the whole tool call.
-            var emailMetadata: [UUID: (subject: String, sender: String, date: String)] = [:]
+            var emailMetadata: [UUID: (subject: String, sender: String, date: String, accountLabel: String?)] = [:]
             for (_, uuid) in actionsWithGUIDs where emailMetadata[uuid] == nil {
                 if let email = repository.fetchEmail(by: uuid) {
                     emailMetadata[uuid] = (
                         email.subject,
                         email.fromAddress,
-                        EmailReviewDateFormatter.string(from: email.date)
+                        EmailReviewDateFormatter.string(from: email.date),
+                        self.accountLabelProvider(email.accountID)
                     )
                 }
             }
@@ -155,7 +166,8 @@ final class EmailReviewNotifyTool: Tool {
                     summary: action.summary,
                     subject: meta?.subject,
                     sender: meta?.sender,
-                    date: meta?.date
+                    date: meta?.date,
+                    accountLabel: meta?.accountLabel
                 )
             }
 

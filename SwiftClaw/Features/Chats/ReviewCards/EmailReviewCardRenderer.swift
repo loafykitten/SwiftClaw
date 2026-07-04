@@ -321,6 +321,12 @@ private struct EmailReviewCardRow: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            // Badge and metadata stack vertically: sender + date routinely
+            // outgrow the width left beside the badge, and sharing a line
+            // wraps them into a cramped column (seen in live use).
+            if let accountLabel = item.accountLabel, !accountLabel.isEmpty {
+                EmailAccountBadge(label: accountLabel)
+            }
             let metadata = [item.sender, item.date]
                 .compactMap { $0 }
                 .filter { !$0.isEmpty }

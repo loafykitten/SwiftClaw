@@ -14,7 +14,8 @@ struct ReviewCardPayloadTests {
                     summary: "Awaiting reply",
                     subject: "Q3 planning",
                     sender: "boss@example.com",
-                    date: "Jun 24, 2026 at 10:00 PM"
+                    date: "Jun 24, 2026 at 10:00 PM",
+                    accountLabel: "Work"
                 ),
                 ReviewItem(
                     itemID: UUID(),
@@ -35,6 +36,7 @@ struct ReviewCardPayloadTests {
         #expect(decoded.items.count == 2)
         #expect(decoded.items[0].action == .flag)
         #expect(decoded.items[0].date == "Jun 24, 2026 at 10:00 PM")
+        #expect(decoded.items[0].accountLabel == "Work")
         #expect(decoded.items[1].action == .delete)
     }
 
@@ -62,6 +64,7 @@ struct ReviewCardPayloadTests {
         #expect(decoded.items.count == 1)
         #expect(decoded.items[0].actionToken == "summarize")
         #expect(decoded.items[0].action == nil)
+        #expect(decoded.items[0].accountLabel == nil)
     }
 
     @Test func preservesUnknownReviewType() throws {

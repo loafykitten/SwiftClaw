@@ -34,7 +34,10 @@ struct EmailReviewNotifyToolTests {
         setupContext.insert(email)
         try setupContext.save()
 
-        let tool = EmailReviewNotifyTool(modelContainer: container)
+        let tool = EmailReviewNotifyTool(
+            modelContainer: container,
+            accountLabelProvider: { _ in "Work" }
+        )
 
         let arguments: [String: JSONValue] = [
             "message": .string("Two items need attention."),
@@ -79,6 +82,7 @@ struct EmailReviewNotifyToolTests {
         #expect(card.items[0].subject == "Needs a reply")
         #expect(card.items[0].sender == "boss@example.com")
         #expect(card.items[0].date?.isEmpty == false)
+        #expect(card.items[0].accountLabel == "Work")
 
         // (2) The summary text message comes second.
         let summaryMessage = messages[1]
@@ -86,6 +90,45 @@ struct EmailReviewNotifyToolTests {
         #expect(summaryMessage.content == "Two items need attention.")
         #expect(!summaryMessage.content.contains("Dates:"))
         #expect(summaryMessage.reviewCard == nil)
+    }
+
+    /// Single-account users get no account chip on review cards: a nil from
+    /// the label provider must flow through as a nil `accountLabel`, not a
+    /// placeholder string.
+    @Test func executeLeavesAccountLabelNilWhenProviderReturnsNil() async throws {
+        let container = try Self.inMemoryContainer()
+        let setupContext = ModelContext(container)
+        let email = Email(
+            messageID: "<single@example.com>",
+            subject: "Only account",
+            fromAddress: "boss@example.com",
+            toAddresses: ["me@example.com"],
+            date: .now,
+            bodyText: "Body"
+        )
+        setupContext.insert(email)
+        try setupContext.save()
+
+        let tool = EmailReviewNotifyTool(
+            modelContainer: container,
+            accountLabelProvider: { _ in nil }
+        )
+
+        _ = try await tool.execute(arguments: [
+            "message": .string("One item."),
+            "email_actions": .array([
+                .object([
+                    "email_guid": .string(email.id.uuidString),
+                    "action": .string("review"),
+                    "summary": .string("x")
+                ])
+            ])
+        ])
+
+        let readContext = ModelContext(container)
+        let chat = try #require(try readContext.fetch(FetchDescriptor<Chat>()).first)
+        let card = try #require(chat.sortedMessages.first?.reviewCard)
+        #expect(card.items[0].accountLabel == nil)
     }
 
     @Test func executeIsIdempotentWithinARun() async throws {

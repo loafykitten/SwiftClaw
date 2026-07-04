@@ -27,3 +27,14 @@ struct WorkspaceEmailSummary: Equatable {
 
     static let empty = WorkspaceEmailSummary(emails: [])
 }
+
+@MainActor
+struct WorkspaceEmailWidgetContent: Equatable {
+    let summary: WorkspaceEmailSummary
+    let completeAccountCount: Int
+
+    init(emails: [Email], accounts: [StoredEmailAccount]) {
+        summary = WorkspaceEmailSummary(emails: emails)
+        completeAccountCount = accounts.filter(\.isComplete).count
+    }
+}

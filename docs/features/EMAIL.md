@@ -51,6 +51,13 @@ reuses an `EmailThread.id` when a cluster's messages already belonged to it, so
 a re-cluster doesn't yank the user's open thread. Only runs when new messages
 were inserted.
 
+Threads are account-scoped: it fetches **all** messages (archived and deleted
+included), groups them by `Email.accountID`, and clusters each account
+separately, stamping `EmailThread.accountID`. A prior thread is only reused
+for a same-account (or legacy nil-account) cluster, and clusters with the
+strongest prior claim pick first — so legacy mixed-account threads split, with
+one account keeping the old thread id and the rest getting fresh rows.
+
 ## Review loop
 
 `EmailReviewService.runOnce()` gives the model a scoped `fetch_inbox_emails`

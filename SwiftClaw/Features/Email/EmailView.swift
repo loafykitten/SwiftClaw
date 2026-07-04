@@ -16,6 +16,7 @@ struct EmailView: View {
     @State private var composingReplyFor: Email?
     @State private var manualSyncCoordinator = EmailManualSyncCoordinator.shared
     @State private var manualReviewCoordinator = EmailManualReviewCoordinator.shared
+    @State private var selectedAccountScope: EmailAccountScope = .all
     @AppStorage(SettingsKeys.emailReviewSlideAction)
     private var quickActionRaw = SettingsStorage.defaultEmailReviewSlideAction.rawValue
     var pendingEmailID: UUID?
@@ -26,34 +27,13 @@ struct EmailView: View {
         EmailAccountStore.shared.hasConfiguredAccount
     }
 
+    private var completeAccounts: [StoredEmailAccount] {
+        EmailAccountStore.shared.accounts.filter(\.isComplete)
+    }
+
     private var quickAction: ReviewActionToken {
         EmailReviewSlideAction(rawValue: quickActionRaw)?.token
             ?? SettingsStorage.defaultEmailReviewSlideAction.token
-    }
-
-    /// Inbox surfaces any thread that still has at least one visible
-    /// (non-archived + non-deleted) message. (We query `Email` rows rather
-    /// than threads so SwiftUI observes the per-message flags that archive/
-    /// delete flip — the per-mailbox split happens here in code.)
-    private var inboxThreads: [EmailThread] {
-        threads(from: emails.filter { !$0.isArchived && !$0.isDeleted })
-    }
-
-    private var archiveThreads: [EmailThread] {
-        threads(from: emails.filter { $0.isArchived && !$0.isDeleted })
-    }
-
-    private var trashThreads: [EmailThread] {
-        threads(from: emails.filter(\.isDeleted))
-    }
-
-    private func threads(from emails: [Email]) -> [EmailThread] {
-        var seen = Set<UUID>()
-        return emails.compactMap { email in
-            guard let thread = email.thread else { return nil }
-            guard seen.insert(thread.id).inserted else { return nil }
-            return thread
-        }
     }
 
     var body: some View {
@@ -62,22 +42,15 @@ struct EmailView: View {
         // everything (filtered list, selection, visible mailboxes, the
         // empty-state gate) from these locals — reading the partitions
         // repeatedly used to re-run that work many times per `body` pass.
-        let inbox = inboxThreads
-        let archive = archiveThreads
-        let trash = trashThreads
+        let accounts = completeAccounts
+        let accountScope = selectedAccountScope.normalized(availableAccounts: accounts)
+        let accountLabeler = EmailAccountLabeler(accountScope: accountScope, accounts: accounts)
+        let snapshot = EmailThreadScopeSnapshot(emails: emails, accountScope: accountScope)
+        let inbox = snapshot.inbox
+        let archive = snapshot.archive
+        let trash = snapshot.trash
 
-        let filtered: [EmailThread]
-        switch selectedMailbox {
-        case .inbox:
-            filtered = inbox
-        case .flagged:
-            filtered = inbox.filter { $0.isFlagged }
-        case .archive:
-            filtered = archive
-        case .trash:
-            filtered = trash
-        }
-        let searched = search(filtered, with: emailSearchText)
+        let searched = snapshot.search(selectedMailbox, with: emailSearchText)
         let selected = searched.first { $0.id == selectedThreadID } ?? searched.first
 
         // Archive / Trash are hidden when empty so the sidebar never
@@ -102,16 +75,18 @@ struct EmailView: View {
             } else {
                 if horizontalSizeClass == .compact {
                     compactThreadLayout(
-                        inbox: inbox,
-                        archive: archive,
-                        trash: trash,
-                        visibleMailboxes: visibleMailboxes
+                        snapshot: snapshot,
+                        visibleMailboxes: visibleMailboxes,
+                        accounts: accounts,
+                        accountLabeler: accountLabeler
                     )
                 } else {
                     threadLayout(
                         filtered: searched,
                         selected: selected,
-                        visibleMailboxes: visibleMailboxes
+                        visibleMailboxes: visibleMailboxes,
+                        accounts: accounts,
+                        accountLabeler: accountLabeler
                     )
                 }
             }
@@ -161,7 +136,11 @@ struct EmailView: View {
             }
         }
         .onAppear {
+            normalizeAccountScope()
             handlePendingEmailSelection()
+        }
+        .onChange(of: accounts.map(\.id)) { _, _ in
+            normalizeAccountScope()
         }
         .onChange(of: pendingEmailID) { _, emailID in
             handlePendingEmailSelection(emailID)
@@ -174,11 +153,15 @@ struct EmailView: View {
     private func threadLayout(
         filtered: [EmailThread],
         selected: EmailThread?,
-        visibleMailboxes: [EmailMailbox]
+        visibleMailboxes: [EmailMailbox],
+        accounts: [StoredEmailAccount],
+        accountLabeler: EmailAccountLabeler
     ) -> some View {
         HStack(spacing: 0) {
             EmailMailboxSidebar(
                 selectedMailbox: $selectedMailbox,
+                accountScope: $selectedAccountScope,
+                accounts: accounts,
                 syncStatusLabel: MailSyncMonitor.shared.statusLabel,
                 isSyncing: MailSyncMonitor.shared.isSyncing,
                 visibleMailboxes: visibleMailboxes,
@@ -200,6 +183,7 @@ struct EmailView: View {
                 ),
                 searchText: $emailSearchText,
                 isSearching: isSearchingEmails,
+                accountLabeler: accountLabeler,
                 onQuickAction: performQuickAction
             )
             .frame(width: 280)
@@ -209,6 +193,7 @@ struct EmailView: View {
             if let selected {
                 EmailThreadDetailView(
                     thread: selected,
+                    accountLabel: accountLabeler.label(for: selected),
                     onReply: { email in composingReplyFor = email }
                 )
             } else {
@@ -222,16 +207,21 @@ struct EmailView: View {
     }
 
     private func compactThreadLayout(
-        inbox: [EmailThread],
-        archive: [EmailThread],
-        trash: [EmailThread],
-        visibleMailboxes: [EmailMailbox]
+        snapshot: EmailThreadScopeSnapshot,
+        visibleMailboxes: [EmailMailbox],
+        accounts: [StoredEmailAccount],
+        accountLabeler: EmailAccountLabeler
     ) -> some View {
-        let allThreads = inbox + archive + trash
+        let allThreads = snapshot.inbox + snapshot.archive + snapshot.trash
 
         // No NavigationStack here: in compact widths this view is pushed onto
         // the Workspace stack, so mailboxes and threads push onto that stack.
         return List {
+            if accounts.count > 1 {
+                Section {
+                    EmailAccountPicker(accountScope: $selectedAccountScope, accounts: accounts)
+                }
+            }
             Section {
                 ForEach(visibleMailboxes) { mailbox in
                     NavigationLink(value: mailbox) {
@@ -249,18 +239,11 @@ struct EmailView: View {
         .navigationDestination(for: EmailMailbox.self) { mailbox in
             EmailThreadNavigationList(
                 mailbox: mailbox,
-                threads: search(
-                    threads(
-                        for: mailbox,
-                        inbox: inbox,
-                        archive: archive,
-                        trash: trash
-                    ),
-                    with: emailSearchText
-                ),
+                threads: snapshot.search(mailbox, with: emailSearchText),
                 quickAction: quickAction,
                 searchText: $emailSearchText,
                 isSearching: isSearchingEmails,
+                accountLabeler: accountLabeler,
                 onQuickAction: performQuickAction
             )
             .navigationTitle(mailbox.rawValue)
@@ -269,6 +252,7 @@ struct EmailView: View {
             if let thread = allThreads.first(where: { $0.id == threadID }) {
                 EmailThreadDetailView(
                     thread: thread,
+                    accountLabel: accountLabeler.label(for: thread),
                     onReply: { email in composingReplyFor = email }
                 )
                 .navigationTitle(thread.latestMessage?.subject ?? "(no subject)")
@@ -283,30 +267,8 @@ struct EmailView: View {
         }
     }
 
-    private func threads(
-        for mailbox: EmailMailbox,
-        inbox: [EmailThread],
-        archive: [EmailThread],
-        trash: [EmailThread]
-    ) -> [EmailThread] {
-        switch mailbox {
-        case .inbox:
-            inbox
-        case .flagged:
-            inbox.filter { $0.isFlagged }
-        case .archive:
-            archive
-        case .trash:
-            trash
-        }
-    }
-
     private var isSearchingEmails: Bool {
         SearchQuery.isActive(emailSearchText)
-    }
-
-    private func search(_ threads: [EmailThread], with searchText: String) -> [EmailThread] {
-        threads.filter { $0.matchesSearch(searchText) }
     }
 
     private func handlePendingEmailSelection(_ emailID: UUID? = nil) {
@@ -314,6 +276,10 @@ struct EmailView: View {
               let email = emails.first(where: { $0.id == emailID }),
               let thread = email.thread else { return }
 
+        if !selectedAccountScope.includes(email) {
+            selectedAccountScope = .all
+        }
+        selectedMailbox = mailbox(for: email)
         selectedThreadID = thread.id
 
         if horizontalSizeClass == .compact {
@@ -321,6 +287,13 @@ struct EmailView: View {
         }
 
         onPendingEmailHandled()
+    }
+
+    private func normalizeAccountScope() {
+        let normalized = selectedAccountScope.normalized(availableAccounts: completeAccounts)
+        if normalized != selectedAccountScope {
+            selectedAccountScope = normalized
+        }
     }
 
     private func mailbox(for email: Email) -> EmailMailbox {
@@ -514,6 +487,8 @@ enum EmailMailbox: String, CaseIterable, Identifiable {
 
 private struct EmailMailboxSidebar: View {
     @Binding var selectedMailbox: EmailMailbox
+    @Binding var accountScope: EmailAccountScope
+    let accounts: [StoredEmailAccount]
     let syncStatusLabel: String?
     let isSyncing: Bool
     let visibleMailboxes: [EmailMailbox]
@@ -535,6 +510,12 @@ private struct EmailMailboxSidebar: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
+
+            if accounts.count > 1 {
+                EmailAccountPicker(accountScope: $accountScope, accounts: accounts)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
 
             #if os(macOS)
             List(selection: $selectedMailbox) {
@@ -598,6 +579,22 @@ private struct EmailMailboxSidebar: View {
     }
 }
 
+private struct EmailAccountPicker: View {
+    @Binding var accountScope: EmailAccountScope
+    let accounts: [StoredEmailAccount]
+
+    var body: some View {
+        Picker("Account", selection: $accountScope) {
+            Text("All Accounts").tag(EmailAccountScope.all)
+            ForEach(accounts) { account in
+                Text(account.effectiveDisplayName)
+                    .tag(EmailAccountScope.account(account.id))
+            }
+        }
+        .pickerStyle(.menu)
+    }
+}
+
 private struct EmailThreadListView: View {
     let threads: [EmailThread]
     let mailbox: EmailMailbox
@@ -605,6 +602,7 @@ private struct EmailThreadListView: View {
     @Binding var selectedThreadID: UUID?
     @Binding var searchText: String
     let isSearching: Bool
+    let accountLabeler: EmailAccountLabeler
     let onQuickAction: (ReviewActionToken, EmailThread, EmailMailbox) -> Void
 
     var body: some View {
@@ -628,7 +626,8 @@ private struct EmailThreadListView: View {
                         quickActionRow(for: thread) {
                             EmailThreadRow(
                                 thread: thread,
-                                isSelected: thread.id == selectedThreadID
+                                isSelected: thread.id == selectedThreadID,
+                                accountLabel: accountLabeler.label(for: thread)
                             )
                         }
                         .tag(thread.id)
@@ -646,7 +645,8 @@ private struct EmailThreadListView: View {
                             } label: {
                                 EmailThreadRow(
                                     thread: thread,
-                                    isSelected: thread.id == selectedThreadID
+                                    isSelected: thread.id == selectedThreadID,
+                                    accountLabel: accountLabeler.label(for: thread)
                                 )
                             }
                             .buttonStyle(.plain)
@@ -702,6 +702,7 @@ private struct EmailThreadNavigationList: View {
     let quickAction: ReviewActionToken
     @Binding var searchText: String
     let isSearching: Bool
+    let accountLabeler: EmailAccountLabeler
     let onQuickAction: (ReviewActionToken, EmailThread, EmailMailbox) -> Void
 
     var body: some View {
@@ -718,7 +719,8 @@ private struct EmailThreadNavigationList: View {
                             NavigationLink(value: thread.id) {
                                 EmailThreadRow(
                                     thread: thread,
-                                    isSelected: false
+                                    isSelected: false,
+                                    accountLabel: accountLabeler.label(for: thread)
                                 )
                             }
                         }
@@ -736,6 +738,7 @@ private struct EmailThreadNavigationList: View {
 private struct EmailThreadRow: View {
     let thread: EmailThread
     let isSelected: Bool
+    let accountLabel: String?
 
     @State private var showingNotes = false
 
@@ -784,6 +787,10 @@ private struct EmailThreadRow: View {
                 .font(.callout)
                 .fontWeight(unread > 0 ? .semibold : .regular)
                 .lineLimit(1)
+            if let accountLabel {
+                EmailAccountBadge(label: accountLabel)
+                    .lineLimit(1)
+            }
             Text(latest?.snippet ?? "")
                 .font(.caption)
                 .foregroundStyle(.secondary)

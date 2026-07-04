@@ -397,9 +397,14 @@ struct EmailAccountEditorSheet: View {
         let account = currentSnapshot()
         switch mode {
         case .create:
-            store.add(account)
+            // Passwords land in the Keychain before the account is visible so
+            // the immediate first sync below can authenticate.
             store.setPassword(imapPassword, kind: .imap, for: account)
             store.setPassword(smtpPassword, kind: .smtp, for: account)
+            store.add(account)
+            if account.isComplete {
+                EmailWorkflowManager.shared.refreshAfterAccountAdded()
+            }
         case .edit:
             store.update(account)
             store.setPassword(imapPassword, kind: .imap, for: account)

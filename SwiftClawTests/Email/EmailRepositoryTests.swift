@@ -71,6 +71,7 @@ struct EmailRepositoryTests {
 
         #expect(inserted == 1)
         #expect(repository.fetchNonArchivedThreadsForReview().count >= 1)
+        #expect(try context.fetch(FetchDescriptor<EmailThread>()).first?.accountID == Self.accountID)
     }
 
     @Test func upsertIsIdempotentForAlreadyKnownMessages() async throws {
@@ -245,6 +246,98 @@ struct EmailRepositoryTests {
         let all = try context.fetch(FetchDescriptor<Email>())
         #expect(all.count == 2)
         #expect(all.map(\.accountID).sorted() == [accountA, accountB].sorted())
+    }
+
+    @Test func resolveThreadsSeparatesSameMessageIDByAccount() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let accountA = UUID()
+        let accountB = UUID()
+
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 1, messageID: "<shared@example.com>", subject: "Shared")],
+            mailbox: "INBOX",
+            accountID: accountA
+        )
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 1, messageID: "<shared@example.com>", subject: "Shared")],
+            mailbox: "INBOX",
+            accountID: accountB
+        )
+        repository.resolveThreads()
+
+        let threads = try context.fetch(FetchDescriptor<EmailThread>())
+        #expect(threads.count == 2)
+        #expect(Set(threads.compactMap(\.accountID)) == Set([accountA, accountB]))
+        #expect(threads.allSatisfy { thread in
+            Set(thread.messages.map(\.accountID)).count == 1
+        })
+    }
+
+    @Test func resolveThreadsSeparatesReplySubjectsByAccount() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let accountA = UUID()
+        let accountB = UUID()
+
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 1, messageID: "<reply-a@example.com>", subject: "Re: Shared Subject")],
+            mailbox: "INBOX",
+            accountID: accountA
+        )
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 1, messageID: "<reply-b@example.com>", subject: "Re: Shared Subject")],
+            mailbox: "INBOX",
+            accountID: accountB
+        )
+        repository.resolveThreads()
+
+        let threads = try context.fetch(FetchDescriptor<EmailThread>())
+        #expect(threads.count == 2)
+        #expect(Set(threads.compactMap(\.accountID)) == Set([accountA, accountB]))
+    }
+
+    @Test func resolveThreadsSplitsExistingMixedAccountThread() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let accountA = UUID()
+        let accountB = UUID()
+        let mixedThread = EmailThread(subjectNormalized: "Legacy")
+        let first = Email(
+            messageID: "<legacy-shared@example.com>",
+            subject: "Legacy",
+            date: Date().addingTimeInterval(-60),
+            accountID: accountA,
+            uid: 1,
+            thread: mixedThread
+        )
+        let second = Email(
+            messageID: "<legacy-shared@example.com>",
+            subject: "Legacy",
+            date: Date(),
+            accountID: accountB,
+            uid: 1,
+            thread: mixedThread
+        )
+        mixedThread.messages = [first, second]
+        context.insert(mixedThread)
+        context.insert(first)
+        context.insert(second)
+        try context.save()
+        let originalThreadID = mixedThread.id
+
+        repository.resolveThreads()
+
+        let threads = try context.fetch(FetchDescriptor<EmailThread>())
+        #expect(threads.count == 2)
+        #expect(threads.contains { $0.id == originalThreadID })
+        #expect(Set(threads.compactMap(\.accountID)) == Set([accountA, accountB]))
+        #expect(threads.allSatisfy { thread in
+            Set(thread.messages.map(\.accountID)).count == 1
+        })
     }
 
     // MARK: - H1 — Thread identity stability
@@ -607,6 +700,7 @@ struct EmailRepositoryTests {
         #expect(sent.isRead == true) // own send — already seen
         #expect(sent.accountID == account.id)
         #expect(sent.thread?.id == originalThreadID)
+        #expect(sent.thread?.accountID == account.id)
 
         // Re-ingesting the same outgoing (e.g. user re-triggered send
         // via a future path) must be idempotent on messageID.
@@ -629,7 +723,9 @@ struct EmailRepositoryTests {
         messageID: String,
         subject: String,
         isRead: Bool = false,
-        date: Date = .now
+        date: Date = .now,
+        inReplyTo: String? = nil,
+        references: [String] = []
     ) -> FetchedMessage {
         FetchedMessage(
             uid: uid,
@@ -643,8 +739,8 @@ struct EmailRepositoryTests {
             internalDate: date,
             bodyText: "Body",
             bodyHTML: nil,
-            inReplyTo: nil,
-            references: [],
+            inReplyTo: inReplyTo,
+            references: references,
             isRead: isRead,
             isFlagged: false,
             mailbox: "INBOX",
