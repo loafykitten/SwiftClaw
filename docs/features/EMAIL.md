@@ -3,8 +3,8 @@
 The Email subsystem lives under `SwiftClaw/Services/Email/`. One
 `SwiftMailClient` is created per `StoredEmailAccount`.
 
-For shipped scope, remaining work, deferred items, and known by-design
-behaviors, see [`docs/EMAIL_PLAN.md`](../EMAIL_PLAN.md).
+The feature is code-complete and live-verified except for the open items in
+[Remaining work](#remaining-work-and-deferred-items) at the end of this doc.
 
 ## Mail client
 
@@ -25,7 +25,10 @@ INBOX, Sent, Drafts, Junk/Spam, Archive/Trash, and custom folders. Gmail system
 folders under `[Gmail]` / `[Google Mail]` that are not real SPECIAL-USE folders
 are skipped so unbounded All Mail does not get synced as a custom folder.
 Hierarchical folders render flat using their full path, such as
-`Work/Receipts`.
+`Work/Receipts`. The sidebar's custom Folders group only shows for a single
+account's view — in the unified "All Accounts" view with more than one account
+configured, only the standard mailboxes (Inbox/Flagged/Sent/Drafts/Junk/
+Archive/Trash) appear, so two accounts' folder lists don't interleave.
 
 ## Incremental sync
 
@@ -104,3 +107,31 @@ Messages moved between folders in another client can briefly appear in their old
 local state until the destination folder sync lands. Archive has a Message-ID
 reclaim path; other cross-folder moves may show a temporary duplicate/Trash row
 until the next pass settles the store.
+
+## Remaining work and deferred items
+
+Live checks still open (everything else has been verified against a real
+account):
+
+- Reply sends: threads on the recipient side, the APPEND to Sent, and the
+  local synthetic row reconciling to the real Sent UID.
+- Folder sync live pass: sidebar shows Sent/Drafts/Junk + the account's custom
+  folders with plausible contents; Settings → Email → Review Folders lists the
+  real folders; toggling one on feeds "Review Now"; with everything off,
+  scheduled review matches the previous INBOX-only behavior.
+- Behavior to watch, not a code change yet: unread/flagged/notated threads
+  override the review fetch limit, so a first review over a large unread
+  backlog returns every unread thread in one prompt. Intentional and
+  self-correcting as the inbox is cleared — if a live first pass produces an
+  unwieldy prompt, the fix is a soft cap on the unread override (newest N
+  unread), not removing the override.
+
+Deferred:
+
+- iOS target and `BGTaskScheduler` mail sync.
+- `EmailView` fetch paging/windowing for very large stores.
+- Per-operation IMAP/SMTP connection reuse.
+- Memory-backed email review context (e.g. sender-level preferences), once
+  there are concrete preferences worth remembering.
+- More review follow-up tools (reply/delete) if the review-chat workflow needs
+  them.

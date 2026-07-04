@@ -13,8 +13,8 @@ this file to stay scannable:
 - **Creating or changing SwiftData models** → `docs/conventions/MODELS.md`
 - **Settings & secret/keychain persistence** → `docs/conventions/SETTINGS.md`
 - **Model-callable tools / inference loop** → `docs/conventions/TOOLS.md`
-- **The Email subsystem** (mail client, sync, reconciliation, threading, review loop)
-  → `docs/features/EMAIL.md`; scope & status in `docs/EMAIL_PLAN.md`
+- **The Email subsystem** (mail client, sync, reconciliation, threading, review loop, scope & status)
+  → `docs/features/EMAIL.md`
 
 ## Additional Agent-friendly CLI tools
 `rg` - text/regex search (`rg -n "pattern" --type swift`)
