@@ -136,6 +136,29 @@ struct SettingsStorageTests {
         #expect(SettingsStorage.isInvestigationEnabled(userDefaults: fixture.defaults))
     }
 
+    @Test func workspaceFeaturesDefaultToDisabled() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        for feature in WorkspaceFeature.allCases {
+            #expect(!SettingsStorage.isWorkspaceFeatureEnabled(feature, userDefaults: fixture.defaults))
+        }
+    }
+
+    @Test func workspaceFeatureEnableFlagsPersist() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        for feature in WorkspaceFeature.allCases {
+            fixture.defaults.set(true, forKey: feature.settingsKey)
+        }
+
+        #expect(SettingsStorage.isEmailEnabled(userDefaults: fixture.defaults))
+        #expect(SettingsStorage.isCalendarEnabled(userDefaults: fixture.defaults))
+        #expect(SettingsStorage.isRemindersEnabled(userDefaults: fixture.defaults))
+        #expect(SettingsStorage.isNotesEnabled(userDefaults: fixture.defaults))
+    }
+
     @Test func disabledWebSearchDisablesInvestigationEffectively() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }

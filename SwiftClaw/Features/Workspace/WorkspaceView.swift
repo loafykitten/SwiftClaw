@@ -19,6 +19,17 @@ private enum WorkspaceItem: String, CaseIterable, Hashable, Identifiable {
         case .memory: "brain"
         }
     }
+
+    /// The toggleable feature backing this item; `nil` for always-on items.
+    var feature: WorkspaceFeature? {
+        switch self {
+        case .email: .email
+        case .calendar: .calendar
+        case .reminders: .reminders
+        case .notes: .notes
+        case .memory: nil
+        }
+    }
 }
 
 /// A hub listing the workspace features; selecting one pushes it. A single
@@ -31,12 +42,30 @@ struct WorkspaceView: View {
     @Query(sort: \Email.date, order: .reverse)
     private var emails: [Email]
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
+    @AppStorage(SettingsKeys.calendarEnabled) private var isCalendarEnabled = SettingsStorage.defaultCalendarEnabled
+    @AppStorage(SettingsKeys.remindersEnabled) private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
+    @AppStorage(SettingsKeys.notesEnabled) private var isNotesEnabled = SettingsStorage.defaultNotesEnabled
 
     @State private var navigationPath = NavigationPath()
     @State private var hasAppliedLaunchSelection = false
 
     private var visibleItems: [WorkspaceItem] {
-        WorkspaceItem.allCases
+        WorkspaceItem.allCases.filter { item in
+            item.feature.map(isFeatureEnabled) ?? true
+        }
+    }
+
+    private var disabledFeatures: [WorkspaceFeature] {
+        WorkspaceFeature.allCases.filter { !isFeatureEnabled($0) }
+    }
+
+    private func isFeatureEnabled(_ feature: WorkspaceFeature) -> Bool {
+        switch feature {
+        case .email: isEmailEnabled
+        case .calendar: isCalendarEnabled
+        case .reminders: isRemindersEnabled
+        case .notes: isNotesEnabled
+        }
     }
 
     private var widgetColumns: [GridItem] {
@@ -52,16 +81,22 @@ struct WorkspaceView: View {
 
         NavigationStack(path: $navigationPath) {
             ScrollView {
-                LazyVGrid(
-                    columns: widgetColumns,
-                    alignment: .leading,
-                    spacing: 16
-                ) {
-                    ForEach(visibleItems) { item in
-                        NavigationLink(value: item) {
-                            WorkspaceWidgetPanel(item: item, emailSummary: emailSummary)
+                VStack(alignment: .leading, spacing: 24) {
+                    LazyVGrid(
+                        columns: widgetColumns,
+                        alignment: .leading,
+                        spacing: 16
+                    ) {
+                        ForEach(visibleItems) { item in
+                            NavigationLink(value: item) {
+                                WorkspaceWidgetPanel(item: item, emailSummary: emailSummary)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+                    }
+
+                    if !disabledFeatures.isEmpty {
+                        WorkspaceDisabledFeaturesList(features: disabledFeatures)
                     }
                 }
                 .padding(20)
@@ -154,6 +189,51 @@ private extension WorkspaceItem {
 
 #Preview {
     WorkspaceView()
+}
+
+/// Disabled features listed under the widget grid; tapping one opens
+/// Settings › Tools scrolled to that feature's row with a brief outline.
+private struct WorkspaceDisabledFeaturesList: View {
+    let features: [WorkspaceFeature]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("More features")
+                    .font(.headline)
+                Text("Tap a feature to enable it in Settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            ForEach(features) { feature in
+                AppSettingsButton(section: .tools, highlightToolsFeature: feature) {
+                    HStack(spacing: 10) {
+                        Image(systemName: feature.systemImage)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24)
+
+                        Text(feature.displayName)
+                            .font(.subheadline)
+
+                        Spacer(minLength: 0)
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .glassEffect(in: .rect(cornerRadius: 10.0))
+                    .contentShape(.rect(cornerRadius: 10.0))
+                }
+                .buttonStyle(.plain)
+                .help("Enable \(feature.displayName) in Settings › Tools")
+                .accessibilityLabel("Enable \(feature.displayName)")
+            }
+        }
+        .frame(maxWidth: 480, alignment: .leading)
+    }
 }
 
 private struct WorkspaceWidgetPanel: View {

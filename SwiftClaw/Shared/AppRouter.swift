@@ -12,6 +12,9 @@ final class AppRouter {
     var selectedNavigationItem: NavigationItem? = .home
     var selectedChatID: UUID?
     var pendingSettingsSection: SettingsSection?
+    /// Feature row in Settings › Tools to scroll to and briefly outline —
+    /// set when a disabled feature is tapped in Workspace.
+    var pendingToolsFeatureHighlight: WorkspaceFeature?
     private(set) var unreadChatIDs: Set<UUID> = []
     var pendingEmailViewID: UUID?
 
@@ -69,8 +72,9 @@ final class AppRouter {
         selectedNavigationItem = .workspace
     }
 
-    func openSettings(section: SettingsSection? = nil) {
+    func openSettings(section: SettingsSection? = nil, highlightingToolsFeature feature: WorkspaceFeature? = nil) {
         pendingSettingsSection = section
+        pendingToolsFeatureHighlight = feature
         #if os(iOS)
         selectedNavigationItem = .settings
         #endif
@@ -79,6 +83,11 @@ final class AppRouter {
     func clearPendingSettingsSection(_ section: SettingsSection) {
         guard pendingSettingsSection == section else { return }
         pendingSettingsSection = nil
+    }
+
+    func clearPendingToolsFeatureHighlight(_ feature: WorkspaceFeature) {
+        guard pendingToolsFeatureHighlight == feature else { return }
+        pendingToolsFeatureHighlight = nil
     }
 
     func clearPendingEmailView() {
@@ -134,6 +143,7 @@ final class AppRouter {
         selectedNavigationItem = .home
         selectedChatID = nil
         pendingSettingsSection = nil
+        pendingToolsFeatureHighlight = nil
         unreadChatIDs.removeAll()
         pendingEmailViewID = nil
         syncDockBadge()

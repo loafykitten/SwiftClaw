@@ -125,6 +125,14 @@ extension SettingsKeys {
     static let assistantCustomPersonality = "settings.assistant.customPersonality"
 }
 
+// MARK: - Workspace feature keys
+
+extension SettingsKeys {
+    static let calendarEnabled = "settings.calendar.enabled"
+    static let remindersEnabled = "settings.reminders.enabled"
+    static let notesEnabled = "settings.notes.enabled"
+}
+
 // MARK: - Email keys
 
 extension SettingsKeys {
@@ -867,6 +875,55 @@ enum SettingsStorage {
             defaultValue: defaultEmailEnabled,
             userDefaults: userDefaults
         )
+    }
+
+    static let defaultCalendarEnabled = false
+    static let defaultRemindersEnabled = false
+    static let defaultNotesEnabled = false
+
+    static func isCalendarEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        toolEnabled(
+            forKey: SettingsKeys.calendarEnabled,
+            defaultValue: defaultCalendarEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
+    static func isRemindersEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        toolEnabled(
+            forKey: SettingsKeys.remindersEnabled,
+            defaultValue: defaultRemindersEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
+    static func isNotesEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        toolEnabled(
+            forKey: SettingsKeys.notesEnabled,
+            defaultValue: defaultNotesEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
+    static func isWorkspaceFeatureEnabled(
+        _ feature: WorkspaceFeature,
+        userDefaults: UserDefaults = .standard
+    ) -> Bool {
+        switch feature {
+        case .email: isEmailEnabled(userDefaults: userDefaults)
+        case .calendar: isCalendarEnabled(userDefaults: userDefaults)
+        case .reminders: isRemindersEnabled(userDefaults: userDefaults)
+        case .notes: isNotesEnabled(userDefaults: userDefaults)
+        }
+    }
+
+    static func defaultWorkspaceFeatureEnabled(_ feature: WorkspaceFeature) -> Bool {
+        switch feature {
+        case .email: defaultEmailEnabled
+        case .calendar: defaultCalendarEnabled
+        case .reminders: defaultRemindersEnabled
+        case .notes: defaultNotesEnabled
+        }
     }
 
     static func loadEmailPollInterval(userDefaults: UserDefaults = .standard) -> Int {

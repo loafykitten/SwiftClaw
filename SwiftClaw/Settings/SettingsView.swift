@@ -7,6 +7,9 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
     case providers = "Providers"
     case behaviors = "Model Behaviors"
     case email = "Email"
+    case calendar = "Calendar"
+    case reminders = "Reminders"
+    case notes = "Notes"
     case tools = "Tools"
 
     var id: String { rawValue }
@@ -19,7 +22,22 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .providers: "server.rack"
         case .behaviors: "slider.horizontal.3"
         case .email: "envelope"
+        case .calendar: "calendar"
+        case .reminders: "checklist"
+        case .notes: "note.text"
         case .tools: "wrench.and.screwdriver"
+        }
+    }
+
+    /// The toggleable feature backing this section; `nil` for always-visible
+    /// sections. Feature-backed sections are hidden until enabled in Tools.
+    var feature: WorkspaceFeature? {
+        switch self {
+        case .email: .email
+        case .calendar: .calendar
+        case .reminders: .reminders
+        case .notes: .notes
+        default: nil
         }
     }
 }
@@ -40,6 +58,12 @@ private extension SettingsSection {
             self = .behaviors
         case "email":
             self = .email
+        case "calendar":
+            self = .calendar
+        case "reminder", "reminders":
+            self = .reminders
+        case "note", "notes":
+            self = .notes
         case "tools":
             self = .tools
         default:
@@ -62,6 +86,26 @@ struct SettingsView: View {
     /// knows not to treat that assignment as a new user navigation.
     @State private var isNavigatingViaHistory = false
 
+    @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
+    @AppStorage(SettingsKeys.calendarEnabled) private var isCalendarEnabled = SettingsStorage.defaultCalendarEnabled
+    @AppStorage(SettingsKeys.remindersEnabled) private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
+    @AppStorage(SettingsKeys.notesEnabled) private var isNotesEnabled = SettingsStorage.defaultNotesEnabled
+
+    private var visibleSections: [SettingsSection] {
+        SettingsSection.allCases.filter { section in
+            section.feature.map(isFeatureEnabled) ?? true
+        }
+    }
+
+    private func isFeatureEnabled(_ feature: WorkspaceFeature) -> Bool {
+        switch feature {
+        case .email: isEmailEnabled
+        case .calendar: isCalendarEnabled
+        case .reminders: isRemindersEnabled
+        case .notes: isNotesEnabled
+        }
+    }
+
     var body: some View {
         Group {
             if horizontalSizeClass == .compact {
@@ -75,12 +119,28 @@ struct SettingsView: View {
         .onChange(of: router.pendingSettingsSection) { _, _ in
             applyRequestedSettingsSectionIfNeeded()
         }
+        .onChange(of: visibleSections) { _, newValue in
+            pruneHiddenSections(visible: newValue)
+        }
+    }
+
+    /// Drops sections that just became hidden from the selection, history
+    /// stacks, and compact path so disabling a feature can't strand the
+    /// window on (or navigate back to) a hidden section.
+    private func pruneHiddenSections(visible: [SettingsSection]) {
+        backStack.removeAll { !visible.contains($0) }
+        forwardStack.removeAll { !visible.contains($0) }
+        compactNavigationPath.removeAll { !visible.contains($0) }
+        if let selectedSection, !visible.contains(selectedSection) {
+            isNavigatingViaHistory = true
+            self.selectedSection = .appearance
+        }
     }
 
     private var regularBody: some View {
         NavigationSplitView {
             List(selection: $selectedSection) {
-                ForEach(SettingsSection.allCases) { section in
+                ForEach(visibleSections) { section in
                     Label(section.rawValue, systemImage: section.systemImage)
                         .listItemTint(.monochrome)
                         .tag(section)
@@ -125,7 +185,7 @@ struct SettingsView: View {
 
     private var compactBody: some View {
         NavigationStack(path: $compactNavigationPath) {
-            List(SettingsSection.allCases) { section in
+            List(visibleSections) { section in
                 NavigationLink(value: section) {
                     Label(section.rawValue, systemImage: section.systemImage)
                 }
@@ -158,7 +218,8 @@ struct SettingsView: View {
         hasAppliedLaunchSettingsSection = true
 
         guard let requestedSection = ProcessInfo.processInfo.argumentValue(after: "-SwiftClawInitialSettingsSection"),
-              let section = SettingsSection(launchArgument: requestedSection) else { return }
+              let section = SettingsSection(launchArgument: requestedSection),
+              visibleSections.contains(section) else { return }
 
         selectedSection = section
         if horizontalSizeClass == .compact {
@@ -171,6 +232,10 @@ struct SettingsView: View {
 
     private func applyRequestedSettingsSectionIfNeeded() {
         guard let requestedSection = router.pendingSettingsSection else { return }
+        guard visibleSections.contains(requestedSection) else {
+            router.clearPendingSettingsSection(requestedSection)
+            return
+        }
 
         selectedSection = requestedSection
         if horizontalSizeClass == .compact {
@@ -204,6 +269,12 @@ struct SettingsView: View {
             BehaviorSettingsView()
         case .email:
             EmailSettingsView()
+        case .calendar:
+            CalendarSettingsView()
+        case .reminders:
+            RemindersSettingsView()
+        case .notes:
+            NotesSettingsView()
         case .tools:
             ToolsView()
         }
