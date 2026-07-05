@@ -17,8 +17,11 @@ import SwiftData
 /// `EmailReviewTriageTrackingTests` / `EmailRepositoryTests.reviewSuppressionViaLastReviewedAt`
 /// for the new suppression behavior.
 @MainActor
+@Suite(.serialized)
 struct EmailReviewNotifyToolTests {
     @Test func executeCreatesOrderedReviewChatAndTriagesEmails() async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
 
@@ -96,6 +99,8 @@ struct EmailReviewNotifyToolTests {
     /// the label provider must flow through as a nil `accountLabel`, not a
     /// placeholder string.
     @Test func executeLeavesAccountLabelNilWhenProviderReturnsNil() async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
         let email = Email(
@@ -135,6 +140,8 @@ struct EmailReviewNotifyToolTests {
         // M1 regression: an agentic loop can call notify_user_about_emails
         // more than once in its 8-round budget. The second call must be a
         // no-op rather than creating a duplicate "Inbox review — …" chat.
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
         let email = Email(
@@ -172,6 +179,8 @@ struct EmailReviewNotifyToolTests {
     }
 
     @Test func executeCanAppendUpdatedReviewToExistingChat() async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
         let email = Email(
@@ -219,6 +228,8 @@ struct EmailReviewNotifyToolTests {
     }
 
     @Test func appendingUpdatedReviewCollapsesPriorCardIntoLabel() async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
         let email = Email(
@@ -274,6 +285,8 @@ struct EmailReviewNotifyToolTests {
     /// delivers the summary as its single closing reply — no duplicate
     /// "card posted above" follow-up.
     @Test func suppressInlineSummaryOmitsSummaryMessage() async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
         let email = Email(
@@ -342,6 +355,8 @@ struct EmailReviewNotifyToolTests {
     /// actual JSON array or a JSON-encoded array string and decode both into
     /// `[EmailReviewAction]`.
     @Test func executeAcceptsStringifiedArrayArgument() async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
         let email = Email(
@@ -382,6 +397,21 @@ struct EmailReviewNotifyToolTests {
     }
 
     // MARK: - Helpers
+
+    /// Points `AppRouter.shared` at an isolated store for the duration of a
+    /// test. Creating/appending a review chat marks it unread via the shared
+    /// router, and the app-hosted test process must not persist that into
+    /// the developer's real `.standard` defaults.
+    private static func isolateRouterUnreadStore() throws -> UserDefaultsFixture {
+        let fixture = try UserDefaultsFixture()
+        AppRouter.shared.resetForTesting(unreadStore: fixture.defaults)
+        return fixture
+    }
+
+    private static func restoreRouter(_ fixture: UserDefaultsFixture) {
+        AppRouter.shared.resetForTesting()
+        fixture.cleanup()
+    }
 
     static func inMemoryContainer() throws -> ModelContainer {
         try ModelContainer(

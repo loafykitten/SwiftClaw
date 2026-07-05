@@ -49,6 +49,11 @@ final class EmailReviewService {
         )
     }
 
+    /// Testable seam over the router's unread set, used by the
+    /// unread-review guard. Tests inject a fixed set instead of mutating the
+    /// `AppRouter` singleton.
+    var unreadChatIDsProvider: () -> Set<UUID> = { AppRouter.shared.unreadChatIDs }
+
     /// `userDefaults` is injected (defaulting to `.standard`) so tests can run
     /// against an isolated `UserDefaultsFixture` rather than mutating
     /// `UserDefaults.standard` for `clawModel`/persona keys — which would
@@ -97,6 +102,17 @@ final class EmailReviewService {
 
         let context = ModelContext(modelContainer)
         let repository = EmailRepository(modelContext: context)
+
+        // If the user hasn't opened the previous review chat yet, a scheduled
+        // pass would just pile a fresh review on top of one they haven't
+        // seen. Skip until they read it (or the chat is archived/deleted,
+        // which clears its unread mark). Manual "Review Now" and
+        // conversational refreshes (`force == true`) still run.
+        if !force, hasUnreadReviewChat(in: context) {
+            Self.logger.info("review: previous review chat is still unread; skipping scheduled pass")
+            lastStatusMessage = "Previous review is still unread"
+            return false
+        }
 
         // Scheduled passes (`force == false`) keep the cheap "nothing to do"
         // short-circuit the inlined pre-fetch used to give for free: don't burn
@@ -209,6 +225,19 @@ final class EmailReviewService {
         repository.markThreadsReviewed(fetchedThreads, at: Date())
         lastStatusMessage = "Review complete"
         return true
+    }
+
+    /// Whether any chat currently marked unread is a review chat. Archived
+    /// chats don't count — archiving clears the unread mark anyway, but a
+    /// stale persisted entry shouldn't wedge the scheduler.
+    private func hasUnreadReviewChat(in context: ModelContext) -> Bool {
+        let unreadIDs = Array(unreadChatIDsProvider())
+        guard !unreadIDs.isEmpty else { return false }
+        let descriptor = FetchDescriptor<Chat>(
+            predicate: #Predicate { unreadIDs.contains($0.id) }
+        )
+        guard let chats = try? context.fetch(descriptor) else { return false }
+        return chats.contains { !$0.isArchived && $0.isEmailReviewChat }
     }
 
     /// Accumulates the thread IDs the `fetch_inbox_emails` tool returns across

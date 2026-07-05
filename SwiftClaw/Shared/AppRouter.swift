@@ -20,8 +20,14 @@ final class AppRouter {
 
     @ObservationIgnored private var notificationObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var notificationBridgeUseCount = 0
+    /// Backing store for the persisted unread set. Swappable in DEBUG so
+    /// tests run against an isolated fixture instead of `.standard`.
+    @ObservationIgnored private var unreadStore: UserDefaults = .standard
 
-    private init() {}
+    private init() {
+        unreadChatIDs = SettingsStorage.loadUnreadChatIDs(userDefaults: unreadStore)
+        syncDockBadge()
+    }
 
     func startNotificationBridge() {
         notificationBridgeUseCount += 1
@@ -106,7 +112,7 @@ final class AppRouter {
         guard !isViewingChat(chatID) else { return }
         let inserted = unreadChatIDs.insert(chatID).inserted
         if inserted {
-            syncDockBadge()
+            unreadChatsDidChange()
         }
     }
 
@@ -124,12 +130,33 @@ final class AppRouter {
     @discardableResult
     func clearUnreadMessages(in chatID: UUID) -> Bool {
         guard unreadChatIDs.remove(chatID) != nil else { return false }
-        syncDockBadge()
+        unreadChatsDidChange()
         return true
     }
 
     private func isViewingChat(_ chatID: UUID) -> Bool {
         selectedNavigationItem == .chats && selectedChatID == chatID
+    }
+
+    /// Drops unread IDs whose chat no longer exists — e.g. after a store
+    /// reset/migration or any deletion that bypassed the router — so a stale
+    /// persisted entry can't badge the dock (or show a sidebar dot) forever.
+    /// Called at bootstrap once the model container is available.
+    func pruneUnreadChats(keeping existingChatIDs: Set<UUID>) {
+        let pruned = unreadChatIDs.intersection(existingChatIDs)
+        guard pruned != unreadChatIDs else { return }
+        unreadChatIDs = pruned
+        unreadChatsDidChange()
+    }
+
+    private func unreadChatsDidChange() {
+        // NOTE for tests: the unit-test bundle is injected into the real app
+        // (`TEST_HOST`), so `.standard` in a test process IS the developer's
+        // actual app defaults. Any test that marks chats unread (directly or
+        // via the notify tool) must first inject a fixture with
+        // `resetForTesting(unreadStore:)`.
+        SettingsStorage.saveUnreadChatIDs(unreadChatIDs, userDefaults: unreadStore)
+        syncDockBadge()
     }
 
     private func syncDockBadge() {
@@ -139,13 +166,20 @@ final class AppRouter {
     }
 
     #if DEBUG
-    func resetForTesting() {
+    /// Resets in-memory routing state and points unread persistence at
+    /// `unreadStore` (pass a `UserDefaultsFixture` so tests that mark chats
+    /// unread don't write into `.standard` — which the app host shares with
+    /// the real app). Deliberately does NOT persist the cleared set, so a
+    /// trailing `resetForTesting()` restores `.standard` without wiping the
+    /// developer's actual unread state.
+    func resetForTesting(unreadStore: UserDefaults = .standard) {
         selectedNavigationItem = .home
         selectedChatID = nil
         pendingSettingsSection = nil
         pendingToolsFeatureHighlight = nil
         unreadChatIDs.removeAll()
         pendingEmailViewID = nil
+        self.unreadStore = unreadStore
         syncDockBadge()
     }
     #endif

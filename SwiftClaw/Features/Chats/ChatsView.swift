@@ -932,7 +932,7 @@ private struct ChatHeaderView: View {
     @FocusState private var isTitleFieldFocused: Bool
 
     private var isEmailReviewChat: Bool {
-        chat.title.hasPrefix(EmailReviewNotifyTool.reviewChatTitlePrefix)
+        chat.isEmailReviewChat
     }
 
     var body: some View {
@@ -1071,7 +1071,7 @@ private struct CompactChatTranscriptChrome: ViewModifier {
     @State private var titleTask: Task<Void, Never>?
 
     private var isEmailReviewChat: Bool {
-        chat.title.hasPrefix(EmailReviewNotifyTool.reviewChatTitlePrefix)
+        chat.isEmailReviewChat
     }
 
     func body(content: Content) -> some View {

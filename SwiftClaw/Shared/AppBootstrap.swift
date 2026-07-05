@@ -25,6 +25,13 @@ final class AppBootstrap {
         EmailRepository(modelContext: ModelContext(modelContainer))
             .backfillFolderRolesIfNeeded(accounts: EmailAccountStore.shared.accounts)
 
+        // Reconcile the persisted unread-chat set with the store: a chat
+        // removed without passing through the router (store reset, migration
+        // recovery) must not badge the dock forever.
+        if let chats = try? ModelContext(modelContainer).fetch(FetchDescriptor<Chat>()) {
+            AppRouter.shared.pruneUnreadChats(keeping: Set(chats.map(\.id)))
+        }
+
         EmailWorkflowManager.shared.start(modelContainer: modelContainer)
         Self.logger.info("App bootstrap complete")
     }

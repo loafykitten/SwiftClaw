@@ -164,6 +164,9 @@ extension SettingsKeys {
     static let emailReviewSlideAction = "settings.email.reviewSlideAction"
     static let emailAutoNavigateToReviewChat = "settings.email.autoNavigateToReviewChat"
     static let emailMailboxSyncStates = "settings.email.mailboxSyncStates"
+    /// App state (not a user setting): chat IDs currently marked unread,
+    /// persisted so the sidebar dots + dock badge survive a relaunch.
+    static let unreadChatIDs = "state.chats.unreadChatIDs"
 }
 
 enum SettingsNotifications {
@@ -716,6 +719,22 @@ enum SettingsStorage {
     ) {
         guard let data = try? JSONEncoder().encode(value) else { return }
         userDefaults.set(data, forKey: key)
+    }
+
+    /// Chat IDs currently marked unread. Written by `AppRouter` on every
+    /// unread mutation and read back at launch so the indicators (and the
+    /// email review scheduler's unread-review guard) survive a relaunch.
+    static func loadUnreadChatIDs(userDefaults: UserDefaults = .standard) -> Set<UUID> {
+        Set(loadCodable(
+            [UUID].self,
+            forKey: SettingsKeys.unreadChatIDs,
+            default: [],
+            userDefaults: userDefaults
+        ))
+    }
+
+    static func saveUnreadChatIDs(_ ids: Set<UUID>, userDefaults: UserDefaults = .standard) {
+        saveCodable(Array(ids), forKey: SettingsKeys.unreadChatIDs, userDefaults: userDefaults)
     }
 
     static func loadAvailableModels(

@@ -52,13 +52,12 @@ enum ChatCompletionService {
         let canInvestigate = allowInvestigation
             && canUseTools
             && effectiveReasoningEffort?.isReasoningEnabled == true
-        // A chat *is* an inbox-review chat for its whole life — keyed off the
-        // title stamped at creation, not off whether the card still has live
-        // emails. Otherwise once the user cleans up the card (all items
-        // actioned) or the emails are gone, the chat would silently lose its
-        // email context + tools and the assistant would deny having any email
-        // access at all.
-        let isEmailReviewChat = chat.title.hasPrefix(EmailReviewNotifyTool.reviewChatTitlePrefix)
+        // Keyed off the review-chat identity, not off whether the card still
+        // has live emails. Otherwise once the user cleans up the card (all
+        // items actioned) or the emails are gone, the chat would silently
+        // lose its email context + tools and the assistant would deny having
+        // any email access at all.
+        let isEmailReviewChat = chat.isEmailReviewChat
         let reviewCardPayloads = chat.sortedMessages.compactMap(\.reviewCard)
         let emailReviewContext: String? = isEmailReviewChat
             ? EmailReviewFollowUpContextBuilder.makeContext(

@@ -139,6 +139,87 @@ struct EmailReviewServiceTests {
     }
 
     @Test
+    func scheduledPassSkipsWhenPreviousReviewChatIsUnread() async throws {
+        // If the user hasn't opened the last review chat yet, the scheduled
+        // loop must not pile a fresh review on top — skip (without stamping,
+        // and without an inference call) until the existing review is read.
+        // The manual/conversational path (`force: true`) still runs.
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+
+        let message = EmailRepositoryTests.simpleMessage(
+            uid: 1, messageID: "<unread-guard@example.com>", subject: "New mail"
+        )
+        repository.upsertMessages([message], mailbox: "INBOX", accountID: UUID())
+        repository.resolveThreads()
+
+        // An unread review chat left over from a prior pass.
+        let reviewChat = Chat(
+            title: "\(Chat.emailReviewTitlePrefix) earlier today",
+            modelSelection: "test-claw-model"
+        )
+        context.insert(reviewChat)
+        try context.save()
+        let reviewChatID = reviewChat.id
+
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
+        service.unreadChatIDsProvider = { [reviewChatID] }
+        let capture = InferenceCallCapture()
+        service.completeProvider = { _, _, _, _ in
+            await capture.record()
+            return ""
+        }
+
+        // Scheduled pass: the guard fires before inference or stamping.
+        let scheduledDidRun = await service.runOnce()
+        #expect(scheduledDidRun == false)
+        #expect(service.lastStatusMessage == "Previous review is still unread")
+        let scheduledCalls = await capture.count
+        #expect(scheduledCalls == 0)
+        // The new thread stays eligible for the pass that runs after the
+        // user reads the review.
+        #expect(repository.fetchNonArchivedThreadsForReview().count == 1)
+
+        // Forced pass ignores the guard.
+        let forcedDidRun = await service.runOnce(force: true)
+        #expect(forcedDidRun == true)
+        let forcedCalls = await capture.count
+        #expect(forcedCalls == 1)
+    }
+
+    @Test
+    func scheduledPassRunsWhenUnreadChatIsNotAReview() async throws {
+        // Only unread REVIEW chats gate the scheduler — an unread ordinary
+        // conversation must not suppress inbox reviews.
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+
+        let message = EmailRepositoryTests.simpleMessage(
+            uid: 1, messageID: "<unread-other@example.com>", subject: "New mail"
+        )
+        repository.upsertMessages([message], mailbox: "INBOX", accountID: UUID())
+        repository.resolveThreads()
+
+        let ordinaryChat = Chat(title: "Weekend plans", modelSelection: "test-claw-model")
+        context.insert(ordinaryChat)
+        try context.save()
+        let ordinaryChatID = ordinaryChat.id
+
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
+        service.unreadChatIDsProvider = { [ordinaryChatID] }
+        service.completeProvider = Self.fetchingProvider()
+
+        let didRun = await service.runOnce()
+        #expect(didRun == true)
+    }
+
+    @Test
     func reviewBatchCapsAtMaxThreadsPerPass() async throws {
         // C2 regression (now enforced by the `fetch_inbox_emails` default
         // limit): seed more unreviewed READ threads than the per-pass cap. The

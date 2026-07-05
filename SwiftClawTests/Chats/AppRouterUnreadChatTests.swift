@@ -5,10 +5,9 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct AppRouterUnreadChatTests {
-    @Test func newMessagesMarkThreadUnreadWhenItIsNotOpen() {
-        let router = AppRouter.shared
-        router.resetForTesting()
-        defer { router.resetForTesting() }
+    @Test func newMessagesMarkThreadUnreadWhenItIsNotOpen() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
 
         let chatID = UUID()
         router.selectedNavigationItem = .workspace
@@ -19,10 +18,9 @@ struct AppRouterUnreadChatTests {
         #expect(router.hasUnreadMessages(in: chatID))
     }
 
-    @Test func newMessagesDoNotMarkThreadUnreadWhenItIsOpen() {
-        let router = AppRouter.shared
-        router.resetForTesting()
-        defer { router.resetForTesting() }
+    @Test func newMessagesDoNotMarkThreadUnreadWhenItIsOpen() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
 
         let chatID = UUID()
         router.selectedNavigationItem = .chats
@@ -34,10 +32,9 @@ struct AppRouterUnreadChatTests {
         #expect(router.hasUnreadMessages(in: chatID) == false)
     }
 
-    @Test func openingUnreadThreadClearsOnlyThatThread() {
-        let router = AppRouter.shared
-        router.resetForTesting()
-        defer { router.resetForTesting() }
+    @Test func openingUnreadThreadClearsOnlyThatThread() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
 
         let firstChatID = UUID()
         let secondChatID = UUID()
@@ -53,10 +50,9 @@ struct AppRouterUnreadChatTests {
         #expect(router.hasUnreadChats)
     }
 
-    @Test func clearingUnreadThreadRemovesTopLevelUnreadState() {
-        let router = AppRouter.shared
-        router.resetForTesting()
-        defer { router.resetForTesting() }
+    @Test func clearingUnreadThreadRemovesTopLevelUnreadState() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
 
         let chatID = UUID()
         router.noteNewChatMessages(in: chatID)
@@ -68,6 +64,42 @@ struct AppRouterUnreadChatTests {
         #expect(router.hasUnreadChats == false)
     }
 
+    @Test func unreadStatePersistsToTheInjectedStore() throws {
+        // The unread set must survive an app relaunch: mutations write
+        // through to the store `AppRouter` was pointed at, in the same
+        // format `SettingsStorage.loadUnreadChatIDs` reads back at init.
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+
+        let chatID = UUID()
+        router.noteNewChatMessages(in: chatID)
+
+        #expect(SettingsStorage.loadUnreadChatIDs(userDefaults: fixture.defaults) == [chatID])
+
+        router.clearUnreadMessages(in: chatID)
+
+        #expect(SettingsStorage.loadUnreadChatIDs(userDefaults: fixture.defaults).isEmpty)
+    }
+
+    @Test func pruningDropsUnreadIDsForMissingChats() throws {
+        // Bootstrap reconciliation: an unread ID whose chat no longer exists
+        // (store reset, deletion that bypassed the router) must be dropped
+        // from memory AND the persisted set, or it badges the dock forever.
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+
+        let survivingID = UUID()
+        let staleID = UUID()
+        router.noteNewChatMessages(in: survivingID)
+        router.noteNewChatMessages(in: staleID)
+
+        router.pruneUnreadChats(keeping: [survivingID])
+
+        #expect(router.hasUnreadMessages(in: survivingID))
+        #expect(router.hasUnreadMessages(in: staleID) == false)
+        #expect(SettingsStorage.loadUnreadChatIDs(userDefaults: fixture.defaults) == [survivingID])
+    }
+
     @Test func openingSettingsStoresRequestedSection() {
         let router = AppRouter.shared
         router.resetForTesting()
@@ -76,5 +108,24 @@ struct AppRouterUnreadChatTests {
         router.openSettings(section: .persona)
 
         #expect(router.pendingSettingsSection == .persona)
+    }
+
+    // MARK: - Helpers
+
+    /// Resets the shared router against an isolated `UserDefaults` fixture.
+    /// Tests are app-hosted, so `.standard` is the developer's real defaults
+    /// — any test that marks chats unread must persist into a fixture.
+    private static func isolatedRouter() throws -> (AppRouter, UserDefaultsFixture) {
+        let fixture = try UserDefaultsFixture()
+        let router = AppRouter.shared
+        router.resetForTesting(unreadStore: fixture.defaults)
+        return (router, fixture)
+    }
+
+    /// Points the router back at `.standard` (without persisting the cleared
+    /// set) and tears down the fixture suite.
+    private static func restore(_ router: AppRouter, _ fixture: UserDefaultsFixture) {
+        router.resetForTesting()
+        fixture.cleanup()
     }
 }

@@ -115,6 +115,19 @@ enum ChatListOrdering {
 }
 
 extension Chat {
+    /// Title prefix stamped on chats created by the email review pass. This
+    /// is the app-wide discriminator for review chats — completion tool
+    /// wiring, title regeneration, sidebar rendering, and the review
+    /// scheduler's unread guard all key off it via `isEmailReviewChat`.
+    static let emailReviewTitlePrefix = "Inbox review —"
+
+    /// Whether this chat was created by the email review pass. A chat *is* a
+    /// review chat for its whole life — keyed off the title stamped at
+    /// creation, not off whether its card still has live emails.
+    var isEmailReviewChat: Bool {
+        title.hasPrefix(Self.emailReviewTitlePrefix)
+    }
+
     func matchesSearch(_ searchText: String) -> Bool {
         SearchQuery.matches(searchText, in: searchValues)
     }

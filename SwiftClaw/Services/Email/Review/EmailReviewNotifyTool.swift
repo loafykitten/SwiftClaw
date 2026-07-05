@@ -31,12 +31,6 @@ final class EmailReviewNotifyTool: Tool {
     var isEnabled: Bool { true }
     var requiresExplicitEnable: Bool { false }
 
-    /// Prefix shared by every review chat's title. Also the canonical signal
-    /// that a `Chat` *is* an inbox-review chat (used by the conversational
-    /// follow-up to keep offering email tools even after the card is cleared),
-    /// so it lives here next to the one place that stamps it.
-    static let reviewChatTitlePrefix = "Inbox review —"
-
     private let modelContainer: ModelContainer
     private let targetChatID: UUID?
     /// When true, post only the updated card and skip the inline summary
@@ -119,7 +113,7 @@ final class EmailReviewNotifyTool: Tool {
             return (action, uuid)
         }
 
-        let title = "\(Self.reviewChatTitlePrefix) \(EmailReviewDateFormatter.string(from: .now))"
+        let title = "\(Chat.emailReviewTitlePrefix) \(EmailReviewDateFormatter.string(from: .now))"
         let outcome: CreationOutcome = await MainActor.run {
             // Idempotency guard: a single review pass must produce at most one
             // review chat. `InferenceService.complete(...)` runs up to 8

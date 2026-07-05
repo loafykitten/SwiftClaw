@@ -48,7 +48,7 @@ enum ChatTitleService {
     ) async {
         guard !ProcessInfo.processInfo.isRunningInPreview else { return }
 
-        guard !chat.title.hasPrefix(EmailReviewNotifyTool.reviewChatTitlePrefix) else {
+        guard !chat.isEmailReviewChat else {
             logger.notice("Skipping title regeneration for email-review chat")
             return
         }
