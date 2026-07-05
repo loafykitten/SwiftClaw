@@ -3,12 +3,45 @@ import SwiftData
 import SwiftUI
 
 struct EmailView: View {
+    /// Message-window sizing for the windowed fetch: only the newest
+    /// `initialWindowLimit` messages are materialized per render, growing by
+    /// `windowStep` via the "Show Older Messages" control (or automatically
+    /// when a notification/review card targets mail older than the window).
+    static let initialWindowLimit = 1000
+    static let windowStep = 1000
+
+    @State private var windowLimit = EmailView.initialWindowLimit
+
+    var pendingEmailID: UUID?
+    var openCompactThread: ((EmailMailbox, UUID) -> Void)?
+    var onPendingEmailHandled: () -> Void = {}
+
+    var body: some View {
+        WindowedEmailContent(
+            windowLimit: windowLimit,
+            requestWindowLimit: { requested in
+                windowLimit = max(windowLimit, requested)
+            },
+            pendingEmailID: pendingEmailID,
+            openCompactThread: openCompactThread,
+            onPendingEmailHandled: onPendingEmailHandled
+        )
+    }
+}
+
+/// The Email tab's content, split out of `EmailView` so the `@Query` can be
+/// rebuilt when the window grows — a `@Query`'s descriptor is fixed at init,
+/// so dynamic windowing needs the descriptor built in `init` from a value
+/// the parent owns. Very large stores only materialize the newest
+/// `windowLimit` messages instead of the whole table; thread detail still
+/// shows complete threads via the `EmailThread.messages` relationship, and
+/// only the thread lists/sidebar (and search) are window-scoped.
+private struct WindowedEmailContent: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @Environment(\.openURL) private var openURL
 
-    @Query(sort: \Email.date, order: .reverse)
-    private var emails: [Email]
+    @Query private var emails: [Email]
 
     @State private var selectedThreadID: UUID?
     @State private var selectedMailbox: EmailMailbox = .inbox
@@ -19,9 +52,30 @@ struct EmailView: View {
     @State private var selectedAccountScope: EmailAccountScope = .all
     @AppStorage(SettingsKeys.emailReviewSlideAction)
     private var quickActionRaw = SettingsStorage.defaultEmailReviewSlideAction.rawValue
-    var pendingEmailID: UUID?
-    var openCompactThread: ((EmailMailbox, UUID) -> Void)?
-    var onPendingEmailHandled: () -> Void = {}
+    let windowLimit: Int
+    let requestWindowLimit: (Int) -> Void
+    let pendingEmailID: UUID?
+    let openCompactThread: ((EmailMailbox, UUID) -> Void)?
+    let onPendingEmailHandled: () -> Void
+
+    init(
+        windowLimit: Int,
+        requestWindowLimit: @escaping (Int) -> Void,
+        pendingEmailID: UUID?,
+        openCompactThread: ((EmailMailbox, UUID) -> Void)?,
+        onPendingEmailHandled: @escaping () -> Void
+    ) {
+        self.windowLimit = windowLimit
+        self.requestWindowLimit = requestWindowLimit
+        self.pendingEmailID = pendingEmailID
+        self.openCompactThread = openCompactThread
+        self.onPendingEmailHandled = onPendingEmailHandled
+        var descriptor = FetchDescriptor<Email>(
+            sortBy: [SortDescriptor(\Email.date, order: .reverse)]
+        )
+        descriptor.fetchLimit = windowLimit
+        _emails = Query(descriptor)
+    }
 
     private var isConfigured: Bool {
         EmailAccountStore.shared.hasConfiguredAccount
@@ -198,6 +252,8 @@ struct EmailView: View {
                 searchText: $emailSearchText,
                 isSearching: isSearchingEmails,
                 accountLabeler: accountLabeler,
+                canLoadOlder: canLoadOlder,
+                onLoadOlder: loadOlder,
                 onQuickAction: performQuickAction
             )
             .frame(width: 280)
@@ -258,6 +314,8 @@ struct EmailView: View {
                 searchText: $emailSearchText,
                 isSearching: isSearchingEmails,
                 accountLabeler: accountLabeler,
+                canLoadOlder: canLoadOlder,
+                onLoadOlder: loadOlder,
                 onQuickAction: performQuickAction
             )
             .navigationTitle(mailbox.title)
@@ -285,10 +343,31 @@ struct EmailView: View {
         SearchQuery.isActive(emailSearchText)
     }
 
+    /// True when the window is full — there are (almost certainly) older
+    /// messages beyond it. The one false positive (the store holds exactly
+    /// `windowLimit` messages) costs a single no-op "Show Older Messages"
+    /// tap, cheaper than a COUNT query on every render.
+    private var canLoadOlder: Bool {
+        emails.count >= windowLimit
+    }
+
+    private func loadOlder() {
+        requestWindowLimit(windowLimit + EmailView.windowStep)
+    }
+
     private func handlePendingEmailSelection(_ emailID: UUID? = nil) {
         guard let emailID = emailID ?? pendingEmailID,
-              let email = emails.first(where: { $0.id == emailID }),
+              let email = fetchEmail(emailID),
               let thread = email.thread else { return }
+
+        // The target may be older than the fetch window (a notification or
+        // review card for mail beyond the newest `windowLimit` messages).
+        // Grow the window to include it; the widened @Query re-fires this
+        // handler via the thread-ids onChange above.
+        if !emails.contains(where: { $0.id == emailID }) {
+            requestWindowLimit(windowLimitIncluding(email))
+            return
+        }
 
         if !selectedAccountScope.includes(email) {
             selectedAccountScope = .all
@@ -307,6 +386,26 @@ struct EmailView: View {
         }
 
         onPendingEmailHandled()
+    }
+
+    private func fetchEmail(_ id: UUID) -> Email? {
+        var descriptor = FetchDescriptor<Email>(
+            predicate: #Predicate { $0.id == id }
+        )
+        descriptor.fetchLimit = 1
+        return (try? modelContext.fetch(descriptor))?.first
+    }
+
+    /// Window size that includes `email`: the count of messages at least as
+    /// new as it (cheap COUNT, no rows materialized), plus slack for
+    /// same-instant arrivals, floored at one full step past the current
+    /// window.
+    private func windowLimitIncluding(_ email: Email) -> Int {
+        let date = email.date
+        let newerCount = (try? modelContext.fetchCount(
+            FetchDescriptor<Email>(predicate: #Predicate { $0.date >= date })
+        )) ?? 0
+        return max(windowLimit + EmailView.windowStep, newerCount + 50)
     }
 
     private func normalizeAccountScope() {
@@ -694,220 +793,6 @@ private struct EmailAccountPicker: View {
             }
         }
         .pickerStyle(.menu)
-    }
-}
-
-private struct EmailThreadListView: View {
-    let threads: [EmailThread]
-    let mailbox: EmailMailbox
-    let quickAction: ReviewActionToken
-    @Binding var selectedThreadID: UUID?
-    @Binding var searchText: String
-    let isSearching: Bool
-    let accountLabeler: EmailAccountLabeler
-    let onQuickAction: (ReviewActionToken, EmailThread, EmailMailbox) -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Threads")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-
-            if threads.isEmpty {
-                // Per-mailbox empty placeholder — keeps the sidebar live so
-                // the user can switch back to Inbox without leaving the tab.
-                EmptyMailboxView(isSearching: isSearching, mailboxImage: "tray")
-            } else {
-                #if os(macOS)
-                List(selection: $selectedThreadID) {
-                    ForEach(threads) { thread in
-                        quickActionRow(for: thread) {
-                            EmailThreadRow(
-                                thread: thread,
-                                isSelected: thread.id == selectedThreadID,
-                                accountLabel: accountLabeler.label(for: thread)
-                            )
-                        }
-                        .tag(thread.id)
-                        .sidebarRowState(isEmphasized: thread.unreadCount > 0)
-                        .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
-                    }
-                }
-                .listStyle(.sidebar)
-                #else
-                List {
-                    ForEach(threads) { thread in
-                        quickActionRow(for: thread) {
-                            Button {
-                                selectedThreadID = thread.id
-                            } label: {
-                                EmailThreadRow(
-                                    thread: thread,
-                                    isSelected: thread.id == selectedThreadID,
-                                    accountLabel: accountLabeler.label(for: thread)
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .sidebarRowState(isEmphasized: thread.unreadCount > 0)
-                        .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
-                    }
-                }
-                .listStyle(.sidebar)
-                #endif
-            }
-        }
-        .searchable(text: $searchText, prompt: Text("Search \(mailbox.title)"))
-    }
-
-    private func quickActionRow<Content: View>(
-        for thread: EmailThread,
-        @ViewBuilder content: @escaping () -> Content
-    ) -> some View {
-        EmailQuickActionSwipe(
-            action: quickAction,
-            onPerform: { action in onQuickAction(action, thread, mailbox) },
-            content: content
-        )
-        .accessibilityAction(named: Text(quickAction.displayName)) {
-            onQuickAction(quickAction, thread, mailbox)
-        }
-    }
-}
-
-/// Empty state for a thread list: the system search placeholder while a
-/// query is active, otherwise the app's per-mailbox placeholder.
-private struct EmptyMailboxView: View {
-    let isSearching: Bool
-    let mailboxImage: String
-
-    var body: some View {
-        if isSearching {
-            ContentUnavailableView.search
-        } else {
-            FeaturePlaceholderView(
-                systemImage: mailboxImage,
-                title: "Nothing here",
-                message: "This mailbox is empty."
-            )
-        }
-    }
-}
-
-private struct EmailThreadNavigationList: View {
-    let mailbox: EmailMailbox
-    let threads: [EmailThread]
-    let quickAction: ReviewActionToken
-    @Binding var searchText: String
-    let isSearching: Bool
-    let accountLabeler: EmailAccountLabeler
-    let onQuickAction: (ReviewActionToken, EmailThread, EmailMailbox) -> Void
-
-    var body: some View {
-        Group {
-            if threads.isEmpty {
-                EmptyMailboxView(isSearching: isSearching, mailboxImage: mailbox.systemImage)
-            } else {
-                List {
-                    ForEach(threads) { thread in
-                        EmailQuickActionSwipe(
-                            action: quickAction,
-                            onPerform: { action in onQuickAction(action, thread, mailbox) }
-                        ) {
-                            NavigationLink(value: thread.id) {
-                                EmailThreadRow(
-                                    thread: thread,
-                                    isSelected: false,
-                                    accountLabel: accountLabeler.label(for: thread)
-                                )
-                            }
-                        }
-                        .accessibilityAction(named: Text(quickAction.displayName)) {
-                            onQuickAction(quickAction, thread, mailbox)
-                        }
-                    }
-                }
-            }
-        }
-        .searchable(text: $searchText, prompt: Text("Search \(mailbox.title)"))
-    }
-}
-
-private struct EmailThreadRow: View {
-    let thread: EmailThread
-    let isSelected: Bool
-    let accountLabel: String?
-
-    @State private var showingNotes = false
-
-    private var hasNotes: Bool {
-        thread.messages.contains { !$0.notes.isEmpty }
-    }
-
-    var body: some View {
-        // Bind these once per row — `latestMessage` sorts the thread's
-        // messages and `unreadCount` scans them, and both were read several
-        // times across this body (header, subject, unread badge, background).
-        let latest = thread.latestMessage
-        let unread = thread.unreadCount
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if thread.isFlagged {
-                    Image(systemName: "flag.fill")
-                        .foregroundStyle(.yellow)
-                        .font(.caption)
-                }
-                Text(latest?.displayFromAddress ?? "Unknown")
-                    .font(.subheadline)
-                    .fontWeight(unread > 0 ? .semibold : .regular)
-                    .lineLimit(1)
-                Spacer()
-                Text(EmailDisplayDateFormatter.label(for: thread.lastDate))
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                if hasNotes {
-                    Button {
-                        showingNotes.toggle()
-                    } label: {
-                        Image(systemName: "note.text")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Show notes")
-                    .emailNotesPresentation(
-                        isPresented: $showingNotes,
-                        emails: thread.sortedMessages
-                    )
-                }
-            }
-            Text(latest?.subject ?? "(no subject)")
-                .font(.callout)
-                .fontWeight(unread > 0 ? .semibold : .regular)
-                .lineLimit(1)
-            if let accountLabel {
-                EmailAccountBadge(label: accountLabel)
-                    .lineLimit(1)
-            }
-            Text(latest?.snippet ?? "")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            if unread > 0 {
-                Text("\(unread) unread")
-                    .font(.caption2)
-                    .foregroundStyle(.tint)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

@@ -10,6 +10,12 @@ import SwiftMail
 /// each call so that settings changes take effect on the next connection
 /// without rebuilding the client.
 ///
+/// IMAP operations run over a persistent per-account connection from
+/// `IMAPSessionPool` (long-running fetches on the `.sync` channel, quick
+/// mutations on `.interactive`) instead of a fresh connect/login/disconnect
+/// per call. SMTP stays per-send: sends are infrequent user actions and SMTP
+/// servers aggressively close idle connections, so there's nothing to reuse.
+///
 /// Password overrides: the add-account sheet needs to test credentials before
 /// they've been written to the Keychain (otherwise the test-then-confirm flow
 /// is unreachable on a new account — `confirm()` is the only path that
@@ -99,67 +105,56 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     ) async throws -> MailboxFetchResult {
         guard isConfigured else { throw MailClientError.notConfigured }
 
-        let server = makeIMAPServer()
         do {
-            try await server.connect()
-            try await server.login(username: imapUsername, password: imapPassword ?? "")
-            let selection = try await server.selectMailbox(name)
+            return try await withIMAPSession(channel: .sync) { server in
+                let selection = try await server.selectMailbox(name)
 
-            // Only fetch the messages the server hasn't already delivered to
-            // us. `sinceUID` is the high-water mark from the last successful
-            // sync with this UIDVALIDITY; if it's missing or zero (or the
-            // UIDVALIDITY changed — the caller resets in that case) we fall
-            // back to a full mailbox scan. Clamp against `UInt32.max` so a
-            // pathological high-water doesn't overflow `+ 1`.
-            let lowerBound: UInt32 = (sinceUID ?? 0) < UInt32.max
-                ? (sinceUID ?? 0) + 1
-                : UInt32.max
-            let infos: [MessageInfo]
-            if lowerBound > 1 {
-                infos = try await server.fetchMessageInfos(
+                // Only fetch the messages the server hasn't already delivered to
+                // us. `sinceUID` is the high-water mark from the last successful
+                // sync with this UIDVALIDITY; if it's missing or zero (or the
+                // UIDVALIDITY changed — the caller resets in that case) we fall
+                // back to a full mailbox scan. Clamp against `UInt32.max` so a
+                // pathological high-water doesn't overflow `+ 1`.
+                let lowerBound: UInt32 = (sinceUID ?? 0) < UInt32.max
+                    ? (sinceUID ?? 0) + 1
+                    : UInt32.max
+                let infos = try await server.fetchMessageInfos(
                     uidRange: UID(lowerBound)...,
                     options: .default
                 )
-            } else {
-                infos = try await server.fetchMessageInfos(
-                    uidRange: UID(1)...,
-                    options: .default
+
+                let infosToFetch: [MessageInfo]
+                if let maxMessages, maxMessages > 0, infos.count > maxMessages {
+                    infosToFetch = Array(
+                        infos
+                            .filter { $0.uid != nil }
+                            .sorted { ($0.uid?.value ?? 0) < ($1.uid?.value ?? 0) }
+                            .suffix(maxMessages)
+                    )
+                } else {
+                    infosToFetch = infos
+                }
+
+                var fetched: [FetchedMessage] = []
+                fetched.reserveCapacity(infosToFetch.count)
+                var maxUID: UInt32 = (sinceUID ?? 0)
+                for info in infosToFetch {
+                    guard let uid = info.uid else { continue }
+                    let message = try await server.fetchMessage(from: info)
+                    fetched.append(Self.normalize(message, uid: uid, mailbox: name))
+                    if uid.value > maxUID { maxUID = uid.value }
+                }
+                return MailboxFetchResult(
+                    messages: fetched,
+                    uidValidity: selection.uidValidity.value,
+                    maxUID: fetched.isEmpty ? nil : maxUID
                 )
             }
-
-            let infosToFetch: [MessageInfo]
-            if let maxMessages, maxMessages > 0, infos.count > maxMessages {
-                infosToFetch = Array(
-                    infos
-                        .filter { $0.uid != nil }
-                        .sorted { ($0.uid?.value ?? 0) < ($1.uid?.value ?? 0) }
-                        .suffix(maxMessages)
-                )
-            } else {
-                infosToFetch = infos
-            }
-
-            var fetched: [FetchedMessage] = []
-            fetched.reserveCapacity(infosToFetch.count)
-            var maxUID: UInt32 = (sinceUID ?? 0)
-            for info in infosToFetch {
-                guard let uid = info.uid else { continue }
-                let message = try await server.fetchMessage(from: info)
-                fetched.append(Self.normalize(message, uid: uid, mailbox: name))
-                if uid.value > maxUID { maxUID = uid.value }
-            }
-            try? await server.disconnect()
-            return MailboxFetchResult(
-                messages: fetched,
-                uidValidity: selection.uidValidity.value,
-                maxUID: fetched.isEmpty ? nil : maxUID
-            )
         } catch {
             Self.logger.error("""
                 fetchMailbox(\(name, privacy: .public)) failed: \
                 \(String(describing: error))
                 """)
-            try? await server.disconnect()
             throw MailClientError.fetchFailed(error.localizedDescription)
         }
     }
@@ -167,43 +162,40 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     func fetchMailboxUIDSet(name: String) async throws -> MailboxUIDSet {
         guard isConfigured else { throw MailClientError.notConfigured }
 
-        let server = makeIMAPServer()
         do {
-            try await server.connect()
-            try await server.login(username: imapUsername, password: imapPassword ?? "")
-            let selection = try await server.selectMailbox(name)
-            // `.uidFlagsOnly` requests just FLAGS (UID is always implicit on
-            // a UID FETCH). One round-trip + ~50 bytes/message — practical
-            // to run on every sync even for thousands of messages.
-            let infos = try await server.fetchMessageInfos(
-                uidRange: UID(1)...,
-                options: .uidFlagsOnly
-            )
-            try? await server.disconnect()
+            return try await withIMAPSession(channel: .sync) { server in
+                let selection = try await server.selectMailbox(name)
+                // `.uidFlagsOnly` requests just FLAGS (UID is always implicit on
+                // a UID FETCH). One round-trip + ~50 bytes/message — practical
+                // to run on every sync even for thousands of messages.
+                let infos = try await server.fetchMessageInfos(
+                    uidRange: UID(1)...,
+                    options: .uidFlagsOnly
+                )
 
-            var uids: Set<UInt32> = []
-            uids.reserveCapacity(infos.count)
-            var flagsByUID: [UInt32: MailFlagSnapshot] = [:]
-            flagsByUID.reserveCapacity(infos.count)
-            for info in infos {
-                guard let uid = info.uid else { continue }
-                uids.insert(uid.value)
-                flagsByUID[uid.value] = MailFlagSnapshot(
-                    isRead: info.flags.contains(.seen),
-                    isFlagged: info.flags.contains(.flagged)
+                var uids: Set<UInt32> = []
+                uids.reserveCapacity(infos.count)
+                var flagsByUID: [UInt32: MailFlagSnapshot] = [:]
+                flagsByUID.reserveCapacity(infos.count)
+                for info in infos {
+                    guard let uid = info.uid else { continue }
+                    uids.insert(uid.value)
+                    flagsByUID[uid.value] = MailFlagSnapshot(
+                        isRead: info.flags.contains(.seen),
+                        isFlagged: info.flags.contains(.flagged)
+                    )
+                }
+                return MailboxUIDSet(
+                    uidValidity: selection.uidValidity.value,
+                    uids: uids,
+                    flagsByUID: flagsByUID
                 )
             }
-            return MailboxUIDSet(
-                uidValidity: selection.uidValidity.value,
-                uids: uids,
-                flagsByUID: flagsByUID
-            )
         } catch {
             Self.logger.error("""
                 fetchMailboxUIDSet(\(name, privacy: .public)) failed: \
                 \(String(describing: error))
                 """)
-            try? await server.disconnect()
             throw MailClientError.fetchFailed(error.localizedDescription)
         }
     }
@@ -211,12 +203,10 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     func listFolders() async throws -> [MailFolderDescriptor] {
         guard isConfigured else { throw MailClientError.notConfigured }
 
-        let server = makeIMAPServer()
         do {
-            try await server.connect()
-            try await server.login(username: imapUsername, password: imapPassword ?? "")
-            let folders = Self.classify(try await server.listMailboxes())
-            try? await server.disconnect()
+            let folders = try await withIMAPSession(channel: .sync) { server in
+                Self.classify(try await server.listMailboxes())
+            }
 
             // Adopt catalog names when the server advertised the role, but
             // keep already-resolved names when it didn't — servers without
@@ -240,7 +230,6 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             }
             return folders
         } catch {
-            try? await server.disconnect()
             Self.logger.error("""
                 listFolders failed: \(String(describing: error))
                 """)
@@ -251,31 +240,28 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     func setFlags(uid: Int, mailbox: String, updates: MailFlagUpdate) async throws {
         guard isConfigured else { throw MailClientError.notConfigured }
 
-        let server = makeIMAPServer()
         do {
-            try await server.connect()
-            try await server.login(username: imapUsername, password: imapPassword ?? "")
-            _ = try await server.selectMailbox(mailbox)
+            try await withIMAPSession(channel: .interactive) { server in
+                _ = try await server.selectMailbox(mailbox)
 
-            var flagsToAdd: [Flag] = []
-            var flagsToRemove: [Flag] = []
-            if let isRead = updates.isRead {
-                if isRead { flagsToAdd.append(.seen) } else { flagsToRemove.append(.seen) }
-            }
-            if let isFlagged = updates.isFlagged {
-                if isFlagged { flagsToAdd.append(.flagged) } else { flagsToRemove.append(.flagged) }
-            }
+                var flagsToAdd: [Flag] = []
+                var flagsToRemove: [Flag] = []
+                if let isRead = updates.isRead {
+                    if isRead { flagsToAdd.append(.seen) } else { flagsToRemove.append(.seen) }
+                }
+                if let isFlagged = updates.isFlagged {
+                    if isFlagged { flagsToAdd.append(.flagged) } else { flagsToRemove.append(.flagged) }
+                }
 
-            let uidSet = UIDSet([UID(UInt32(uid))])
-            if !flagsToAdd.isEmpty {
-                try await server.store(flags: flagsToAdd, on: uidSet, operation: .add)
+                let uidSet = UIDSet([UID(UInt32(uid))])
+                if !flagsToAdd.isEmpty {
+                    try await server.store(flags: flagsToAdd, on: uidSet, operation: .add)
+                }
+                if !flagsToRemove.isEmpty {
+                    try await server.store(flags: flagsToRemove, on: uidSet, operation: .remove)
+                }
             }
-            if !flagsToRemove.isEmpty {
-                try await server.store(flags: flagsToRemove, on: uidSet, operation: .remove)
-            }
-            try? await server.disconnect()
         } catch {
-            try? await server.disconnect()
             throw MailClientError.fetchFailed(error.localizedDescription)
         }
     }
@@ -283,15 +269,12 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     func move(uid: Int, from mailbox: String, to destination: String) async throws {
         guard isConfigured else { throw MailClientError.notConfigured }
 
-        let server = makeIMAPServer()
         do {
-            try await server.connect()
-            try await server.login(username: imapUsername, password: imapPassword ?? "")
-            _ = try await server.selectMailbox(mailbox)
-            try await server.move(message: UID(UInt32(uid)), to: destination)
-            try? await server.disconnect()
+            try await withIMAPSession(channel: .interactive) { server in
+                _ = try await server.selectMailbox(mailbox)
+                try await server.move(message: UID(UInt32(uid)), to: destination)
+            }
         } catch {
-            try? await server.disconnect()
             throw MailClientError.fetchFailed(error.localizedDescription)
         }
     }
@@ -328,18 +311,15 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     func deletePermanently(uid: Int, in mailbox: String) async throws {
         guard isConfigured else { throw MailClientError.notConfigured }
 
-        let server = makeIMAPServer()
         do {
-            try await server.connect()
-            try await server.login(username: imapUsername, password: imapPassword ?? "")
-            _ = try await server.selectMailbox(mailbox)
+            try await withIMAPSession(channel: .interactive) { server in
+                _ = try await server.selectMailbox(mailbox)
 
-            let uidSet = UIDSet([UID(UInt32(uid))])
-            try await server.store(flags: [.deleted], on: uidSet, operation: .add)
-            try await server.expunge()
-            try? await server.disconnect()
+                let uidSet = UIDSet([UID(UInt32(uid))])
+                try await server.store(flags: [.deleted], on: uidSet, operation: .add)
+                try await server.expunge()
+            }
         } catch {
-            try? await server.disconnect()
             throw MailClientError.fetchFailed(error.localizedDescription)
         }
     }
@@ -391,36 +371,34 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             return
         }
 
-        let server = makeIMAPServer()
         do {
-            try await server.connect()
-            try await server.login(username: imapUsername, password: imapPassword ?? "")
-            _ = try await server.listSpecialUseMailboxes()
+            let startingAccount = account
+            let accountToUpdate = try await withIMAPSession(channel: .interactive) { server in
+                _ = try await server.listSpecialUseMailboxes()
 
-            var updated = account
-            if updated.archiveMailbox == nil,
-               let archive = try? await server.archiveFolder.name {
-                updated.archiveMailbox = archive
+                var updated = startingAccount
+                if updated.archiveMailbox == nil,
+                   let archive = try? await server.archiveFolder.name {
+                    updated.archiveMailbox = archive
+                }
+                if updated.trashMailbox == nil,
+                   let trash = try? await server.trashFolder.name {
+                    updated.trashMailbox = trash
+                }
+                if updated.sentMailbox == nil,
+                   let sent = try? await server.sentFolder.name {
+                    updated.sentMailbox = sent
+                }
+                return updated
             }
-            if updated.trashMailbox == nil,
-               let trash = try? await server.trashFolder.name {
-                updated.trashMailbox = trash
-            }
-            if updated.sentMailbox == nil,
-               let sent = try? await server.sentFolder.name {
-                updated.sentMailbox = sent
-            }
-            try? await server.disconnect()
 
             // Persist the resolved names back to `EmailAccountStore` so
             // subsequent archive/delete/send calls hit the cache instead of
             // re-listing mailboxes every time.
-            let accountToUpdate = updated
             await MainActor.run {
                 EmailAccountStore.shared.update(accountToUpdate)
             }
         } catch {
-            try? await server.disconnect()
             Self.logger.error("""
                 resolveSpecialUseMailboxes failed: \(String(describing: error))
                 """)
@@ -438,19 +416,16 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             // SwiftClaw until the next sync happens to pick it up from Sent.
             return
         }
-        let server = makeIMAPServer()
         do {
-            try await server.connect()
-            try await server.login(username: imapUsername, password: imapPassword ?? "")
-            let swiftMailEmail = Self.makeSwiftMailEmail(from: email)
-            _ = try await server.append(
-                email: swiftMailEmail,
-                to: sentMailbox,
-                flags: [.seen]
-            )
-            try? await server.disconnect()
+            try await withIMAPSession(channel: .interactive) { server in
+                let swiftMailEmail = Self.makeSwiftMailEmail(from: email)
+                _ = try await server.append(
+                    email: swiftMailEmail,
+                    to: sentMailbox,
+                    flags: [.seen]
+                )
+            }
         } catch {
-            try? await server.disconnect()
             Self.logger.error("""
                 APPEND to Sent (\(sentMailbox, privacy: .public)) failed: \
                 \(String(describing: error))
@@ -588,8 +563,29 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
         return false
     }
 
+    /// Fresh, standalone server for `testConnection()` only — the Test
+    /// button must prove a cold connect + login works (and may be running
+    /// with password overrides that shouldn't touch the shared sessions).
+    /// Every other IMAP operation goes through `withIMAPSession`.
     private func makeIMAPServer() -> IMAPServer {
         IMAPServer(host: imapHost, port: imapPort)
+    }
+
+    /// Runs `body` on the account's persistent IMAP session for the given
+    /// channel (see `IMAPSessionPool`). The session connects + logs in
+    /// lazily and reuses the connection across calls; callers must not
+    /// invoke another session-backed client method from inside `body` (the
+    /// per-session serialization is non-reentrant and would deadlock).
+    private func withIMAPSession<T: Sendable>(
+        channel: IMAPSessionPool.Channel,
+        _ body: @Sendable (IMAPServer) async throws -> T
+    ) async throws -> T {
+        let session = await IMAPSessionPool.shared.session(for: account, channel: channel)
+        return try await session.perform(
+            username: imapUsername,
+            password: imapPassword ?? "",
+            body
+        )
     }
 
     private static func normalize(_ message: SwiftMail.Message, uid: UID, mailbox: String) -> FetchedMessage {

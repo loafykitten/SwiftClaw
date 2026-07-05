@@ -13,6 +13,26 @@ the Keychain per call. For the add-account sheet's Test button (before passwords
 are persisted), pass `imapPasswordOverride` / `smtpPasswordOverride` so
 `isConfigured` doesn't short-circuit on an empty Keychain.
 
+### IMAP connection reuse
+
+IMAP operations run over persistent per-account connections managed by
+`IMAPSession` / `IMAPSessionPool` (`Services/Email/MailClient/IMAPSession.swift`)
+instead of a connect → TLS → login → disconnect cycle per call. Two channels
+per account: `.sync` for long-running reads (mailbox fetches, UID-set scans,
+LIST) and `.interactive` for quick mutations (flags, move, expunge, Sent
+APPEND), so a flag toggle never queues behind a 500-message first sync.
+Sessions connect + log in lazily, serialize operations FIFO (IMAP SELECT is
+connection-global state), probe with NOOP when reused after sitting idle past
+a threshold, tear down on any operation error with **no body retry** (MOVE /
+APPEND / EXPUNGE aren't idempotent), and close themselves after 60s idle.
+The pool key includes host/port/username, so editing account settings rotates
+to a fresh session. `testConnection()` deliberately stays on a cold standalone
+connection (it must prove a fresh login works, possibly with password
+overrides). SMTP stays per-send: sends are infrequent and SMTP servers
+aggressively close idle connections. Never call one session-backed
+`SwiftMailClient` method from inside another's session closure — the
+serialization is non-reentrant and would deadlock.
+
 ## Folders
 
 Archive/delete/send resolve the account's real Archive/Trash/Sent folders via
@@ -97,6 +117,20 @@ when the real server message (matching Message-ID) arrives via `upsertMessages`,
 the synthetic row's `uid` is rewritten + the marker flag is cleared — no
 duplicate insert.
 
+## Windowed message fetch (large stores)
+
+`EmailView` no longer materializes the whole `Email` table: the `@Query` is
+windowed to the newest 1000 messages (`EmailView.initialWindowLimit`) and
+grows by `windowStep` via the "Show Older Messages" row at the bottom of the
+thread lists. The descriptor is built in `WindowedEmailContent.init` from a
+limit the outer `EmailView` owns, since a `@Query`'s descriptor is fixed at
+init. Thread detail is unaffected (it reads the full
+`EmailThread.messages` relationship); only the thread lists, sidebar
+visibility, and search are window-scoped — searching mail older than the
+window requires loading older messages first. A pending email selection
+(notification / review card) that targets mail outside the window expands it
+automatically via a COUNT of newer messages.
+
 ## Known limitation
 
 Folder rename on the server is treated as a new folder in the catalog. Rows
@@ -126,11 +160,14 @@ account):
   unwieldy prompt, the fix is a soft cap on the unread override (newest N
   unread), not removing the override.
 
+- IMAP connection reuse landed code-complete with unit coverage
+  (`IMAPSessionTests`), but hasn't had a live pass yet: watch a sync pass +
+  a flag toggle mid-sync against a real account, and confirm the idle-close
+  doesn't fight providers that drop connections early.
+
 Deferred:
 
 - iOS target and `BGTaskScheduler` mail sync.
-- `EmailView` fetch paging/windowing for very large stores.
-- Per-operation IMAP/SMTP connection reuse.
 - Memory-backed email review context (e.g. sender-level preferences), once
   there are concrete preferences worth remembering.
 - More review follow-up tools (reply/delete) if the review-chat workflow needs
