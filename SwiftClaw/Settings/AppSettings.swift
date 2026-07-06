@@ -174,6 +174,14 @@ enum SettingsNotifications {
     static let emailReviewScheduleDidChange = Notification.Name(
         "settings.email.reviewSchedule.didChange"
     )
+    /// Posted after each review pass finishes (whether or not it produced a
+    /// card) so views showing "Reviewed … ago / Next review …" re-read the
+    /// persisted schedule. Distinct from `emailReviewScheduleDidChange`,
+    /// which `EmailWorkflowManager` treats as "settings changed — restart
+    /// the review loop"; posting that after every pass would churn the loop.
+    static let emailReviewCompletionDidChange = Notification.Name(
+        "settings.email.reviewCompletion.didChange"
+    )
     static let changedKey = "changedKey"
 }
 

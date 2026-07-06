@@ -1,8 +1,8 @@
 import Foundation
 import Observation
 
-/// Publishes mail sync status to the UI ("Syncing mail…", "X new messages",
-/// last sync date). Mirrors `ToolActivityMonitor`.
+/// Publishes mail sync status to the UI ("Syncing mail…", "Synced 2 min.
+/// ago · 3 new"). Mirrors `ToolActivityMonitor`.
 @MainActor
 @Observable
 final class MailSyncMonitor {
@@ -33,13 +33,22 @@ final class MailSyncMonitor {
         lastNewMessageCount = newMessageCount
         lastRemovedMessageCount = removedCount
         isSyncing = false
-        var parts: [String] = []
-        if newMessageCount > 0 {
-            parts.append("\(newMessageCount) new message\(newMessageCount == 1 ? "" : "s")")
+        statusLabel = nil
+    }
+
+    /// "Synced 2 min. ago · 3 new · 1 removed" — the sync deltas ride on the
+    /// timestamp so they read as per-sync counts. A bare "3 new messages"
+    /// status used to linger in the footer where it competed with the unread
+    /// badge and read like a mailbox total.
+    var lastSyncSummary: String? {
+        guard let lastSyncDate else { return nil }
+        var parts = ["Synced \(lastSyncDate.formatted(.relative(presentation: .named)))"]
+        if lastNewMessageCount > 0 {
+            parts.append("\(lastNewMessageCount) new")
         }
-        if removedCount > 0 {
-            parts.append("\(removedCount) removed by server")
+        if lastRemovedMessageCount > 0 {
+            parts.append("\(lastRemovedMessageCount) removed")
         }
-        statusLabel = parts.isEmpty ? nil : parts.joined(separator: " · ")
+        return parts.joined(separator: " · ")
     }
 }

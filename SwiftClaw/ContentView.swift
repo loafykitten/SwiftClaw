@@ -55,6 +55,12 @@ struct ContentView: View {
     @State private var isUpdatingSelectionWithoutRecording = false
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
 
+    /// Unread mail drives the Workspace badge the way `router.unreadChatIDs`
+    /// drives the Chats badge. Same partition as the workspace widget's
+    /// "Unread" tile so the two counts always agree.
+    @Query(filter: #Predicate<Email> { !$0.isRead && !$0.isArchived && !$0.isDeleted })
+    private var unreadEmails: [Email]
+
     /// Lazily-constructed email review dispatcher + its backing mail client.
     /// Built once on first use rather than per-render (the previous
     /// `destination(for: .chats)` allocated a fresh `SwiftMailClient` + dispatcher
@@ -73,6 +79,10 @@ struct ContentView: View {
 
             return true
         }
+    }
+
+    private var unreadEmailCount: Int {
+        isEmailEnabled ? unreadEmails.count : 0
     }
 
     private var compactNavigationItems: [NavigationItem] {
@@ -148,7 +158,10 @@ struct ContentView: View {
                 ),
                 title: { $0.navigationLabel },
                 systemImage: { $0.systemImage },
-                showsBadge: { $0 == .chats && router.hasUnreadChats }
+                showsBadge: {
+                    ($0 == .chats && router.hasUnreadChats)
+                        || ($0 == .workspace && unreadEmailCount > 0)
+                }
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
@@ -160,44 +173,6 @@ struct ContentView: View {
             }
         }
     }
-
-    #if os(iOS)
-    private var compactAppShell: some View {
-        TabView(
-            selection: Binding(
-                get: { router.selectedNavigationItem ?? .home },
-                set: { router.selectedNavigationItem = $0 }
-            )
-        ) {
-            ForEach(compactNavigationItems) { item in
-                compactDestination(for: item)
-                    .tabItem {
-                        Label(item.navigationLabel, systemImage: item.systemImage)
-                    }
-                    .badge(item == .chats ? router.unreadChatIDs.count : 0)
-                    .tag(item)
-            }
-        }
-        .onAppear(perform: ensureVisibleNavigationSelection)
-    }
-
-    /// Home fills the screen with its own chrome; Chats, Workspace, and
-    /// Settings manage their own `NavigationStack` (they push
-    /// programmatically). Only the simple tabs get a stack here — nesting
-    /// stacks breaks safe-area and transition behavior.
-    @ViewBuilder
-    private func compactDestination(for item: NavigationItem) -> some View {
-        switch item {
-        case .home, .chats, .workspace, .settings:
-            destination(for: item)
-        default:
-            NavigationStack {
-                destination(for: item)
-                    .navigationTitle(item.rawValue)
-            }
-        }
-    }
-    #endif
 
     @MainActor @ViewBuilder
     private func destination(for item: NavigationItem) -> some View {
@@ -324,6 +299,55 @@ struct ContentView: View {
         router.stopNotificationBridge()
     }
 }
+
+#if os(iOS)
+// MARK: - Compact (iOS) shell
+extension ContentView {
+    private var compactAppShell: some View {
+        TabView(
+            selection: Binding(
+                get: { router.selectedNavigationItem ?? .home },
+                set: { router.selectedNavigationItem = $0 }
+            )
+        ) {
+            ForEach(compactNavigationItems) { item in
+                compactDestination(for: item)
+                    .tabItem {
+                        Label(item.navigationLabel, systemImage: item.systemImage)
+                    }
+                    .badge(tabBadgeCount(for: item))
+                    .tag(item)
+            }
+        }
+        .onAppear(perform: ensureVisibleNavigationSelection)
+    }
+
+    private func tabBadgeCount(for item: NavigationItem) -> Int {
+        switch item {
+        case .chats: router.unreadChatIDs.count
+        case .workspace: unreadEmailCount
+        default: 0
+        }
+    }
+
+    /// Home fills the screen with its own chrome; Chats, Workspace, and
+    /// Settings manage their own `NavigationStack` (they push
+    /// programmatically). Only the simple tabs get a stack here — nesting
+    /// stacks breaks safe-area and transition behavior.
+    @ViewBuilder
+    private func compactDestination(for item: NavigationItem) -> some View {
+        switch item {
+        case .home, .chats, .workspace, .settings:
+            destination(for: item)
+        default:
+            NavigationStack {
+                destination(for: item)
+                    .navigationTitle(item.rawValue)
+            }
+        }
+    }
+}
+#endif
 
 /// Tiny mutable holder so a `@State`-backed view can cache the dispatcher
 /// without rebuilding it on each render.

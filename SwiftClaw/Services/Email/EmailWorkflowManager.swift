@@ -283,6 +283,13 @@ final class EmailWorkflowManager {
             MailSyncMonitor.shared.setStatus(status, syncing: false)
             MailSyncMonitor.shared.isReviewing = false
         }
+        // Posted for skipped passes too: a due-but-gated pass (e.g. previous
+        // card still unread) should flip the workspace widget to "Review due"
+        // even though no timestamp was persisted.
+        NotificationCenter.default.post(
+            name: SettingsNotifications.emailReviewCompletionDidChange,
+            object: nil
+        )
         return status
     }
 

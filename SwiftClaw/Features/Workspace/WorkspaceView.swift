@@ -289,10 +289,11 @@ private struct WorkspaceWidgetPanel: View {
 private struct WorkspaceEmailStatsView: View {
     let summary: WorkspaceEmailSummary
 
-    /// Bumped when Settings posts `emailReviewScheduleDidChange` so the
-    /// footer re-reads the schedule from UserDefaults — otherwise the view
-    /// only re-renders when the `@Query` email data changes and an interval
-    /// edit in Settings wouldn't move "Next review".
+    /// Bumped when Settings posts `emailReviewScheduleDidChange` or a review
+    /// pass posts `emailReviewCompletionDidChange` so the footer re-reads the
+    /// schedule from UserDefaults — otherwise the view only re-renders when
+    /// the `@Query` email data changes, so an interval edit in Settings (or a
+    /// review that surfaced nothing) wouldn't move "Reviewed"/"Next review".
     @State private var scheduleVersion = 0
 
     var body: some View {
@@ -326,6 +327,13 @@ private struct WorkspaceEmailStatsView: View {
         .onReceive(
             NotificationCenter.default.publisher(
                 for: SettingsNotifications.emailReviewScheduleDidChange
+            )
+        ) { _ in
+            scheduleVersion += 1
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: SettingsNotifications.emailReviewCompletionDidChange
             )
         ) { _ in
             scheduleVersion += 1

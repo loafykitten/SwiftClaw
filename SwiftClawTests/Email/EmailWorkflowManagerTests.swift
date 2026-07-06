@@ -58,6 +58,8 @@ struct EmailWorkflowManagerTests {
             }
         )
 
+        let completionProbe = ReviewCompletionNotificationProbe()
+
         manager.start(modelContainer: try Self.inMemoryContainer())
 
         let run = try #require(await Self.waitForRun(in: probe))
@@ -69,6 +71,19 @@ struct EmailWorkflowManagerTests {
             SettingsStorage.loadEmailLastReviewCompletedAt(userDefaults: fixture.defaults)
         )
         #expect(completedAt > staleCompletedAt)
+        #expect(try await Self.waitForCompletionNotification(in: completionProbe))
+    }
+
+    private static func waitForCompletionNotification(
+        in probe: ReviewCompletionNotificationProbe,
+        timeout: TimeInterval = 1
+    ) async throws -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if probe.didReceive { return true }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        return probe.didReceive
     }
 
     private static func waitForRun(
@@ -106,6 +121,32 @@ struct EmailWorkflowManagerTests {
             Email.self, EmailThread.self, EmailNote.self, EmailAttachment.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
+    }
+}
+
+/// Records whether `emailReviewCompletionDidChange` fired. Main-actor because
+/// the workflow manager posts from the main actor.
+@MainActor
+private final class ReviewCompletionNotificationProbe {
+    private(set) var didReceive = false
+    private var observer: NSObjectProtocol?
+
+    init() {
+        observer = NotificationCenter.default.addObserver(
+            forName: SettingsNotifications.emailReviewCompletionDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.didReceive = true
+            }
+        }
+    }
+
+    deinit {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 }
 

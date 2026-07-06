@@ -233,9 +233,7 @@ private struct WindowedEmailContent: View {
                 syncStatusLabel: MailSyncMonitor.shared.statusLabel,
                 isSyncing: MailSyncMonitor.shared.isSyncing,
                 visibleMailboxes: visibleMailboxes,
-                lastSyncDate: MailSyncMonitor.shared.lastSyncDate,
-                lastNewMessageCount: MailSyncMonitor.shared.lastNewMessageCount,
-                lastRemovedMessageCount: MailSyncMonitor.shared.lastRemovedMessageCount
+                lastSyncSummary: MailSyncMonitor.shared.lastSyncSummary
             )
             .frame(width: 180)
 
@@ -301,8 +299,8 @@ private struct WindowedEmailContent: View {
             } footer: {
                 if let status = MailSyncMonitor.shared.statusLabel, !status.isEmpty {
                     Label(status, systemImage: MailSyncMonitor.shared.isSyncing ? "arrow.triangle.2.circlepath" : "info.circle")
-                } else if let lastSyncDate = MailSyncMonitor.shared.lastSyncDate {
-                    Label("Synced \(lastSyncDate.formatted(.relative(presentation: .named)))", systemImage: "checkmark.circle")
+                } else if let summary = MailSyncMonitor.shared.lastSyncSummary {
+                    Label(summary, systemImage: "checkmark.circle")
                 }
             }
         }
@@ -675,13 +673,11 @@ private struct EmailMailboxSidebar: View {
     let isSyncing: Bool
     let visibleMailboxes: [EmailMailbox]
 
-    /// Round-trips from the monitor so the footer can render "last synced
-    /// 3m ago" alongside (or instead of) the transient status label. Passed
-    /// in rather than read directly so SwiftUI's observation tracks the
-    /// `@Observable MailSyncMonitor.shared` correctly across re-renders.
-    let lastSyncDate: Date?
-    let lastNewMessageCount: Int
-    let lastRemovedMessageCount: Int
+    /// Round-trips from the monitor so the footer can render "Synced 3 min.
+    /// ago · 2 new" alongside (or instead of) the transient status label.
+    /// Passed in rather than read directly so SwiftUI's observation tracks
+    /// the `@Observable MailSyncMonitor.shared` correctly across re-renders.
+    let lastSyncSummary: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -762,13 +758,13 @@ private struct EmailMailboxSidebar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-        } else if let lastSyncDate {
+        } else if let lastSyncSummary {
             Divider()
             HStack(spacing: 6) {
                 Image(systemName: "checkmark.circle")
                     .foregroundStyle(.secondary)
                     .font(.caption2)
-                Text("Synced \(lastSyncDate.formatted(.relative(presentation: .named)))")
+                Text(lastSyncSummary)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
