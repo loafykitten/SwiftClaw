@@ -2,6 +2,25 @@ import Foundation
 import SwiftData
 import os
 
+/// Result of `EmailRepository.upsertMessages`: which rows were newly inserted,
+/// as Sendable summaries so `MailSyncWorker` can carry them off the MainActor
+/// (e.g. into new-mail notifications) without touching `Email` models.
+nonisolated struct EmailUpsertOutcome: Sendable {
+    let inserted: [InsertedEmailSummary]
+
+    var insertedCount: Int {
+        inserted.count
+    }
+}
+
+nonisolated struct InsertedEmailSummary: Sendable {
+    let id: UUID
+    let fromDisplay: String
+    let subject: String
+    let snippet: String
+    let isRead: Bool
+}
+
 /// Single mutation boundary for all Email/SwiftData writes. The first
 /// repository abstraction in the codebase — call out new repositories in
 /// `AGENTS.md` when introducing them.
@@ -24,16 +43,17 @@ final class EmailRepository {
     // MARK: - Upsert
 
     /// Inserts new messages and updates flags/bodies for already-known messages.
-    /// Returns the count of newly inserted messages.
+    /// Returns the newly inserted messages (count + notification-relevant
+    /// summaries); updates and reconciliations are not reported.
     @discardableResult
     func upsertMessages(
         _ fetched: [FetchedMessage],
         mailbox: String,
         accountID: UUID,
         role: MailFolderRole = .inbox
-    ) -> Int {
-        guard !fetched.isEmpty else { return 0 }
-        var inserted = 0
+    ) -> EmailUpsertOutcome {
+        guard !fetched.isEmpty else { return EmailUpsertOutcome(inserted: []) }
+        var inserted: [InsertedEmailSummary] = []
         let existing = fetchExistingMailboxIndex(uids: fetched.map(\.uid), mailbox: mailbox, accountID: accountID)
         // Fallback dedup for locally-synthetic Sent rows seeded by
         // `upsertSentMessage` before a real Sent-folder sync. Such rows use
@@ -107,13 +127,19 @@ final class EmailRepository {
                 reclaimed.role = role
                 reconcileFlags(existing: reclaimed, fetched: message)
             } else {
-                insert(
+                let email = insert(
                     message: message,
                     mailbox: mailbox,
                     accountID: accountID,
                     role: role
                 )
-                inserted += 1
+                inserted.append(InsertedEmailSummary(
+                    id: email.id,
+                    fromDisplay: email.displayFromAddress,
+                    subject: email.subject,
+                    snippet: email.snippet,
+                    isRead: email.isRead
+                ))
             }
         }
 
@@ -123,7 +149,7 @@ final class EmailRepository {
             Self.logger.error("upsertMessages save failed: \(String(describing: error))")
         }
 
-        return inserted
+        return EmailUpsertOutcome(inserted: inserted)
     }
 
     // MARK: - Flags / archive / delete
@@ -742,12 +768,13 @@ final class EmailRepository {
         )
     }
 
+    @discardableResult
     private func insert(
         message: FetchedMessage,
         mailbox: String,
         accountID: UUID,
         role: MailFolderRole
-    ) {
+    ) -> Email {
         let email = Email(
             messageID: message.messageID,
             subject: message.subject,
@@ -798,6 +825,7 @@ final class EmailRepository {
         }
 
         modelContext.insert(email)
+        return email
     }
 
     private func reconcileFlags(existing: Email, fetched: FetchedMessage) {

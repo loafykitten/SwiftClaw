@@ -285,7 +285,9 @@ struct EmailSettingsView: View {
             }
             .disabled(!isEmailEnabled)
 
-            // MARK: Notifications
+            // MARK: Review chat
+            // ("Review Chat", not "Notifications" — Settings › Notifications
+            // owns that name now.)
 
             Section {
                 Toggle("Auto-navigate to review chat", isOn: $autoNavigateToReviewChat)
@@ -293,7 +295,7 @@ struct EmailSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             } header: {
-                Text("Notifications")
+                Text("Review Chat")
             }
             .disabled(!isEmailEnabled)
         }

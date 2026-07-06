@@ -32,6 +32,10 @@ final class AppBootstrap {
             AppRouter.shared.pruneUnreadChats(keeping: Set(chats.map(\.id)))
         }
 
+        // Drains any notification quick actions that were tapped before the
+        // container existed (cold-launch action tap).
+        NotificationMailActionHandler.shared.configure(modelContainer: modelContainer)
+
         EmailWorkflowManager.shared.start(modelContainer: modelContainer)
         Self.logger.info("App bootstrap complete")
     }

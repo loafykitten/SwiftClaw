@@ -25,6 +25,11 @@ final class EmailReviewNotifyTool: Tool {
         ToolParameter(name: "message", type: .string, description: """
         A friendly summary message shown above the cards. One or two sentences.
         """, isRequired: true),
+        ToolParameter(name: "notification_summary", type: .string, description: """
+        A compact version of the summary for the system notification banner: \
+        one plain sentence, under 20 words, no greeting and no markdown. \
+        Lead with the single most important item.
+        """, isRequired: false),
     ]
 
     var isConfigured: Bool { true }
@@ -38,7 +43,11 @@ final class EmailReviewNotifyTool: Tool {
     /// assistant delivers the single closing summary instead of the review
     /// pass posting one *and* the assistant adding a redundant acknowledgment.
     private let suppressInlineSummary: Bool
-    private let onReviewCreated: (@MainActor (UUID) -> Void)?
+    /// Called with the new chat's ID and a notification-sized summary (the
+    /// model's `notification_summary` when provided, otherwise its full
+    /// `message`), so the caller can both route the user and post a
+    /// notification carrying the text.
+    private let onReviewCreated: (@MainActor (UUID, String) -> Void)?
     /// Surfaces the model's `message` back to the caller so a conversational
     /// refresh can relay it as the assistant's reply.
     private let onSummaryProduced: (@MainActor (String) -> Void)?
@@ -56,7 +65,7 @@ final class EmailReviewNotifyTool: Tool {
         modelContainer: ModelContainer,
         targetChatID: UUID? = nil,
         suppressInlineSummary: Bool = false,
-        onReviewCreated: (@MainActor (UUID) -> Void)? = nil,
+        onReviewCreated: (@MainActor (UUID, String) -> Void)? = nil,
         onSummaryProduced: (@MainActor (String) -> Void)? = nil,
         // Labels match the inbox convention: only shown when more than one
         // account is configured — a single-account card never needs one.
@@ -80,6 +89,14 @@ final class EmailReviewNotifyTool: Tool {
               let message = arguments["message"]?.stringValue else {
             throw ToolError.missingArgument("email_actions/message")
         }
+        // Prefer the model's dedicated one-liner for the notification banner;
+        // fall back to the full message (the notification service caps it).
+        let notificationSummary: String = {
+            let compact = arguments["notification_summary"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let compact, !compact.isEmpty else { return message }
+            return compact
+        }()
 
         // The model is supposed to send `email_actions` as a JSON array (the
         // schema now declares `"type": "array"`). Some OpenAI-compatible
@@ -178,7 +195,8 @@ final class EmailReviewNotifyTool: Tool {
                     in: context,
                     title: title,
                     payload: payload,
-                    message: message
+                    message: message,
+                    notificationSummary: notificationSummary
                 )
             }
 
@@ -233,7 +251,8 @@ final class EmailReviewNotifyTool: Tool {
         in context: ModelContext,
         title: String,
         payload: ReviewCardPayload,
-        message: String
+        message: String,
+        notificationSummary: String
     ) -> UUID? {
         let chat = Chat(
             title: title,
@@ -267,7 +286,7 @@ final class EmailReviewNotifyTool: Tool {
                 with \(payload.items.count, privacy: .public) items
                 """)
             AppRouter.shared.noteNewChatMessages(in: chat.id)
-            onReviewCreated?(chat.id)
+            onReviewCreated?(chat.id, notificationSummary)
             return chat.id
         } catch {
             Self.logger.error("""

@@ -61,43 +61,11 @@ struct EmailReplyComposerView: View {
     }
 
     private func prefill() {
-        toAddresses = email.fromAddress
-        ccAddresses = email.ccAddresses.joined(separator: ", ")
-        // Recognize the full reply/forward marker set (re/fw/fwd/aw/wg) so
-        // non-English or forwarded subjects don't get a doubled "Re: " prefix.
-        subject = ThreadResolver.replyMarker(email.subject).isEmpty
-            ? "Re: \(email.subject)"
-            : email.subject
-        bodyText = Self.replyQuote(for: email)
-    }
-
-    /// Builds the reply body: an empty compose area on top followed by a
-    /// standard `--- ... wrote:` separator + the replied message's full plain
-    /// text body line-prefixed with `> `. Quoting the full body (instead of
-    /// the previous 140-char `snippet`) makes the reply actually usable —
-    /// the recipient sees their original message with context preserved, and
-    /// the sender can edit down inline.
-    ///
-    /// Truncated to a sane upper bound so a 200KB plaintext newsletter
-    /// doesn't blow up the composer + the outgoing SMTP payload. 8000 chars
-    /// ≈ 4-5 screens; anything longer gets a `[…]` marker.
-    private static func replyQuote(for email: Email) -> String {
-        let original = email.plainTextBody
-        let trimmed = original.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cap = 8000
-        let quoted: String
-        if trimmed.count <= cap {
-            quoted = trimmed.split(separator: "\n", omittingEmptySubsequences: false)
-                .map { "> \($0)" }
-                .joined(separator: "\n")
-        } else {
-            let prefix = String(trimmed.prefix(cap))
-            let block = prefix.split(separator: "\n", omittingEmptySubsequences: false)
-                .map { "> \($0)" }
-                .joined(separator: "\n")
-            quoted = block + "\n> […]\n"
-        }
-        return "\n\n---\nOn \(email.date.formatted()), \(email.fromAddress) wrote:\n\(quoted)"
+        let draft = EmailReplySender.draft(replyingTo: email)
+        toAddresses = draft.toAddresses
+        ccAddresses = draft.ccAddresses
+        subject = draft.subject
+        bodyText = draft.bodyText
     }
 
     private func send() async {
@@ -109,33 +77,16 @@ struct EmailReplyComposerView: View {
         }
         do {
             guard !Task.isCancelled else { return }
-            // Generate one Message-ID up front so the delivered message,
-            // the Sent-folder APPEND, and the local seed row all share it.
-            // `upsertSentMessage` dedups on this value, so a shared ID also
-            // makes double-Send + a future Sent-folder sync idempotent.
-            let domain = accountFromAddressDomain()
-            let messageID = "<\(UUID().uuidString)@\(domain)>"
-            let outgoing = OutgoingEmail(
-                fromAddress: account.fromAddress,
-                toAddresses: parseAddresses(toAddresses),
-                ccAddresses: parseAddresses(ccAddresses),
+            // `EmailReplySender` owns Message-ID generation, threading
+            // headers, and the local Sent-row seed (`upsertSentMessage`).
+            try await EmailReplySender.send(
+                replyingTo: email,
+                account: account,
+                toAddresses: EmailReplySender.parseAddresses(toAddresses),
+                ccAddresses: EmailReplySender.parseAddresses(ccAddresses),
                 subject: subject,
                 bodyText: bodyText,
-                messageID: messageID,
-                inReplyTo: email.messageID,
-                references: email.allReferenceIDs
-            )
-            try await SwiftMailClient(account: account).send(outgoing)
-            guard !Task.isCancelled else { return }
-            // Locally record the just-sent reply so it shows up in the
-            // thread immediately. See `EmailRepository.upsertSentMessage`
-            // for the synthetic-row lifecycle (uid is client-side + the
-            // row gets promoted on the next Sent-folder sync).
-            let sentMailbox = account.resolvedSentMailbox ?? "Sent"
-            EmailRepository(modelContext: modelContext).upsertSentMessage(
-                outgoing,
-                account: account,
-                sentMailbox: sentMailbox
+                modelContext: modelContext
             )
             guard !Task.isCancelled else { return }
             dismiss()
@@ -158,13 +109,6 @@ struct EmailReplyComposerView: View {
         }
     }
 
-    private func parseAddresses(_ raw: String) -> [String] {
-        raw
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
     private enum EmailReplyComposerError: LocalizedError {
         case sendFailed(any Error)
 
@@ -178,20 +122,5 @@ struct EmailReplyComposerView: View {
                 "The reply remains in the composer. Check the account connection and try again. Details: \(error.localizedDescription)"
             }
         }
-    }
-
-    /// Extracts the domain for the Message-ID host (e.g. `me@example.com`
-    /// → `example.com`). Falls back to `localhost` if parsing fails.
-    private func accountFromAddressDomain() -> String {
-        let address = account.fromAddress
-        if let at = address.lastIndex(of: "@"),
-           at < address.endIndex {
-            let domain = address[address.index(after: at)...]
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !domain.isEmpty {
-                return String(domain)
-            }
-        }
-        return "localhost"
     }
 }

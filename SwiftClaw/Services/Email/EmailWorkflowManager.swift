@@ -28,6 +28,13 @@ final class EmailWorkflowManager {
     private var reviewTask: Task<Void, Never>?
     private var reviewService: EmailReviewService?
     private var lastReviewRun: Date?
+    /// True while a review pass is executing. The 60 s `lastReviewRun` guard
+    /// only throttles *scheduled* passes against each other; forced passes
+    /// (manual "Review Now", post-sync refresh, conversational refresh) could
+    /// still overlap an in-flight pass and produce two review chats — and two
+    /// notifications — back to back. This flag makes every path mutually
+    /// exclusive: a pass that arrives while another is running no-ops.
+    private var isReviewRunning = false
     private var reviewScheduleObserver: NSObjectProtocol?
     private var userDefaults: UserDefaults = .standard
     private var accountAddedRefreshHandler: (@MainActor () async -> Void)?
@@ -96,8 +103,8 @@ final class EmailWorkflowManager {
             modelContainer: modelContainer,
             userDefaults: userDefaults
         )
-        reviewService.onReviewCreated = { [weak self] chatID in
-            self?.handleReviewChatCreated(chatID)
+        reviewService.onReviewCreated = { [weak self] chatID, summary in
+            self?.handleReviewChatCreated(chatID: chatID, summary: summary)
         }
         self.reviewService = reviewService
 
@@ -245,7 +252,16 @@ final class EmailWorkflowManager {
         conversational: Bool = false
     ) async -> String? {
         guard let reviewService else { return nil }
-        // Guard against overlapping runs (scheduled path only). The manual
+        // One review pass at a time, on every path (scheduled, manual,
+        // conversational). Without this, e.g. "Sync Now" while the scheduled
+        // loop's pass is mid-inference runs a second full review.
+        guard !isReviewRunning else {
+            Self.logger.info("review skipped — another review pass is already running")
+            return "Review already in progress"
+        }
+        isReviewRunning = true
+        defer { isReviewRunning = false }
+        // Guard against back-to-back runs (scheduled path only). The manual
         // button forces past this so the user gets immediate feedback.
         if !force {
             guard lastReviewRun == nil
@@ -293,7 +309,7 @@ final class EmailWorkflowManager {
         return status
     }
 
-    private func handleReviewChatCreated(_ chatID: UUID) {
+    private func handleReviewChatCreated(chatID: UUID, summary: String) {
         let autoNavigate = UserDefaults.standard.object(
             forKey: SettingsKeys.emailAutoNavigateToReviewChat
         ) as? Bool ?? SettingsStorage.defaultEmailAutoNavigateToReviewChat
@@ -303,6 +319,10 @@ final class EmailWorkflowManager {
             object: nil,
             userInfo: ["chatID": chatID, "autoNavigate": autoNavigate]
         )
+        // After the in-app routing so willPresent suppression (the second
+        // safety layer against auto-navigate double-surfacing) sees the final
+        // navigation state.
+        AppNotificationService.shared.notifyReviewResult(chatID: chatID, summary: summary)
     }
 }
 

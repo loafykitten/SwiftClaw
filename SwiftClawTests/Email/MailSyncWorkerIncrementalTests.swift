@@ -201,6 +201,134 @@ struct MailSyncWorkerIncrementalTests {
         #expect(rolesByMailbox["Projects"] == .custom)
     }
 
+    // MARK: - New-mail notification collection
+
+    @Test func firstSyncEmitsNoNotificationsThenUnreadInboxArrivalsDo() async throws {
+        let container = try Self.inMemoryContainer()
+        let mock = MockMailClient()
+        let accountID = UUID()
+        let account = Self.completeAccount(id: accountID)
+        await mock.setUIDValidity(7)
+        await mock.setMailbox("INBOX", messages: Self.messages(uids: 1...3, accountID: accountID))
+
+        var states: [String: MailboxSyncState] = [:]
+        var newMailBatches: [[NewMailNotificationInfo]] = []
+        let worker = MailSyncWorker(
+            accountsProvider: { [account] },
+            modelContainer: container,
+            clientFactory: { _ in mock },
+            syncStateProvider: { id, mailbox in
+                await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] }
+            },
+            syncStateUpdater: { state, id, mailbox in
+                await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] = state }
+            },
+            newMailNotifier: { infos in
+                await MainActor.run { newMailBatches.append(infos) }
+            }
+        )
+
+        // First sync of the account pulls historical mail — nothing may emit.
+        _ = await worker.syncOnce()
+        #expect(newMailBatches.isEmpty)
+
+        // Established state: one unread + one read message arrive. Only the
+        // unread one notifies, carrying the account + message metadata.
+        await mock.addMessage(Self.message(uid: 4, accountID: accountID), to: "INBOX")
+        await mock.addMessage(Self.message(uid: 5, accountID: accountID, isRead: true), to: "INBOX")
+        _ = await worker.syncOnce()
+
+        #expect(newMailBatches.count == 1)
+        let info = try #require(newMailBatches.first?.first)
+        #expect(newMailBatches.first?.count == 1)
+        #expect(info.accountID == accountID)
+        #expect(info.subject == "Message 4")
+
+        // Quiet pass: no arrivals, no notifier call.
+        _ = await worker.syncOnce()
+        #expect(newMailBatches.count == 1)
+    }
+
+    @Test func uidValidityResetEmitsNoNotifications() async throws {
+        let container = try Self.inMemoryContainer()
+        let mock = MockMailClient()
+        let accountID = UUID()
+        let account = Self.completeAccount(id: accountID)
+        await mock.setUIDValidity(7)
+        await mock.setMailbox("INBOX", messages: Self.messages(uids: 100...101, accountID: accountID))
+
+        var states: [String: MailboxSyncState] = [:]
+        var newMailBatches: [[NewMailNotificationInfo]] = []
+        let worker = MailSyncWorker(
+            accountsProvider: { [account] },
+            modelContainer: container,
+            clientFactory: { _ in mock },
+            syncStateProvider: { id, mailbox in
+                await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] }
+            },
+            syncStateUpdater: { state, id, mailbox in
+                await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] = state }
+            },
+            newMailNotifier: { infos in
+                await MainActor.run { newMailBatches.append(infos) }
+            }
+        )
+
+        _ = await worker.syncOnce()
+
+        // Folder rebuild: everything is re-fetched as "new" rows, but none of
+        // it is new to the user — the reset pass must stay silent.
+        await mock.setUIDValidity(99)
+        await mock.setMailbox("INBOX", messages: Self.messages(uids: 1...3, accountID: accountID))
+        let inserted = await worker.syncOnce()
+
+        #expect(inserted == 3)
+        #expect(newMailBatches.isEmpty)
+    }
+
+    @Test func nonInboxRolesEmitNoNotifications() async throws {
+        let container = try Self.inMemoryContainer()
+        let mock = MockMailClient()
+        let accountID = UUID()
+        let account = Self.completeAccount(id: accountID)
+        await mock.setUIDValidity(7)
+        await mock.setFolders([
+            MailFolderDescriptor(name: "INBOX", role: .inbox, delimiter: nil),
+            MailFolderDescriptor(name: "Sent", role: .sent, delimiter: nil),
+            MailFolderDescriptor(name: "Spam", role: .junk, delimiter: nil),
+        ])
+        await mock.setMailbox("INBOX", messages: [])
+        await mock.setMailbox("Sent", messages: [])
+        await mock.setMailbox("Spam", messages: [])
+
+        var states: [String: MailboxSyncState] = [:]
+        var newMailBatches: [[NewMailNotificationInfo]] = []
+        let worker = MailSyncWorker(
+            accountsProvider: { [account] },
+            modelContainer: container,
+            clientFactory: { _ in mock },
+            syncStateProvider: { id, mailbox in
+                await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] }
+            },
+            syncStateUpdater: { state, id, mailbox in
+                await MainActor.run { states[MailboxSyncStateStore.key(for: id, mailbox: mailbox)] = state }
+            },
+            newMailNotifier: { infos in
+                await MainActor.run { newMailBatches.append(infos) }
+            }
+        )
+
+        // Establish per-mailbox sync state on empty folders, then land unread
+        // mail in Sent + Spam only: role filtering must keep it silent.
+        _ = await worker.syncOnce()
+        await mock.addMessage(Self.message(uid: 10, accountID: accountID), to: "Sent")
+        await mock.addMessage(Self.message(uid: 11, accountID: accountID), to: "Spam")
+        let inserted = await worker.syncOnce()
+
+        #expect(inserted == 2)
+        #expect(newMailBatches.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private static func completeAccount(id: UUID) -> StoredEmailAccount {
@@ -215,7 +343,7 @@ struct MailSyncWorkerIncrementalTests {
         )
     }
 
-    private static func message(uid: Int, accountID: UUID) -> FetchedMessage {
+    private static func message(uid: Int, accountID: UUID, isRead: Bool = false) -> FetchedMessage {
         FetchedMessage(
             uid: uid,
             messageID: "<m\(uid)@example.com>",
@@ -230,7 +358,7 @@ struct MailSyncWorkerIncrementalTests {
             bodyHTML: nil,
             inReplyTo: nil,
             references: [],
-            isRead: false,
+            isRead: isRead,
             isFlagged: false,
             mailbox: "INBOX",
             attachmentDescriptors: []

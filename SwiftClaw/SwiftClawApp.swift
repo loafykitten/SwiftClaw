@@ -19,6 +19,13 @@ struct SwiftClawApp: App {
 
     private let modelContainerResult = SwiftClawModelContainerFactory.make()
 
+    init() {
+        // Install the notification delegate before launch completes so a
+        // notification tap that cold-launches the app is routed, not dropped.
+        guard !ProcessInfo.processInfo.isRunningInPreview else { return }
+        AppNotificationService.shared.activate()
+    }
+
     #if os(macOS)
     var body: some Scene {
         appWindow
@@ -62,6 +69,7 @@ struct SwiftClawApp: App {
         let modelContainer: ModelContainer
 
         @State private var isShowingSplash = !ProcessInfo.processInfo.isRunningInPreview
+        @State private var isShowingNotificationsPrompt = false
 
         var body: some View {
             ContentView()
@@ -82,6 +90,24 @@ struct SwiftClawApp: App {
                     withAnimation(.easeInOut(duration: 0.5)) {
                         isShowingSplash = false
                     }
+                    // One-time offer to enable notifications, after the splash
+                    // so the alert doesn't pop over the intro. Declining keeps
+                    // the system status untouched — Settings can prompt later.
+                    guard !ProcessInfo.processInfo.isRunningInPreview else { return }
+                    try? await Task.sleep(for: .seconds(0.6))
+                    if await AppNotificationService.shared.shouldOfferLaunchPrompt() {
+                        isShowingNotificationsPrompt = true
+                    }
+                }
+                .alert("Enable notifications?", isPresented: $isShowingNotificationsPrompt) {
+                    Button("Enable") {
+                        Task { await AppNotificationService.shared.acceptLaunchPrompt() }
+                    }
+                    Button("Not Now", role: .cancel) {
+                        AppNotificationService.shared.declineLaunchPrompt()
+                    }
+                } message: {
+                    Text("SwiftClaw can notify you about new mail, inbox review results, and chat replies that arrive while you're away. If you decline, you can enable notifications anytime in Settings › Notifications.")
                 }
         }
     }

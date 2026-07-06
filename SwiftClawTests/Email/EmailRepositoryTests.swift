@@ -66,7 +66,7 @@ struct EmailRepositoryTests {
             )
         ]
 
-        let inserted = repository.upsertMessages(fetched, mailbox: "INBOX", accountID: Self.accountID)
+        let inserted = repository.upsertMessages(fetched, mailbox: "INBOX", accountID: Self.accountID).insertedCount
         repository.resolveThreads()
 
         #expect(inserted == 1)
@@ -81,8 +81,8 @@ struct EmailRepositoryTests {
 
         let fetched = Self.simpleMessage(uid: 1, messageID: "<dup@example.com>", subject: "Dup")
 
-        let firstInsert = repository.upsertMessages([fetched], mailbox: "INBOX", accountID: Self.accountID)
-        let secondInsert = repository.upsertMessages([fetched], mailbox: "INBOX", accountID: Self.accountID)
+        let firstInsert = repository.upsertMessages([fetched], mailbox: "INBOX", accountID: Self.accountID).insertedCount
+        let secondInsert = repository.upsertMessages([fetched], mailbox: "INBOX", accountID: Self.accountID).insertedCount
 
         #expect(firstInsert == 1)
         #expect(secondInsert == 0)
@@ -190,7 +190,7 @@ struct EmailRepositoryTests {
             attachmentDescriptors: []
         )
 
-        let inserted = repository.upsertMessages([updated], mailbox: "INBOX", accountID: Self.accountID)
+        let inserted = repository.upsertMessages([updated], mailbox: "INBOX", accountID: Self.accountID).insertedCount
 
         #expect(inserted == 0)
 
@@ -237,8 +237,8 @@ struct EmailRepositoryTests {
         let first = Self.simpleMessage(uid: 1, messageID: "<a@example.com>", subject: "From A")
         let second = Self.simpleMessage(uid: 1, messageID: "<b@example.com>", subject: "From B")
 
-        let firstInserted = repository.upsertMessages([first], mailbox: "INBOX", accountID: accountA)
-        let secondInserted = repository.upsertMessages([second], mailbox: "INBOX", accountID: accountB)
+        let firstInserted = repository.upsertMessages([first], mailbox: "INBOX", accountID: accountA).insertedCount
+        let secondInserted = repository.upsertMessages([second], mailbox: "INBOX", accountID: accountB).insertedCount
 
         #expect(firstInserted == 1)
         #expect(secondInserted == 1) // would be 0 if accountID weren't part of the dedup key
@@ -707,6 +707,46 @@ struct EmailRepositoryTests {
         let sameAgain = repository.upsertSentMessage(outgoing, account: account, sentMailbox: "Sent")
         #expect(sameAgain?.id == sent.id)
         #expect(try context.fetch(FetchDescriptor<Email>()).filter { $0.mailbox == "Sent" }.count == 1)
+    }
+
+    @Test func upsertOutcomeReportsExactlyTheInsertedRows() throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+
+        // Seed one message, then upsert it again alongside two new ones: the
+        // outcome must list only the two inserts, with summaries matching the
+        // persisted rows.
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 1, messageID: "<known@example.com>", subject: "Known")],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+
+        let outcome = repository.upsertMessages(
+            [
+                Self.simpleMessage(uid: 1, messageID: "<known@example.com>", subject: "Known"),
+                Self.simpleMessage(uid: 2, messageID: "<new2@example.com>", subject: "New two"),
+                Self.simpleMessage(uid: 3, messageID: "<new3@example.com>", subject: "New three", isRead: true),
+            ],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+
+        #expect(outcome.insertedCount == 2)
+        #expect(outcome.inserted.map(\.subject) == ["New two", "New three"])
+        #expect(outcome.inserted.map(\.isRead) == [false, true])
+
+        let rowsByID = Dictionary(
+            uniqueKeysWithValues: ((try? context.fetch(FetchDescriptor<Email>())) ?? []).map { ($0.id, $0) }
+        )
+        for summary in outcome.inserted {
+            let row = try #require(rowsByID[summary.id])
+            #expect(summary.subject == row.subject)
+            #expect(summary.fromDisplay == row.displayFromAddress)
+            #expect(summary.snippet == row.snippet)
+            #expect(summary.isRead == row.isRead)
+        }
     }
 
     // MARK: - Helpers

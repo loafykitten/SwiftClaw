@@ -130,11 +130,18 @@ final class AppRouter {
     @discardableResult
     func clearUnreadMessages(in chatID: UUID) -> Bool {
         guard unreadChatIDs.remove(chatID) != nil else { return false }
+        // The user just read this chat — clear any delivered chat-reply /
+        // review notification for it. Covers both chat and review-chat opens;
+        // a not-activated notification service is a no-op, keeping tests inert.
+        AppNotificationService.shared.removeDeliveredChatNotifications(chatID: chatID)
         unreadChatsDidChange()
         return true
     }
 
-    private func isViewingChat(_ chatID: UUID) -> Bool {
+    /// Internal (not private) so `ChatCompletionService` and the notification
+    /// delegate's willPresent suppression can ask the same question the unread
+    /// bookkeeping answers.
+    func isViewingChat(_ chatID: UUID) -> Bool {
         selectedNavigationItem == .chats && selectedChatID == chatID
     }
 

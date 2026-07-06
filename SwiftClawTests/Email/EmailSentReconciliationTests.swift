@@ -75,7 +75,7 @@ struct EmailSentReconciliationTests {
             [fetchedFromServer],
             mailbox: "Sent",
             accountID: account.id
-        )
+        ).insertedCount
         #expect(inserted == 0, "no duplicate insert — synthetic row promoted")
 
         // Confirm final state: exactly one row, with the real uid + marker

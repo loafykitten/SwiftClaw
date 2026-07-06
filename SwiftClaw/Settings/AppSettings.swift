@@ -133,6 +133,18 @@ extension SettingsKeys {
     static let notesEnabled = "settings.notes.enabled"
 }
 
+// MARK: - Notification keys
+
+extension SettingsKeys {
+    static let notificationsEnabled = "settings.notifications.enabled"
+    static let notificationsNewMailEnabled = "settings.notifications.newMail.enabled"
+    static let notificationsReviewResultsEnabled = "settings.notifications.reviewResults.enabled"
+    static let notificationsChatRepliesEnabled = "settings.notifications.chatReplies.enabled"
+    /// App state (not a user setting): whether the one-time launch offer to
+    /// enable notifications has been answered (either way), so it never nags.
+    static let notificationsLaunchPromptCompleted = "state.notifications.launchPromptCompleted"
+}
+
 // MARK: - Email keys
 
 extension SettingsKeys {
@@ -902,6 +914,56 @@ enum SettingsStorage {
             defaultValue: defaultEmailEnabled,
             userDefaults: userDefaults
         )
+    }
+
+    /// Notifications are opt-in: the master toggle defaults to off and the
+    /// authorization prompt fires only when the user first enables it.
+    static let defaultNotificationsEnabled = false
+    static let defaultNewMailNotificationsEnabled = true
+    static let defaultReviewResultNotificationsEnabled = true
+    static let defaultChatReplyNotificationsEnabled = true
+
+    static func areNotificationsEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        boolSetting(
+            forKey: SettingsKeys.notificationsEnabled,
+            defaultValue: defaultNotificationsEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
+    static func areNewMailNotificationsEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        areNotificationsEnabled(userDefaults: userDefaults)
+            && boolSetting(
+                forKey: SettingsKeys.notificationsNewMailEnabled,
+                defaultValue: defaultNewMailNotificationsEnabled,
+                userDefaults: userDefaults
+            )
+    }
+
+    static func areReviewResultNotificationsEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        areNotificationsEnabled(userDefaults: userDefaults)
+            && boolSetting(
+                forKey: SettingsKeys.notificationsReviewResultsEnabled,
+                defaultValue: defaultReviewResultNotificationsEnabled,
+                userDefaults: userDefaults
+            )
+    }
+
+    static func hasCompletedNotificationsLaunchPrompt(userDefaults: UserDefaults = .standard) -> Bool {
+        userDefaults.bool(forKey: SettingsKeys.notificationsLaunchPromptCompleted)
+    }
+
+    static func markNotificationsLaunchPromptCompleted(userDefaults: UserDefaults = .standard) {
+        userDefaults.set(true, forKey: SettingsKeys.notificationsLaunchPromptCompleted)
+    }
+
+    static func areChatReplyNotificationsEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        areNotificationsEnabled(userDefaults: userDefaults)
+            && boolSetting(
+                forKey: SettingsKeys.notificationsChatRepliesEnabled,
+                defaultValue: defaultChatReplyNotificationsEnabled,
+                userDefaults: userDefaults
+            )
     }
 
     static let defaultCalendarEnabled = false

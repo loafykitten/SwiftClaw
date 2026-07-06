@@ -101,6 +101,7 @@ enum ChatCompletionService {
             }
         }
 
+        var assistantResponse: String?
         do {
             let response = try await InferenceService.shared.complete(
                 messages: messages,
@@ -111,6 +112,7 @@ enum ChatCompletionService {
 
             guard !Task.isCancelled else { return }
             chat.appendMessage(role: .assistant, content: response)
+            assistantResponse = response
             chat.isGenerating = false
             chat.errorMessage = nil
         } catch is CancellationError {
@@ -125,6 +127,13 @@ enum ChatCompletionService {
             guard !Task.isCancelled else { return }
             try modelContext.save()
             AppRouter.shared.noteNewChatMessages(in: chat.id)
+            if let assistantResponse, !AppRouter.shared.isViewingChat(chat.id) {
+                AppNotificationService.shared.notifyChatReply(
+                    chatID: chat.id,
+                    chatTitle: chat.title,
+                    preview: assistantResponse
+                )
+            }
         } catch {
             chat.errorMessage = "Couldn't save the assistant response."
         }

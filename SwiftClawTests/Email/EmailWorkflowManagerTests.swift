@@ -74,6 +74,42 @@ struct EmailWorkflowManagerTests {
         #expect(try await Self.waitForCompletionNotification(in: completionProbe))
     }
 
+    @Test
+    func simultaneousReviewRequestsRunOnlyOnePass() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        let manager = EmailWorkflowManager.shared
+        manager.resetForTesting()
+        defer { manager.resetForTesting() }
+
+        fixture.defaults.set(true, forKey: SettingsKeys.emailEnabled)
+        // A fresh completion stamp keeps the scheduled loop from also firing
+        // during the test window — only the two manual calls compete.
+        SettingsStorage.saveEmailLastReviewCompletedAt(Date(), userDefaults: fixture.defaults)
+
+        let probe = ReviewRunProbe()
+        manager.configureForTesting(
+            userDefaults: fixture.defaults,
+            schedulerFactory: { _, _ in [NoOpMailSyncScheduler()] },
+            reviewRunHandler: { _, _, _, _ in
+                // Slow pass: the second request arrives while this one is
+                // mid-flight and must no-op instead of running a second pass.
+                await probe.record(force: true, targetChatID: nil, conversational: false)
+                try? await Task.sleep(for: .milliseconds(200))
+                return true
+            }
+        )
+        manager.start(modelContainer: try Self.inMemoryContainer())
+
+        async let first = manager.reviewNow()
+        async let second = manager.reviewNow()
+        let statuses = await [first, second]
+
+        #expect(await probe.runCount == 1)
+        #expect(statuses.contains("Review already in progress"))
+    }
+
     private static func waitForCompletionNotification(
         in probe: ReviewCompletionNotificationProbe,
         timeout: TimeInterval = 1
@@ -179,6 +215,10 @@ private actor ReviewRunProbe {
 
     func firstRun() -> RecordedRun? {
         runs.first
+    }
+
+    var runCount: Int {
+        runs.count
     }
 }
 

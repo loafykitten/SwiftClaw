@@ -24,8 +24,9 @@ final class EmailReviewService {
     private let userDefaults: UserDefaults
 
     /// Closure invoked when a review chat is created, so the caller can route
-    /// the user to it (or fire a dock badge / toast).
-    var onReviewCreated: ((UUID) -> Void)?
+    /// the user to it (or fire a dock badge / toast / notification). Carries
+    /// the model's summary `message` for the notification body.
+    var onReviewCreated: ((UUID, String) -> Void)?
 
     private(set) var lastStatusMessage: String?
 
@@ -187,9 +188,9 @@ final class EmailReviewService {
             modelContainer: modelContainer,
             targetChatID: targetChatID,
             suppressInlineSummary: suppressInlineSummary,
-            onReviewCreated: { [weak self] chatID in
+            onReviewCreated: { [weak self] chatID, summary in
                 if targetChatID == nil {
-                    self?.onReviewCreated?(chatID)
+                    self?.onReviewCreated?(chatID, summary)
                 }
             },
             onSummaryProduced: { [weak self] message in

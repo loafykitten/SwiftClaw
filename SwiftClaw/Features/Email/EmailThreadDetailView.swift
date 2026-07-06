@@ -114,6 +114,12 @@ struct EmailThreadDetailView: View {
     /// gets the `\Seen` flag — older messages in a thread stay unread until
     /// scrolled to.
     private func markAsReadIfNeeded(_ email: Email) {
+        // Reading the message in-app retires its delivered notification and
+        // the account's digest (its "N new messages" count is stale now).
+        AppNotificationService.shared.removeDeliveredEmailNotification(
+            emailID: email.id,
+            accountID: email.accountID
+        )
         guard !email.isRead else { return }
         runServerAction(.markRead, email: email) {
             await EmailServerAction.setFlags(

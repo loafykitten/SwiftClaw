@@ -402,6 +402,61 @@ struct EmailReviewNotifyToolTests {
     /// test. Creating/appending a review chat marks it unread via the shared
     /// router, and the app-hosted test process must not persist that into
     /// the developer's real `.standard` defaults.
+    @Test func notificationSummaryIsPreferredForTheReviewCallback() async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
+        let container = try Self.inMemoryContainer()
+
+        var receivedSummaries: [String] = []
+        let tool = EmailReviewNotifyTool(
+            modelContainer: container,
+            onReviewCreated: { _, summary in receivedSummaries.append(summary) },
+            accountLabelProvider: { _ in nil }
+        )
+
+        _ = try await tool.execute(arguments: [
+            "message": .string("A long, friendly multi-sentence walkthrough of the whole inbox."),
+            "notification_summary": .string("2 threads need your eyes."),
+            "email_actions": .array([
+                .object([
+                    "email_guid": .string(UUID().uuidString),
+                    "action": .string("review"),
+                    "summary": .string("Needs attention")
+                ])
+            ])
+        ])
+
+        #expect(receivedSummaries == ["2 threads need your eyes."])
+    }
+
+    @Test func reviewCallbackFallsBackToTheMessageWithoutANotificationSummary() async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
+        let container = try Self.inMemoryContainer()
+
+        var receivedSummaries: [String] = []
+        let tool = EmailReviewNotifyTool(
+            modelContainer: container,
+            onReviewCreated: { _, summary in receivedSummaries.append(summary) },
+            accountLabelProvider: { _ in nil }
+        )
+
+        // A whitespace-only compact summary counts as absent.
+        _ = try await tool.execute(arguments: [
+            "message": .string("Full summary message."),
+            "notification_summary": .string("   "),
+            "email_actions": .array([
+                .object([
+                    "email_guid": .string(UUID().uuidString),
+                    "action": .string("review"),
+                    "summary": .string("Needs attention")
+                ])
+            ])
+        ])
+
+        #expect(receivedSummaries == ["Full summary message."])
+    }
+
     private static func isolateRouterUnreadStore() throws -> UserDefaultsFixture {
         let fixture = try UserDefaultsFixture()
         AppRouter.shared.resetForTesting(unreadStore: fixture.defaults)

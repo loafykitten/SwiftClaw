@@ -49,6 +49,10 @@ actor MailSyncWorker {
     private let clientFactory: @Sendable (StoredEmailAccount) -> MailClient
     private let syncStateProvider: @Sendable (UUID, String) async -> MailboxSyncState?
     private let syncStateUpdater: @Sendable (MailboxSyncState, UUID, String) async -> Void
+    /// Receives the pass's new unread inbox messages (all accounts) so
+    /// `AppNotificationService` can post new-mail notifications. Injectable
+    /// like `syncStateProvider` so tests capture instead of posting.
+    private let newMailNotifier: @Sendable ([NewMailNotificationInfo]) async -> Void
 
     init(
         accountsProvider: @escaping @Sendable () async -> [StoredEmailAccount],
@@ -60,6 +64,9 @@ actor MailSyncWorker {
         syncStateUpdater: @escaping @Sendable (MailboxSyncState, UUID, String) async -> Void = { state, accountID, mailbox in
             await MainActor.run { MailboxSyncStateStore.shared.update(state, for: accountID, mailbox: mailbox) }
         },
+        newMailNotifier: @escaping @Sendable ([NewMailNotificationInfo]) async -> Void = { infos in
+            await MainActor.run { AppNotificationService.shared.notifyNewMail(infos) }
+        },
         reconcileEveryNPasses: Int = 4
     ) {
         self.accountsProvider = accountsProvider
@@ -67,6 +74,7 @@ actor MailSyncWorker {
         self.clientFactory = clientFactory
         self.syncStateProvider = syncStateProvider
         self.syncStateUpdater = syncStateUpdater
+        self.newMailNotifier = newMailNotifier
         self.reconcileEveryNPasses = reconcileEveryNPasses
     }
 
@@ -98,7 +106,7 @@ actor MailSyncWorker {
         // network round-trips can overlap — run them concurrently and sum the
         // results. (Mailboxes within an account still sync sequentially; they
         // share one connection.)
-        let totals = await withTaskGroup(of: (inserted: Int, removed: Int).self) { group in
+        let totals = await withTaskGroup(of: AccountSyncResult.self) { group in
             for account in accounts {
                 group.addTask {
                     await self.syncAccount(account, reconcile: shouldReconcile)
@@ -106,11 +114,13 @@ actor MailSyncWorker {
             }
             var totalInserted = 0
             var totalRemoved = 0
-            for await counts in group {
-                totalInserted += counts.inserted
-                totalRemoved += counts.removed
+            var newMail: [NewMailNotificationInfo] = []
+            for await result in group {
+                totalInserted += result.inserted
+                totalRemoved += result.removed
+                newMail.append(contentsOf: result.newMail)
             }
-            return (inserted: totalInserted, removed: totalRemoved)
+            return (inserted: totalInserted, removed: totalRemoved, newMail: newMail)
         }
 
         await MainActor.run {
@@ -118,6 +128,9 @@ actor MailSyncWorker {
                 newMessageCount: totals.inserted,
                 removedCount: totals.removed
             )
+        }
+        if !totals.newMail.isEmpty {
+            await newMailNotifier(totals.newMail)
         }
         return totals.inserted
     }
@@ -129,7 +142,7 @@ actor MailSyncWorker {
     private func syncAccount(
         _ account: StoredEmailAccount,
         reconcile shouldReconcile: Bool
-    ) async -> (inserted: Int, removed: Int) {
+    ) async -> AccountSyncResult {
         let client = clientFactory(account)
         // Sync INBOX + the account's resolved Sent/Trash folders. INBOX
         // is always attempted; Sent/Trash are skipped when the account can't
@@ -142,13 +155,16 @@ actor MailSyncWorker {
         )
         var inserted = 0
         var removed = 0
+        var newMail: [NewMailNotificationInfo] = []
         for mailbox in mailboxes {
             do {
-                inserted += try await syncMailbox(
+                let mailboxResult = try await syncMailbox(
                     mailbox,
                     account: account,
                     client: client
                 )
+                inserted += mailboxResult.insertedCount
+                newMail.append(contentsOf: mailboxResult.newMail)
                 // Reconcile per mailbox, throttled to every Nth pass.
                 if shouldReconcile || mailbox.role == .drafts {
                     removed += await reconcile(
@@ -171,7 +187,7 @@ actor MailSyncWorker {
                     """)
             }
         }
-        return (inserted, removed)
+        return AccountSyncResult(inserted: inserted, removed: removed, newMail: newMail)
     }
 
     /// Returns the account's folder catalog as the sync set, listing (or
@@ -237,12 +253,13 @@ actor MailSyncWorker {
     }
 
     /// Fetches + upserts one mailbox for one account. Returns the count of
-    /// newly-inserted messages for this mailbox only.
+    /// newly-inserted messages plus the subset eligible for a new-mail
+    /// notification (unread inbox arrivals on an established sync state).
     private func syncMailbox(
         _ syncedMailbox: SyncedMailbox,
         account: StoredEmailAccount,
         client: MailClient
-    ) async throws -> Int {
+    ) async throws -> MailboxSyncOutcome {
         let mailbox = syncedMailbox.name
         let stored = await syncStateProvider(account.id, mailbox)
         let didHavePriorState = (stored?.uidValidity ?? 0) > 0
@@ -301,12 +318,35 @@ actor MailSyncWorker {
         )
         await syncStateUpdater(newState, account.id, mailbox)
 
-        return await upsert(
+        // Anti-spam guard: the first sync of an account (no prior state) and
+        // a UIDVALIDITY rebuild both re-pull historical mail that is not
+        // "new" to the user — neither pass may emit notifications.
+        let suppressNotifications = !didHavePriorState || didReset
+
+        let outcome = await upsert(
             fetched: result.messages,
             mailbox: mailbox,
             accountID: account.id,
             role: syncedMailbox.role
         )
+
+        let newMail: [NewMailNotificationInfo]
+        if syncedMailbox.role == .inbox && !suppressNotifications {
+            newMail = outcome.inserted
+                .filter { !$0.isRead }
+                .map { summary in
+                    NewMailNotificationInfo(
+                        emailID: summary.id,
+                        accountID: account.id,
+                        fromDisplay: summary.fromDisplay,
+                        subject: summary.subject,
+                        snippet: summary.snippet
+                    )
+                }
+        } else {
+            newMail = []
+        }
+        return MailboxSyncOutcome(insertedCount: outcome.insertedCount, newMail: newMail)
     }
 
     private func upsert(
@@ -314,11 +354,11 @@ actor MailSyncWorker {
         mailbox: String,
         accountID: UUID,
         role: MailFolderRole
-    ) async -> Int {
+    ) async -> EmailUpsertOutcome {
         await MainActor.run {
             let context = ModelContext(modelContainer)
             let repository = EmailRepository(modelContext: context)
-            let inserted = repository.upsertMessages(
+            let outcome = repository.upsertMessages(
                 fetched,
                 mailbox: mailbox,
                 accountID: accountID,
@@ -331,10 +371,10 @@ actor MailSyncWorker {
             // user's open thread to silently jump back to the list top.
             // See `EmailRepository.resolveThreads()` for the
             // identity-stable incremental algorithm.
-            if inserted > 0 {
+            if outcome.insertedCount > 0 {
                 repository.resolveThreads()
             }
-            return inserted
+            return outcome
         }
     }
 
@@ -390,4 +430,15 @@ actor MailSyncWorker {
 private struct SyncedMailbox: Sendable {
     let name: String
     let role: MailFolderRole
+}
+
+private struct MailboxSyncOutcome: Sendable {
+    let insertedCount: Int
+    let newMail: [NewMailNotificationInfo]
+}
+
+private struct AccountSyncResult: Sendable {
+    let inserted: Int
+    let removed: Int
+    let newMail: [NewMailNotificationInfo]
 }
