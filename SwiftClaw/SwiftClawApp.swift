@@ -46,16 +46,43 @@ struct SwiftClawApp: App {
         WindowGroup {
             switch modelContainerResult {
             case .success(let modelContainer):
-                ContentView()
-                    .modelContainer(modelContainer)
+                RootView(modelContainer: modelContainer)
                     .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
-                    .task {
-                        await AppBootstrap.shared.run(modelContainer: modelContainer)
-                    }
             case .failure(let error):
                 AppStartupFailureView(error: error)
                     .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
             }
+        }
+    }
+
+    /// Hosts the main UI and runs bootstrap, with the launch splash overlaid on
+    /// top until the minimum display window elapses. Splash state lives here (not
+    /// in the `App` body) so a single `@State` can drive the fade-out.
+    private struct RootView: View {
+        let modelContainer: ModelContainer
+
+        @State private var isShowingSplash = !ProcessInfo.processInfo.isRunningInPreview
+
+        var body: some View {
+            ContentView()
+                .modelContainer(modelContainer)
+                .task {
+                    await AppBootstrap.shared.run(modelContainer: modelContainer)
+                }
+                .overlay {
+                    if isShowingSplash {
+                        SplashView()
+                            .transition(.opacity)
+                            .zIndex(1)
+                    }
+                }
+                .task {
+                    // Give the splash a beat to play its intro, then fade out.
+                    try? await Task.sleep(for: .seconds(1.8))
+                    withAnimation(.easeInOut(duration: 0.5)) {
+                        isShowingSplash = false
+                    }
+                }
         }
     }
 

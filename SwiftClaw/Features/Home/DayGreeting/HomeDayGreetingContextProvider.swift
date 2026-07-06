@@ -55,7 +55,6 @@ final class HomeDayGreetingContextProvider {
 }
 
 private enum HomeDayGreetingLocationError: LocalizedError {
-    case locationServicesDisabled
     case authorizationDenied
     case requestAlreadyRunning
     case locationUnavailable
@@ -63,8 +62,6 @@ private enum HomeDayGreetingLocationError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .locationServicesDisabled:
-            "Location services are disabled."
         case .authorizationDenied:
             "Location permission was denied."
         case .requestAlreadyRunning:
@@ -86,11 +83,10 @@ private final class HomeDayGreetingLocationProvider: NSObject, CLLocationManager
     private var timeoutTask: Task<Void, Never>?
 
     func currentLocation() async throws -> CLLocation {
-        guard CLLocationManager.locationServicesEnabled() else {
-            logger.error("Home greeting location services are disabled.")
-            throw HomeDayGreetingLocationError.locationServicesDisabled
-        }
-
+        // We deliberately don't gate on `CLLocationManager.locationServicesEnabled()`:
+        // it can block the main thread (Apple flags it as a UI-responsiveness hazard).
+        // When services are off the authorization status resolves to `.denied` /
+        // `.restricted` and `handleAuthorizationStatus` finishes the request for us.
         guard continuation == nil else {
             logger.error("Home greeting location request skipped because another request is already running.")
             throw HomeDayGreetingLocationError.requestAlreadyRunning
