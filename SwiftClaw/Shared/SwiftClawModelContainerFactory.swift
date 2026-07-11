@@ -6,7 +6,7 @@ import os
 /// Builds the app's single `ModelContainer` from two configurations:
 ///
 /// - the default (unnamed) local store carrying every pre-calendar model, and
-/// - a named "SwiftClawCalendar" store for `CalendarEvent`/`UserCalendar`.
+/// - a named "SwiftClawCalendar" store for calendar + reminders models.
 ///
 /// The calendar store is separate because it is destined for CloudKit sync
 /// (its models are CloudKit-shaped: no unique attributes, defaults/optionals
@@ -29,6 +29,8 @@ enum SwiftClawModelContainerFactory {
         let calendarSchema = Schema([
             CalendarEvent.self,
             UserCalendar.self,
+            Reminder.self,
+            ReminderList.self,
         ])
         let fullSchema = Schema([
             Item.self,
@@ -40,6 +42,8 @@ enum SwiftClawModelContainerFactory {
             EmailAttachment.self,
             CalendarEvent.self,
             UserCalendar.self,
+            Reminder.self,
+            ReminderList.self,
         ])
         let mainConfiguration = ModelConfiguration(schema: mainSchema, isStoredInMemoryOnly: false)
 
