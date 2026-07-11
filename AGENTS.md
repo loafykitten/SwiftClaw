@@ -18,6 +18,15 @@ this file to stay scannable:
 - **The Calendar subsystem** (events/recurrence model, import/export, alerts, review loop, overlay, dormant CloudKit sync)
   → `docs/features/CALENDAR.md`
 
+## Working-task memory (`docs/memory/`)
+
+`docs/memory/` holds state for currently in-flight tasks so work can continue
+across an agent switch or a cleared session. **At the start of a session,
+check it** — if a file there matches the task you were given, read it and
+resume from its "Next steps". For any multi-session task, create/update a
+`<task-slug>.md` file there as you go, and delete it when the task ships.
+Format and rules: `docs/memory/README.md`.
+
 ## Additional Agent-friendly CLI tools
 `rg` - text/regex search (`rg -n "pattern" --type swift`)
 `fd` - finding files (`fd -e swift Review`)
