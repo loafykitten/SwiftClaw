@@ -15,6 +15,8 @@ this file to stay scannable:
 - **Model-callable tools / inference loop** → `docs/conventions/TOOLS.md`
 - **The Email subsystem** (mail client, sync, reconciliation, threading, review loop, scope & status)
   → `docs/features/EMAIL.md`
+- **The Calendar subsystem** (events/recurrence model, import/export, alerts, review loop, overlay, dormant CloudKit sync)
+  → `docs/features/CALENDAR.md`
 
 ## Additional Agent-friendly CLI tools
 `rg` - text/regex search (`rg -n "pattern" --type swift`)

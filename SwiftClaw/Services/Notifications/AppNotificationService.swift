@@ -162,10 +162,10 @@ final class AppNotificationService: NSObject {
         post(content: content, identifier: NotificationIdentifier.chatReply(chatID))
     }
 
-    func notifyReviewResult(chatID: UUID, summary: String) {
+    func notifyReviewResult(chatID: UUID, summary: String, title: String = "Inbox review ready") {
         guard canPost(source: .reviewResults) else { return }
         let content = UNMutableNotificationContent()
-        content.title = "Inbox review ready"
+        content.title = title
         // The summary is usually the model's dedicated `notification_summary`
         // one-liner; the cap is the safety net for the full-message fallback.
         content.body = Self.truncatedBody(summary, limit: Self.reviewSummaryLimit)
@@ -227,6 +227,54 @@ final class AppNotificationService: NSObject {
         post(content: content, identifier: "mail.replyfailed.\(emailID.uuidString)")
     }
 
+    // MARK: - Calendar event alerts (scheduled)
+
+    /// Schedules one event-alert notification for a future fire date via
+    /// `UNCalendarNotificationTrigger` — the service's only scheduled (rather
+    /// than immediate) posting path. `CalendarAlertScheduler` owns which
+    /// alarms exist; this just books one.
+    func scheduleEventAlert(
+        identifier: String,
+        eventID: UUID,
+        title: String,
+        occurrenceStart: Date,
+        fireDate: Date,
+        isAllDay: Bool
+    ) {
+        guard canPost(source: .calendarAlerts), fireDate > .now else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title.isEmpty ? "Event" : title
+        content.body = isAllDay
+            ? occurrenceStart.formatted(.dateTime.weekday(.wide).month().day())
+            : occurrenceStart.formatted(date: .abbreviated, time: .shortened)
+        content.sound = .default
+        content.threadIdentifier = "calendar"
+        content.userInfo = NotificationRoutingPayload(kind: .calendarEvent, targetID: eventID).userInfo
+
+        let components = Calendar.current.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: fireDate
+        )
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+        post(content: content, identifier: identifier, trigger: trigger)
+    }
+
+    /// Pending (not yet fired) event-alert identifiers, for the scheduler's
+    /// reconciliation diff.
+    func pendingCalendarAlertIdentifiers() async -> Set<String> {
+        guard let center else { return [] }
+        let pending = await center.pendingNotificationRequests()
+        return Set(
+            pending.map(\.identifier)
+                .filter { $0.hasPrefix(NotificationIdentifier.calendarAlertPrefix) }
+        )
+    }
+
+    func removePendingCalendarAlerts(identifiers: [String]) {
+        guard !identifiers.isEmpty else { return }
+        center?.removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
     // MARK: - Cleanup when the user reads the thing in-app
 
     func removeDeliveredChatNotifications(chatID: UUID) {
@@ -254,6 +302,7 @@ final class AppNotificationService: NSObject {
         case newMail
         case reviewResults
         case chatReplies
+        case calendarAlerts
     }
 
     private var isAuthorized: Bool {
@@ -274,6 +323,8 @@ final class AppNotificationService: NSObject {
             return SettingsStorage.areReviewResultNotificationsEnabled(userDefaults: userDefaults)
         case .chatReplies:
             return SettingsStorage.areChatReplyNotificationsEnabled(userDefaults: userDefaults)
+        case .calendarAlerts:
+            return SettingsStorage.areCalendarAlertNotificationsEnabled(userDefaults: userDefaults)
         }
     }
 
@@ -282,9 +333,13 @@ final class AppNotificationService: NSObject {
         return String(text.prefix(limit - 1)) + "…"
     }
 
-    private func post(content: UNMutableNotificationContent, identifier: String) {
+    private func post(
+        content: UNMutableNotificationContent,
+        identifier: String,
+        trigger: UNNotificationTrigger? = nil
+    ) {
         guard let center else { return }
-        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
         let taskID = UUID()
         postTasks[taskID] = Task { [weak self] in
             defer { self?.postTasks[taskID] = nil }
@@ -383,6 +438,9 @@ extension AppNotificationService: UNUserNotificationCenterDelegate {
             return router.isViewingChat(payload.targetID)
         case .newMail, .mailDigest:
             return router.selectedNavigationItem == .workspace
+        case .calendarEvent:
+            // Event alerts are time-critical; show them even in Workspace.
+            return false
         }
     }
 
@@ -421,6 +479,8 @@ extension AppNotificationService: UNUserNotificationCenterDelegate {
             AppRouter.shared.showEmail(payload.targetID)
         case .mailDigest:
             AppRouter.shared.selectedNavigationItem = .workspace
+        case .calendarEvent:
+            AppRouter.shared.showCalendar()
         }
     }
 }

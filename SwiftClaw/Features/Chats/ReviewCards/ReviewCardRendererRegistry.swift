@@ -32,7 +32,14 @@ struct ReviewCardRendererRegistry {
                 onItemView: onItemView,
                 onRefreshAnalysis: onRefreshAnalysis
             )
-        case .calendar, .reminders:
+        case .calendar:
+            CalendarReviewCardRenderer(
+                payload: payload,
+                onItemActioned: onItemActioned,
+                onItemView: onItemView,
+                onRefreshAnalysis: onRefreshAnalysis
+            )
+        case .reminders:
             Text("Reviewer for \(payload.reviewType.rawValue) not yet implemented.")
                 .font(.callout)
                 .foregroundStyle(.secondary)

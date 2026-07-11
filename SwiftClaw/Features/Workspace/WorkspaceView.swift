@@ -38,6 +38,8 @@ private enum WorkspaceItem: String, CaseIterable, Hashable, Identifiable {
 struct WorkspaceView: View {
     var pendingEmailID: UUID?
     var onEmailPresented: () -> Void = {}
+    var pendingCalendarFocus = false
+    var onCalendarPresented: () -> Void = {}
 
     @Query(sort: \Email.date, order: .reverse)
     private var emails: [Email]
@@ -114,6 +116,9 @@ struct WorkspaceView: View {
         .onChange(of: pendingEmailID) { _, _ in
             prepareSelection()
         }
+        .onChange(of: pendingCalendarFocus) { _, _ in
+            prepareSelection()
+        }
     }
 
     @ViewBuilder
@@ -151,6 +156,9 @@ struct WorkspaceView: View {
 
         if pendingEmailID != nil, isEmailEnabled {
             navigate(to: .email)
+        } else if pendingCalendarFocus, isCalendarEnabled {
+            navigate(to: .calendar)
+            onCalendarPresented()
         }
     }
 
@@ -265,9 +273,12 @@ private struct WorkspaceWidgetPanel: View {
                 }
             }
 
-            if item == .email {
+            switch item {
+            case .email:
                 WorkspaceEmailStatsView(summary: emailContent.summary)
-            } else {
+            case .calendar:
+                WorkspaceCalendarStatsView()
+            default:
                 Text("Coming soon")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -283,6 +294,57 @@ private struct WorkspaceWidgetPanel: View {
     private var accountCountLabel: String {
         let count = emailContent.completeAccountCount
         return "\(count) \(count == 1 ? "account" : "accounts")"
+    }
+}
+
+/// Calendar widget body: today / tomorrow / week counts plus a "next event"
+/// footer. `@Query` keeps it live as events change; the summary itself is the
+/// testable `WorkspaceCalendarSummary`.
+private struct WorkspaceCalendarStatsView: View {
+    @Query private var events: [CalendarEvent]
+
+    var body: some View {
+        let calendar = Calendar.current
+        let now = Date.now
+        let start = calendar.startOfDay(for: now)
+        let window = DateInterval(start: start, duration: 7 * 24 * 3600)
+        let summary = WorkspaceCalendarSummary(
+            occurrences: CalendarOccurrenceBuilder.occurrences(from: events, in: window),
+            now: now,
+            calendar: calendar
+        )
+
+        VStack(alignment: .leading, spacing: 12) {
+            // 2×2 like the Email card so the two panels line up in the grid;
+            // the fourth cell stays empty until there's a fourth stat.
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                GridRow(alignment: .firstTextBaseline) {
+                    WorkspaceEmailStatTile(count: summary.todayRemainingCount, label: "Today")
+                    WorkspaceEmailStatTile(count: summary.tomorrowCount, label: "Tomorrow")
+                }
+                GridRow(alignment: .firstTextBaseline) {
+                    WorkspaceEmailStatTile(count: summary.weekCount, label: "This Week")
+                    Color.clear
+                        .gridCellUnsizedAxes([.horizontal, .vertical])
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                if let next = summary.nextEvent {
+                    Text(next.title)
+                        .lineLimit(1)
+                    if next.start > now {
+                        Text("in \(Text(next.start, style: .relative))")
+                    } else {
+                        Text("happening now")
+                    }
+                } else {
+                    Text("Nothing scheduled this week")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
     }
 }
 

@@ -19,6 +19,14 @@ nonisolated enum NotificationIdentifier {
     static func mailDigest(_ accountID: UUID) -> String {
         "mail.digest.\(accountID.uuidString)"
     }
+
+    /// One identifier per event alarm occurrence, so the rolling scheduler
+    /// can reconcile (add/remove) individual instances idempotently.
+    static func calendarAlert(eventID: UUID, fireDate: Date) -> String {
+        "\(calendarAlertPrefix)\(eventID.uuidString).\(Int64(fireDate.timeIntervalSinceReferenceDate))"
+    }
+
+    static let calendarAlertPrefix = "calendar.alert."
 }
 
 /// Category + action identifiers registered in
@@ -43,11 +51,12 @@ nonisolated struct NotificationRoutingPayload: Codable, Equatable, Sendable {
         case review
         case newMail
         case mailDigest
+        case calendarEvent
     }
 
     let kind: Kind
     /// Chat ID for `chatReply`/`review`, email ID for `newMail`, account ID
-    /// for `mailDigest`.
+    /// for `mailDigest`, event ID for `calendarEvent`.
     let targetID: UUID
 
     private enum UserInfoKey {

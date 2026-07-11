@@ -37,6 +37,11 @@ final class AppBootstrap {
         NotificationMailActionHandler.shared.configure(modelContainer: modelContainer)
 
         EmailWorkflowManager.shared.start(modelContainer: modelContainer)
+        if SettingsStorage.isCalendarEnabled() {
+            CalendarSyncCoordinator.shared.start(modelContainer: modelContainer)
+            CalendarAlertScheduler.shared.start(modelContainer: modelContainer)
+            CalendarWorkflowManager.shared.start(modelContainer: modelContainer)
+        }
         Self.logger.info("App bootstrap complete")
     }
 }

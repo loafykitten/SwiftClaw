@@ -338,6 +338,7 @@
 				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "SwiftClaw reads your Apple Calendar to import events you choose and, when the overlay is on, to show your Apple Calendar events alongside SwiftClaw's.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
@@ -381,6 +382,7 @@
 				ENABLE_RESOURCE_ACCESS_LOCATION = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "SwiftClaw reads your Apple Calendar to import events you choose and, when the overlay is on, to show your Apple Calendar events alongside SwiftClaw's.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";

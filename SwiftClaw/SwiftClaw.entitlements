@@ -8,5 +8,21 @@
 	<true/>
 	<key>com.apple.security.personal-information.location</key>
 	<true/>
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<!--
+	  CloudKit sync for the calendar store is code-complete but dormant:
+	  personal development teams can't carry iCloud/push entitlements. On a
+	  paid team, restore these two blocks (plus CloudKit Console provisioning)
+	  and SwiftClawModelContainerFactory picks the synced store up
+	  automatically:
+
+	  <key>com.apple.developer.icloud-services</key>
+	  <array><string>CloudKit</string></array>
+	  <key>com.apple.developer.icloud-container-identifiers</key>
+	  <array><string>iCloud.com.caffeineplz.SwiftClaw</string></array>
+	  <key>com.apple.developer.aps-environment</key>
+	  <string>development</string>
+	-->
 </dict>
 </plist>

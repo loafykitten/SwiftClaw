@@ -54,6 +54,7 @@ struct ContentView: View {
     /// knows not to treat that assignment as a new user navigation.
     @State private var isUpdatingSelectionWithoutRecording = false
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
+    @AppStorage(SettingsKeys.calendarEnabled) private var isCalendarEnabled = SettingsStorage.defaultCalendarEnabled
 
     /// Unread mail drives the Workspace badge the way `router.unreadChatIDs`
     /// drives the Chats badge. Same partition as the workspace widget's
@@ -116,6 +117,18 @@ struct ContentView: View {
                     EmailWorkflowManager.shared.start(modelContainer: modelContext.container)
                 } else {
                     EmailWorkflowManager.shared.stop()
+                }
+            }
+            .onChange(of: isCalendarEnabled) { _, enabled in
+                if enabled {
+                    CalendarSyncCoordinator.shared.start(modelContainer: modelContext.container)
+                    CalendarAlertScheduler.shared.start(modelContainer: modelContext.container)
+                    CalendarWorkflowManager.shared.start(modelContainer: modelContext.container)
+                } else {
+                    CalendarSyncCoordinator.shared.stop()
+                    CalendarAlertScheduler.shared.stop()
+                    CalendarAlertScheduler.shared.clearAllPendingAlerts()
+                    CalendarWorkflowManager.shared.stop()
                 }
             }
             .onAppear {
@@ -192,7 +205,9 @@ struct ContentView: View {
         case .workspace:
             WorkspaceView(
                 pendingEmailID: router.pendingEmailViewID,
-                onEmailPresented: router.clearPendingEmailView
+                onEmailPresented: router.clearPendingEmailView,
+                pendingCalendarFocus: router.pendingCalendarFocus,
+                onCalendarPresented: router.clearPendingCalendarFocus
             )
         default:
             item.destination

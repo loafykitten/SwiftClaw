@@ -133,6 +133,23 @@ extension SettingsKeys {
     static let notesEnabled = "settings.notes.enabled"
 }
 
+// MARK: - Calendar keys
+
+extension SettingsKeys {
+    /// UUID string of the calendar new events default into.
+    static let calendarDefaultCalendarID = "settings.calendar.defaultCalendarID"
+    /// App state (not a user setting): whether the first-enable import
+    /// onboarding has been completed or dismissed.
+    static let calendarHasCompletedOnboarding = "settings.calendar.hasCompletedOnboarding"
+    /// Seconds between scheduled calendar-review passes; 0 = manual only.
+    static let calendarReviewIntervalSeconds = "settings.calendar.reviewIntervalSeconds"
+    /// App state: when the last calendar review pass completed.
+    static let calendarLastReviewCompletedAt = "settings.calendar.lastReviewCompletedAt"
+    /// Whether Apple Calendar events are shown read-only alongside native
+    /// events (device-local — depends on this machine's calendar permission).
+    static let calendarOverlayEnabled = "settings.calendar.overlayEnabled"
+}
+
 // MARK: - Notification keys
 
 extension SettingsKeys {
@@ -140,6 +157,7 @@ extension SettingsKeys {
     static let notificationsNewMailEnabled = "settings.notifications.newMail.enabled"
     static let notificationsReviewResultsEnabled = "settings.notifications.reviewResults.enabled"
     static let notificationsChatRepliesEnabled = "settings.notifications.chatReplies.enabled"
+    static let notificationsCalendarAlertsEnabled = "settings.notifications.calendarAlerts.enabled"
     /// App state (not a user setting): whether the one-time launch offer to
     /// enable notifications has been answered (either way), so it never nags.
     static let notificationsLaunchPromptCompleted = "state.notifications.launchPromptCompleted"
@@ -185,6 +203,9 @@ enum SettingsNotifications {
     static let keychainDidChange = Notification.Name("settings.keychain.didChange")
     static let emailReviewScheduleDidChange = Notification.Name(
         "settings.email.reviewSchedule.didChange"
+    )
+    static let calendarReviewScheduleDidChange = Notification.Name(
+        "settings.calendar.reviewSchedule.didChange"
     )
     /// Posted after each review pass finishes (whether or not it produced a
     /// card) so views showing "Reviewed … ago / Next review …" re-read the
@@ -966,6 +987,46 @@ enum SettingsStorage {
             )
     }
 
+    /// Calendar review default cadence: daily. 0 disables the scheduled loop
+    /// (manual "Review Now" still works).
+    static let defaultCalendarReviewIntervalSeconds = 24 * 3600
+
+    static func loadCalendarReviewInterval(userDefaults: UserDefaults = .standard) -> Int {
+        guard userDefaults.object(forKey: SettingsKeys.calendarReviewIntervalSeconds) != nil else {
+            return defaultCalendarReviewIntervalSeconds
+        }
+        return max(0, userDefaults.integer(forKey: SettingsKeys.calendarReviewIntervalSeconds))
+    }
+
+    static func loadCalendarLastReviewCompletedAt(userDefaults: UserDefaults = .standard) -> Date? {
+        userDefaults.object(forKey: SettingsKeys.calendarLastReviewCompletedAt) as? Date
+    }
+
+    static func saveCalendarLastReviewCompletedAt(_ date: Date, userDefaults: UserDefaults = .standard) {
+        userDefaults.set(date, forKey: SettingsKeys.calendarLastReviewCompletedAt)
+    }
+
+    static let defaultCalendarOverlayEnabled = false
+
+    static func isCalendarOverlayEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        boolSetting(
+            forKey: SettingsKeys.calendarOverlayEnabled,
+            defaultValue: defaultCalendarOverlayEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
+    static let defaultCalendarAlertNotificationsEnabled = true
+
+    static func areCalendarAlertNotificationsEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        areNotificationsEnabled(userDefaults: userDefaults)
+            && boolSetting(
+                forKey: SettingsKeys.notificationsCalendarAlertsEnabled,
+                defaultValue: defaultCalendarAlertNotificationsEnabled,
+                userDefaults: userDefaults
+            )
+    }
+
     static let defaultCalendarEnabled = false
     static let defaultRemindersEnabled = false
     static let defaultNotesEnabled = false
@@ -976,6 +1037,19 @@ enum SettingsStorage {
             defaultValue: defaultCalendarEnabled,
             userDefaults: userDefaults
         )
+    }
+
+    static func loadCalendarDefaultCalendarID(userDefaults: UserDefaults = .standard) -> UUID? {
+        userDefaults.string(forKey: SettingsKeys.calendarDefaultCalendarID)
+            .flatMap(UUID.init(uuidString:))
+    }
+
+    static func saveCalendarDefaultCalendarID(_ id: UUID?, userDefaults: UserDefaults = .standard) {
+        if let id {
+            userDefaults.set(id.uuidString, forKey: SettingsKeys.calendarDefaultCalendarID)
+        } else {
+            userDefaults.removeObject(forKey: SettingsKeys.calendarDefaultCalendarID)
+        }
     }
 
     static func isRemindersEnabled(userDefaults: UserDefaults = .standard) -> Bool {

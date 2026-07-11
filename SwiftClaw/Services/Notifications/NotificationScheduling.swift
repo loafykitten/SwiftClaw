@@ -15,6 +15,8 @@ protocol NotificationScheduling: AnyObject {
     func setDelegate(_ delegate: any UNUserNotificationCenterDelegate)
     func add(_ request: UNNotificationRequest) async throws
     func removeDeliveredNotifications(withIdentifiers identifiers: [String])
+    func removePendingNotificationRequests(withIdentifiers identifiers: [String])
+    func pendingNotificationRequests() async -> [UNNotificationRequest]
 }
 
 /// Production wrapper. Resolves `UNUserNotificationCenter.current()` on first
@@ -55,5 +57,13 @@ final class SystemNotificationCenter: NotificationScheduling {
 
     func removeDeliveredNotifications(withIdentifiers identifiers: [String]) {
         center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
+    func removePendingNotificationRequests(withIdentifiers identifiers: [String]) {
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
+    func pendingNotificationRequests() async -> [UNNotificationRequest] {
+        await center.pendingNotificationRequests()
     }
 }

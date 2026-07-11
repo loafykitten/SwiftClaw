@@ -1188,11 +1188,21 @@ private struct ChatMessageRow: View {
                             message.reviewCard = updated
                             try? modelContext.save()
                         },
-                        onItemView: { emailID in
-                            router.showEmail(emailID)
+                        onItemView: { itemID in
+                            switch reviewCard.reviewType {
+                            case .calendar:
+                                router.showCalendar()
+                            default:
+                                router.showEmail(itemID)
+                            }
                         },
                         onRefreshAnalysis: {
-                            await EmailWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
+                            switch reviewCard.reviewType {
+                            case .calendar:
+                                await CalendarWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
+                            default:
+                                await EmailWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
+                            }
                         }
                     )
                     .frame(maxWidth: ChatBubbleLayout.maxWidth, alignment: .leading)

@@ -120,12 +120,19 @@ extension Chat {
     /// wiring, title regeneration, sidebar rendering, and the review
     /// scheduler's unread guard all key off it via `isEmailReviewChat`.
     static let emailReviewTitlePrefix = "Inbox review —"
+    static let calendarReviewTitlePrefix = "Calendar review —"
 
     /// Whether this chat was created by the email review pass. A chat *is* a
     /// review chat for its whole life — keyed off the title stamped at
     /// creation, not off whether its card still has live emails.
     var isEmailReviewChat: Bool {
         title.hasPrefix(Self.emailReviewTitlePrefix)
+    }
+
+    /// Whether this chat was created by the calendar review pass (same
+    /// title-prefix contract as `isEmailReviewChat`).
+    var isCalendarReviewChat: Bool {
+        title.hasPrefix(Self.calendarReviewTitlePrefix)
     }
 
     func matchesSearch(_ searchText: String) -> Bool {

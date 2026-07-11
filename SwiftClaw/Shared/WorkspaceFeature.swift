@@ -31,7 +31,7 @@ enum WorkspaceFeature: String, CaseIterable, Hashable, Identifiable {
     var summary: String {
         switch self {
         case .email: "IMAP/SMTP inbox sync and AI inbox review."
-        case .calendar: "Schedule at a glance in Workspace. Coming soon."
+        case .calendar: "Your schedule at a glance, with month, week, day, and agenda views."
         case .reminders: "Task and reminder tracking in Workspace. Coming soon."
         case .notes: "Quick notes in Workspace. Coming soon."
         }

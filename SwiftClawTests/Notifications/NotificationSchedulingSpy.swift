@@ -16,6 +16,7 @@ final class NotificationSchedulingSpy: NotificationScheduling {
     private(set) var installedDelegate: (any UNUserNotificationCenterDelegate)?
     private(set) var addedRequests: [UNNotificationRequest] = []
     private(set) var removedIdentifierBatches: [[String]] = []
+    private(set) var removedPendingIdentifierBatches: [[String]] = []
 
     func requestAuthorization(options: UNAuthorizationOptions) async throws -> Bool {
         requestedAuthorizationOptions.append(options)
@@ -48,5 +49,14 @@ final class NotificationSchedulingSpy: NotificationScheduling {
 
     func removeDeliveredNotifications(withIdentifiers identifiers: [String]) {
         removedIdentifierBatches.append(identifiers)
+    }
+
+    func removePendingNotificationRequests(withIdentifiers identifiers: [String]) {
+        removedPendingIdentifierBatches.append(identifiers)
+        addedRequests.removeAll { identifiers.contains($0.identifier) }
+    }
+
+    func pendingNotificationRequests() async -> [UNNotificationRequest] {
+        addedRequests
     }
 }

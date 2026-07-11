@@ -17,6 +17,9 @@ final class AppRouter {
     var pendingToolsFeatureHighlight: WorkspaceFeature?
     private(set) var unreadChatIDs: Set<UUID> = []
     var pendingEmailViewID: UUID?
+    /// Set when a calendar-event alert is tapped: Workspace navigates to the
+    /// Calendar view, then clears it.
+    var pendingCalendarFocus = false
 
     @ObservationIgnored private var notificationObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var notificationBridgeUseCount = 0
@@ -76,6 +79,15 @@ final class AppRouter {
     func showEmail(_ emailID: UUID) {
         pendingEmailViewID = emailID
         selectedNavigationItem = .workspace
+    }
+
+    func showCalendar() {
+        pendingCalendarFocus = true
+        selectedNavigationItem = .workspace
+    }
+
+    func clearPendingCalendarFocus() {
+        pendingCalendarFocus = false
     }
 
     func openSettings(section: SettingsSection? = nil, highlightingToolsFeature feature: WorkspaceFeature? = nil) {

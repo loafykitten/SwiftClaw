@@ -22,6 +22,8 @@ struct NotificationSettingsView: View {
     private var reviewResultsEnabled = SettingsStorage.defaultReviewResultNotificationsEnabled
     @AppStorage(SettingsKeys.notificationsChatRepliesEnabled)
     private var chatRepliesEnabled = SettingsStorage.defaultChatReplyNotificationsEnabled
+    @AppStorage(SettingsKeys.notificationsCalendarAlertsEnabled)
+    private var calendarAlertsEnabled = SettingsStorage.defaultCalendarAlertNotificationsEnabled
 
     private var isDenied: Bool {
         notificationService.authorizationStatus == .denied
@@ -44,6 +46,7 @@ struct NotificationSettingsView: View {
                 Toggle("New mail", isOn: $newMailEnabled)
                 Toggle("Inbox review results", isOn: $reviewResultsEnabled)
                 Toggle("Chat replies", isOn: $chatRepliesEnabled)
+                Toggle("Calendar event alerts", isOn: $calendarAlertsEnabled)
             } header: {
                 Text("Notify about")
             }
@@ -51,10 +54,16 @@ struct NotificationSettingsView: View {
         }
         .formStyle(.grouped)
         .onChange(of: notificationsEnabled) { _, isOn in
+            CalendarAlertScheduler.shared.settingsDidChange()
             guard isOn else { return }
             Task {
                 await notificationService.enableNotifications()
             }
+        }
+        .onChange(of: calendarAlertsEnabled) {
+            // Reconcile promptly so switching alerts off also clears the
+            // already-booked requests instead of letting them fire.
+            CalendarAlertScheduler.shared.settingsDidChange()
         }
         .onAppear {
             Task { await notificationService.refreshAuthorizationStatus() }
