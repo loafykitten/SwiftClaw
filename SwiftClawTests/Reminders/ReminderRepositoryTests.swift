@@ -29,6 +29,18 @@ struct ReminderRepositoryTests {
         #expect(repository.lists().count == 1)
     }
 
+    @Test func preferredListLookupDoesNotCreateFallback() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+
+        #expect(repository.preferredList() == nil)
+        #expect(repository.lists().isEmpty)
+
+        let personal = repository.createList(name: "Personal")
+        let work = repository.createList(name: "Work")
+        #expect(repository.preferredList(preferredID: work.id)?.id == work.id)
+        #expect(repository.preferredList(preferredID: UUID())?.id == personal.id)
+    }
+
     @Test func listCRUDAndPreferredDefault() throws {
         let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
         _ = repository.createList(name: "Personal")

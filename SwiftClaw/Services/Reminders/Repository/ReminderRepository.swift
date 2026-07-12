@@ -53,17 +53,21 @@ final class ReminderRepository {
         return list
     }
 
-    /// The list new reminders default into. Prefers the user's configured
-    /// choice, falls back to the first list, creating "Reminders" on first use
-    /// so the app never has zero lists once the feature is enabled.
-    func defaultList(preferredID: UUID? = nil) -> ReminderList {
+    /// Resolves the list new reminders should use without creating one. Editor
+    /// sheets use this so opening and cancelling remains a no-op.
+    func preferredList(preferredID: UUID? = nil) -> ReminderList? {
         if let preferredID, let preferred = list(withID: preferredID) {
             return preferred
         }
-        if let first = lists().first {
-            return first
-        }
-        return createList(name: String(localized: "Reminders"))
+        return lists().first
+    }
+
+    /// The list new reminders default into. Prefers the user's configured
+    /// choice, falls back to the first list, creating "Reminders" only when a
+    /// caller is ready to persist content.
+    func defaultList(preferredID: UUID? = nil) -> ReminderList {
+        preferredList(preferredID: preferredID)
+            ?? createList(name: String(localized: "Reminders"))
     }
 
     func renameList(_ list: ReminderList, name: String) {

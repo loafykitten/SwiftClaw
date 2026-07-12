@@ -13,9 +13,10 @@ chips, Workspace tile). Full plan (research, scope decisions, 8 phases):
 
 ## Current state
 
-**Phase 1 (foundation) implemented** — models, container registration,
-recurrence engine, repository, sync coordinator, three test suites. Built by a
-gpt-5.5 codex run, then reviewed by Claude, which found and fixed two bugs:
+**Phase 1 (foundation) committed as `e8a4d62`** — models, container
+registration, recurrence engine, repository, sync coordinator, and three test
+suites. Built by a gpt-5.5 codex run, then reviewed by Claude, which found and
+fixed two bugs:
 
 1. Engine COUNT off-by-one: codex expanded with the already-decremented rule,
    but `RecurrenceExpander`'s COUNT budget includes the anchor occurrence, so
@@ -27,27 +28,40 @@ gpt-5.5 codex run, then reviewed by Claude, which found and fixed two bugs:
    `CalendarRepository.dedupeCalendars`; dedupe test updated + a
    never-merge-by-name guard test added.
 
-All three Reminders suites pass. Full-suite regression run in progress; Phase 1
-commit pending its result.
+**Phase 2 (core UI, settings, lifecycle) implemented and validated** —
+the placeholder UI is now a sidebar of smart views and user lists, reminder
+detail rows with reversible completion/history, list management, and one
+draft-backed editor for due dates, both repeat modes, priority, flags,
+checklists, URLs, and notes. `CalendarRecurrencePicker` was reusable unchanged.
+Settings now expose enable/default-list controls, and the sync coordinator
+starts and stops with the feature toggle.
+
+Phase 2 review fixed two completion gaps: opening/cancelling the editor no
+longer creates a default list (fallback creation happens only on Save), and
+hiding/deleting the selected list returns the UI to Today. Sidebar selection,
+toolbar actions, and completion controls received an accessibility pass.
+
+All five Reminders suites pass, including new default-list and stale-selection
+coverage. The full macOS suite passes (56 suites, 449 tests). Live smoke testing
+verified launch, feature enablement, Settings, Workspace navigation,
+accessibility labels, the empty state, and cancel-without-write. The UI
+automation connection dropped during deeper editor interaction while the app
+remained running with no crash in its logs.
 
 ## Next steps
 
-1. Confirm full test suite green, then commit Phase 1.
-2. Phase 2: core UI (replace `RemindersView`/`RemindersSettingsView`
-   placeholders), draft/editor, smart lists, ContentView lifecycle hook.
-   Taste-sensitive — Claude implements directly, no codex. Check first whether
-   `CalendarRecurrencePicker` is reusable for the repeat picker's
-   fixed-schedule mode.
-3. Phase 3: NL quick entry (`ReminderQuickEntryService`).
-4. Phase 4: `ReminderAlertScheduler` + `Kind.reminder` routing
+1. Phase 3: NL quick entry (`ReminderQuickEntryService`) and wire the
+   `RemindersView` entry field to the existing `.quickEntry(ReminderDraft)`
+   editor seam.
+2. Phase 4: `ReminderAlertScheduler` + `Kind.reminder` routing
    (**lower calendar budget 48→36, reminders 12**).
-5. Phase 5: Apple Reminders EventKit import + VTODO ICS + onboarding +
-   entitlement/INFOPLIST key.
-6. Phase 6: AI review loop (`ReviewType.reminders` already exists; replace
+3. Phase 5: Apple Reminders EventKit import + VTODO ICS + onboarding hook/sheet
+   + entitlement/INFOPLIST key.
+4. Phase 6: AI review loop (`ReviewType.reminders` already exists; replace
    placeholder branch at `ReviewCardRendererRegistry` line ~42).
-7. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
+5. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
    `EventOccurrence`) + `WorkspaceRemindersSummary` tile.
-8. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
+6. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
    final commit.
 
 ## Decisions & constraints
@@ -84,4 +98,7 @@ commit pending its result.
 - `SwiftClaw/Services/Reminders/Recurrence/ReminderRecurrenceEngine.swift` — pure roll-forward math (fixed-schedule from scheduled date, after-completion from completion date, COUNT decrement).
 - `SwiftClaw/Services/Reminders/Repository/ReminderRepository.swift` — mutation boundary; posts `.reminderStoreDidChange`; complete/uncomplete/skip transactions with log rows; upsert; dedupe.
 - `SwiftClaw/Services/Reminders/ReminderSyncCoordinator.swift` — CalendarSyncCoordinator clone.
-- `SwiftClawTests/Reminders/` — `ReminderRepositoryTests`, `ReminderRecurrenceEngineTests`, `ReminderPayloadCodingTests` (all green).
+- `SwiftClaw/Features/Reminders/` — smart/user-list sidebar, list detail and rows, list management, and draft-backed editor/checklist/repeat controls.
+- `SwiftClaw/Settings/Sections/RemindersSettingsView.swift`, `SwiftClaw/Settings/AppSettings.swift` — feature toggle, default-list preference, and future onboarding key.
+- `SwiftClaw/ContentView.swift`, `SwiftClaw/Shared/AppBootstrap.swift` — sync coordinator lifecycle wiring.
+- `SwiftClawTests/Reminders/` — foundation plus `ReminderDraftTests` and `ReminderSmartListTests`; all five suites green.

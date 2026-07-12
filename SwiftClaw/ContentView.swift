@@ -55,6 +55,7 @@ struct ContentView: View {
     @State private var isUpdatingSelectionWithoutRecording = false
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
     @AppStorage(SettingsKeys.calendarEnabled) private var isCalendarEnabled = SettingsStorage.defaultCalendarEnabled
+    @AppStorage(SettingsKeys.remindersEnabled) private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
 
     /// Unread mail drives the Workspace badge the way `router.unreadChatIDs`
     /// drives the Chats badge. Same partition as the workspace widget's
@@ -129,6 +130,13 @@ struct ContentView: View {
                     CalendarAlertScheduler.shared.stop()
                     CalendarAlertScheduler.shared.clearAllPendingAlerts()
                     CalendarWorkflowManager.shared.stop()
+                }
+            }
+            .onChange(of: isRemindersEnabled) { _, enabled in
+                if enabled {
+                    ReminderSyncCoordinator.shared.start(modelContainer: modelContext.container)
+                } else {
+                    ReminderSyncCoordinator.shared.stop()
                 }
             }
             .onAppear {

@@ -150,6 +150,16 @@ extension SettingsKeys {
     static let calendarOverlayEnabled = "settings.calendar.overlayEnabled"
 }
 
+// MARK: - Reminders keys
+
+extension SettingsKeys {
+    /// UUID string of the list new reminders default into.
+    static let remindersDefaultListID = "settings.reminders.defaultListID"
+    /// App state (not a user setting): whether the first-enable import
+    /// onboarding has been completed or dismissed.
+    static let remindersHasCompletedOnboarding = "settings.reminders.hasCompletedOnboarding"
+}
+
 // MARK: - Notification keys
 
 extension SettingsKeys {
@@ -1058,6 +1068,19 @@ enum SettingsStorage {
             defaultValue: defaultRemindersEnabled,
             userDefaults: userDefaults
         )
+    }
+
+    static func loadRemindersDefaultListID(userDefaults: UserDefaults = .standard) -> UUID? {
+        userDefaults.string(forKey: SettingsKeys.remindersDefaultListID)
+            .flatMap(UUID.init(uuidString:))
+    }
+
+    static func saveRemindersDefaultListID(_ id: UUID?, userDefaults: UserDefaults = .standard) {
+        if let id {
+            userDefaults.set(id.uuidString, forKey: SettingsKeys.remindersDefaultListID)
+        } else {
+            userDefaults.removeObject(forKey: SettingsKeys.remindersDefaultListID)
+        }
     }
 
     static func isNotesEnabled(userDefaults: UserDefaults = .standard) -> Bool {

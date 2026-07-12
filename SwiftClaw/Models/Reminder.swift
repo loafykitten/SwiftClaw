@@ -115,6 +115,11 @@ final class Reminder {
         parentReminderID != nil
     }
 
+    /// Either repeat encoding makes the reminder a recurring master.
+    var isRecurring: Bool {
+        recurrenceRuleString != nil || afterCompletionRepeatData != nil
+    }
+
     var timeZone: TimeZone? {
         timeZoneIdentifier.flatMap(TimeZone.init(identifier:))
     }
