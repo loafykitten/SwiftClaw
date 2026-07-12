@@ -82,7 +82,8 @@ the request, and reconcile awaits an in-flight `clearAllPendingAlerts` so a
 quick disable→enable can't strand alerts. 19 scheduler tests; full suite green.
 NOTE: the stale-content and clear-race fixes were NOT back-ported to
 `CalendarAlertScheduler` (same latent issues there, pre-existing, out of
-scope) — flagged to the user.
+scope) — tracked as its own task in `calendar-alert-scheduler-backports.md`
+so the note survives this file's deletion at Phase 8.
 
 ## Next steps
 
