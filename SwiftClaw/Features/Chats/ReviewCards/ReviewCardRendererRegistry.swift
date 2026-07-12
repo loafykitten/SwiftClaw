@@ -40,9 +40,12 @@ struct ReviewCardRendererRegistry {
                 onRefreshAnalysis: onRefreshAnalysis
             )
         case .reminders:
-            Text("Reviewer for \(payload.reviewType.rawValue) not yet implemented.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            RemindersReviewCardRenderer(
+                payload: payload,
+                onItemActioned: onItemActioned,
+                onItemView: onItemView,
+                onRefreshAnalysis: onRefreshAnalysis
+            )
         case .unknown:
             Text("This review card is from a newer version and can't be displayed.")
                 .font(.callout)

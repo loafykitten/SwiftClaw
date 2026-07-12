@@ -105,13 +105,27 @@ the same row if an external identity appears later, and impossible ICS dates
 are rejected instead of Calendar-normalized into another day. The new focused
 suites, existing Calendar ICS suite, and full macOS suite pass.
 
+**Phase 6 (AI review loop) implemented** — `ReminderReviewService` /
+`ReminderReviewFetchTool` (`fetch_reminders`) / `ReminderReviewNotifyTool`
+(`notify_user_about_reminders`) mirror the Calendar review stack 1:1: scoped
+per-pass registry, `.standalone` prompt, unread-review + nothing-pending +
+nothing-changed scheduled-pass guards, `lastReviewedAt` stamped only on
+fetched reminders after a successful pass. Scheduled-pass guard scope matches
+the fetch default: pending masters that are undated, overdue, or due within
+7 days. `ReminderWorkflowManager` clones `CalendarWorkflowManager` (interval
+key `settings.reminders.reviewIntervalSeconds`, default daily, "Manually
+only" = 0; Scheduled Review picker in Reminders Settings). Review chats use
+the `"Reminders review —"` title prefix; cards render via
+`RemindersReviewCardRenderer` (registry placeholder replaced), View routes
+through `AppRouter.showReminders(focusing:)`, refresh re-runs
+`reviewNow(appendingTo:)`. Lifecycle wired in AppBootstrap + ContentView
+alongside the sync coordinator and alert scheduler.
+
 ## Next steps
 
-1. Phase 6: AI review loop (`ReviewType.reminders` already exists; replace
-   placeholder branch at `ReviewCardRendererRegistry` line ~42).
-2. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
+1. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
    `EventOccurrence`) + `WorkspaceRemindersSummary` tile.
-3. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
+2. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
    final commit.
 
 ## Decisions & constraints

@@ -1,0 +1,240 @@
+import Foundation
+import SwiftData
+import os
+
+/// System-only tool that creates a reminders-review chat with a card of
+/// to-dos worth the user's attention. Mirrors `CalendarReviewNotifyTool`
+/// (idempotency latch, stringified-array tolerance, honest failure) with a
+/// single action: `review` (view the reminder). NOT registered on
+/// `ToolRegistry.shared`.
+final class ReminderReviewNotifyTool: Tool {
+    private static let logger = AppLog.make("reminders.review.tool")
+
+    let name = "notify_user_about_reminders"
+    let displayName = "Notify User About Reminders"
+    let description = """
+    Notifies the user about reminders that deserve attention. \
+    Call this only when at least one reminder is worth surfacing. \
+    If nothing needs the user, output nothing and do not call any tool.
+    """
+    let systemImage = "checklist"
+    let parameters: [ToolParameter] = [
+        ToolParameter(name: "reminder_actions", type: .array, description: """
+        Array of objects, each describing one reminder: \
+        { "reminder_guid": "<exact reminderGUID from the fetched data>", "summary": "<one specific line on why this matters>" }
+        """, isRequired: true),
+        ToolParameter(name: "message", type: .string, description: """
+        A friendly summary message shown above the cards. One or two sentences.
+        """, isRequired: true),
+        ToolParameter(name: "notification_summary", type: .string, description: """
+        A compact version for the system notification banner: one plain sentence, \
+        under 20 words, no greeting and no markdown.
+        """, isRequired: false),
+    ]
+
+    var isConfigured: Bool { true }
+    var isEnabled: Bool { true }
+
+    private struct ReminderReviewAction: Codable {
+        let reminderGUID: String
+        let summary: String?
+
+        enum CodingKeys: String, CodingKey {
+            case reminderGUID = "reminder_guid"
+            case summary
+        }
+    }
+
+    private let modelContainer: ModelContainer
+    private let targetChatID: UUID?
+    private let onReviewCreated: (@MainActor (UUID, String) -> Void)?
+    /// Idempotency latch — see `EmailReviewNotifyTool.hasCreatedChatForRun`.
+    @MainActor private var hasCreatedChatForRun = false
+
+    init(
+        modelContainer: ModelContainer,
+        targetChatID: UUID? = nil,
+        onReviewCreated: (@MainActor (UUID, String) -> Void)? = nil
+    ) {
+        self.modelContainer = modelContainer
+        self.targetChatID = targetChatID
+        self.onReviewCreated = onReviewCreated
+    }
+
+    func execute(arguments: [String: JSONValue]) async throws -> String {
+        guard let actionsJSON = arguments["reminder_actions"],
+              let message = arguments["message"]?.stringValue else {
+            throw ToolError.missingArgument("reminder_actions/message")
+        }
+        let notificationSummary: String = {
+            let compact = arguments["notification_summary"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let compact, !compact.isEmpty else { return message }
+            return compact
+        }()
+
+        // Accept a real array or a JSON-encoded array string (some
+        // OpenAI-compatible proxies stringify tool arguments).
+        let actions: [ReminderReviewAction]
+        switch actionsJSON {
+        case .array:
+            let data = try JSONEncoder().encode(actionsJSON)
+            actions = try JSONDecoder().decode([ReminderReviewAction].self, from: data)
+        case .string(let jsonString):
+            guard let data = jsonString.data(using: .utf8) else {
+                throw ToolError.invalidArguments("reminder_actions string is not valid UTF-8")
+            }
+            do {
+                actions = try JSONDecoder().decode([ReminderReviewAction].self, from: data)
+            } catch {
+                throw ToolError.invalidArguments("reminder_actions is not a JSON-encoded array: \(error.localizedDescription)")
+            }
+        default:
+            throw ToolError.invalidArguments("reminder_actions must be an array or a JSON-array string")
+        }
+
+        let actionsWithGUIDs = actions.compactMap { action -> (ReminderReviewAction, UUID)? in
+            guard let uuid = UUID(uuidString: action.reminderGUID) else { return nil }
+            return (action, uuid)
+        }
+        guard !actionsWithGUIDs.isEmpty else {
+            throw ToolError.invalidArguments("reminder_actions contained no valid reminder GUIDs")
+        }
+
+        let title = "\(Chat.remindersReviewTitlePrefix) \(Date.now.formatted(.dateTime.month(.abbreviated).day()))"
+        let outcome: CreationOutcome = await MainActor.run {
+            if self.hasCreatedChatForRun {
+                return .skippedIdempotent
+            }
+            let context = modelContainer.mainContext
+            let repository = ReminderRepository(modelContext: context)
+
+            let reviewItems: [ReviewItem] = actionsWithGUIDs.map { action, uuid in
+                let reminder = repository.reminder(withID: uuid)
+                return ReviewItem(
+                    itemID: uuid,
+                    actionToken: .review,
+                    actionLabel: "View",
+                    summary: action.summary,
+                    subject: reminder?.title,
+                    // A recurring master's dueDate is already the next
+                    // pending occurrence — no expansion needed.
+                    date: reminder.flatMap { reminder in
+                        guard let due = reminder.dueDate else { return nil }
+                        return reminder.hasDueTime
+                            ? due.formatted(date: .abbreviated, time: .shortened)
+                            : due.formatted(.dateTime.weekday(.abbreviated).month().day())
+                    },
+                    accountLabel: reminder?.list?.name
+                )
+            }
+            let payload = ReviewCardPayload(reviewType: .reminders, items: reviewItems)
+
+            let createdChatID: UUID? = if let targetChatID {
+                self.appendReview(to: targetChatID, in: context, payload: payload, message: message)
+            } else {
+                self.createReviewChat(
+                    in: context,
+                    title: title,
+                    payload: payload,
+                    message: message,
+                    notificationSummary: notificationSummary
+                )
+            }
+            guard let createdChatID else { return .failed }
+            self.hasCreatedChatForRun = true
+            return .created(createdChatID)
+        }
+
+        switch outcome {
+        case .skippedIdempotent:
+            return "Already created a review chat for this pass — additional `notify_user_about_reminders` call ignored."
+        case .failed:
+            throw ToolError.executionFailed("the review chat could not be saved and was NOT created")
+        case .created:
+            let count = actionsWithGUIDs.count
+            return "\(targetChatID == nil ? "Created" : "Updated") review chat with \(count) item\(count == 1 ? "" : "s")."
+        }
+    }
+
+    private enum CreationOutcome {
+        case skippedIdempotent
+        case created(UUID)
+        case failed
+    }
+
+    @MainActor
+    @discardableResult
+    private func createReviewChat(
+        in context: ModelContext,
+        title: String,
+        payload: ReviewCardPayload,
+        message: String,
+        notificationSummary: String
+    ) -> UUID? {
+        let chat = Chat(
+            title: title,
+            modelSelection: SettingsStorage.loadModelSelection(forKey: SettingsKeys.clawModel)
+        )
+        context.insert(chat)
+
+        let cardMessage = ChatMessage(role: .assistant, content: "", sortIndex: 0, reviewCard: payload)
+        cardMessage.chat = chat
+        context.insert(cardMessage)
+
+        let summaryMessage = ChatMessage(role: .assistant, content: message, sortIndex: 1)
+        summaryMessage.chat = chat
+        context.insert(summaryMessage)
+
+        chat.updatedAt = .now
+
+        do {
+            try context.save()
+            Self.logger.info("""
+                created reminders review chat with \(payload.items.count, privacy: .public) items
+                """)
+            AppRouter.shared.noteNewChatMessages(in: chat.id)
+            onReviewCreated?(chat.id, notificationSummary)
+            return chat.id
+        } catch {
+            Self.logger.error("failed to save reminders review chat: \(String(describing: error))")
+            return nil
+        }
+    }
+
+    @MainActor
+    @discardableResult
+    private func appendReview(
+        to chatID: UUID,
+        in context: ModelContext,
+        payload: ReviewCardPayload,
+        message: String
+    ) -> UUID? {
+        var descriptor = FetchDescriptor<Chat>(predicate: #Predicate { $0.id == chatID })
+        descriptor.fetchLimit = 1
+        guard let chat = try? context.fetch(descriptor).first else {
+            Self.logger.error("failed to append reminders review: target chat not found")
+            return nil
+        }
+        for message in chat.messages where message.reviewCard != nil {
+            message.reviewCard = nil
+            message.content = "An updated analysis has been requested."
+        }
+        let nextIndex = (chat.messages.map(\.sortIndex).max() ?? -1) + 1
+        let cardMessage = ChatMessage(role: .assistant, content: "", sortIndex: nextIndex, reviewCard: payload)
+        cardMessage.chat = chat
+        context.insert(cardMessage)
+        let summaryMessage = ChatMessage(role: .assistant, content: message, sortIndex: nextIndex + 1)
+        summaryMessage.chat = chat
+        context.insert(summaryMessage)
+        chat.updatedAt = .now
+        do {
+            try context.save()
+            AppRouter.shared.noteNewChatMessages(in: chat.id)
+            return chat.id
+        } catch {
+            Self.logger.error("failed to save updated reminders review: \(String(describing: error))")
+            return nil
+        }
+    }
+}

@@ -1192,6 +1192,8 @@ private struct ChatMessageRow: View {
                             switch reviewCard.reviewType {
                             case .calendar:
                                 router.showCalendar()
+                            case .reminders:
+                                router.showReminders(focusing: itemID)
                             default:
                                 router.showEmail(itemID)
                             }
@@ -1200,6 +1202,8 @@ private struct ChatMessageRow: View {
                             switch reviewCard.reviewType {
                             case .calendar:
                                 await CalendarWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
+                            case .reminders:
+                                await ReminderWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
                             default:
                                 await EmailWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
                             }

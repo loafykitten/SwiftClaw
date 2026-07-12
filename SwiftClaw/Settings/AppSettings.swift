@@ -161,6 +161,10 @@ extension SettingsKeys {
     /// App state (not a user setting): whether the first-enable import
     /// onboarding has been completed or dismissed.
     static let remindersHasCompletedOnboarding = "settings.reminders.hasCompletedOnboarding"
+    /// Seconds between scheduled reminders-review passes; 0 = manual only.
+    static let remindersReviewIntervalSeconds = "settings.reminders.reviewIntervalSeconds"
+    /// App state: when the last reminders review pass completed.
+    static let remindersLastReviewCompletedAt = "settings.reminders.lastReviewCompletedAt"
 }
 
 // MARK: - Notification keys
@@ -220,6 +224,9 @@ enum SettingsNotifications {
     )
     static let calendarReviewScheduleDidChange = Notification.Name(
         "settings.calendar.reviewSchedule.didChange"
+    )
+    static let remindersReviewScheduleDidChange = Notification.Name(
+        "settings.reminders.reviewSchedule.didChange"
     )
     /// Posted after each review pass finishes (whether or not it produced a
     /// card) so views showing "Reviewed … ago / Next review …" re-read the
@@ -1111,6 +1118,23 @@ enum SettingsStorage {
         } else {
             userDefaults.removeObject(forKey: SettingsKeys.remindersDefaultListID)
         }
+    }
+
+    static let defaultRemindersReviewIntervalSeconds = 24 * 3600
+
+    static func loadRemindersReviewInterval(userDefaults: UserDefaults = .standard) -> Int {
+        guard userDefaults.object(forKey: SettingsKeys.remindersReviewIntervalSeconds) != nil else {
+            return defaultRemindersReviewIntervalSeconds
+        }
+        return max(0, userDefaults.integer(forKey: SettingsKeys.remindersReviewIntervalSeconds))
+    }
+
+    static func loadRemindersLastReviewCompletedAt(userDefaults: UserDefaults = .standard) -> Date? {
+        userDefaults.object(forKey: SettingsKeys.remindersLastReviewCompletedAt) as? Date
+    }
+
+    static func saveRemindersLastReviewCompletedAt(_ date: Date, userDefaults: UserDefaults = .standard) {
+        userDefaults.set(date, forKey: SettingsKeys.remindersLastReviewCompletedAt)
     }
 
     static func isNotesEnabled(userDefaults: UserDefaults = .standard) -> Bool {

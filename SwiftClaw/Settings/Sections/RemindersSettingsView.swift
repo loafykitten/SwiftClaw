@@ -6,6 +6,8 @@ struct RemindersSettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @AppStorage(SettingsKeys.remindersEnabled) private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
     @AppStorage(SettingsKeys.remindersDefaultListID) private var defaultListIDString = ""
+    @AppStorage(SettingsKeys.remindersReviewIntervalSeconds)
+    private var reviewIntervalSeconds = SettingsStorage.defaultRemindersReviewIntervalSeconds
     @Query(sort: \ReminderList.sortOrder) private var lists: [ReminderList]
 
     @State private var isShowingAppleImport = false
@@ -41,6 +43,25 @@ struct RemindersSettingsView: View {
                             .tag(list.id.uuidString)
                         }
                     }
+                }
+
+                Section {
+                    Picker("Scheduled Review", selection: $reviewIntervalSeconds) {
+                        Text("Manually only").tag(0)
+                        Text("Every 6 hours").tag(6 * 3600)
+                        Text("Every 12 hours").tag(12 * 3600)
+                        Text("Daily").tag(24 * 3600)
+                    }
+                    .onChange(of: reviewIntervalSeconds) { _, _ in
+                        NotificationCenter.default.post(
+                            name: SettingsNotifications.remindersReviewScheduleDidChange,
+                            object: nil
+                        )
+                    }
+                } header: {
+                    Text("AI Review")
+                } footer: {
+                    Text("The assistant periodically looks over your pending reminders for overdue work, imminent due dates, and stalled items, and posts a review chat when something needs you.")
                 }
 
                 Section {

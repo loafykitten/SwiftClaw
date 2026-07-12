@@ -136,10 +136,12 @@ struct ContentView: View {
                 if enabled {
                     ReminderSyncCoordinator.shared.start(modelContainer: modelContext.container)
                     ReminderAlertScheduler.shared.start(modelContainer: modelContext.container)
+                    ReminderWorkflowManager.shared.start(modelContainer: modelContext.container)
                 } else {
                     ReminderSyncCoordinator.shared.stop()
                     ReminderAlertScheduler.shared.stop()
                     ReminderAlertScheduler.shared.clearAllPendingAlerts()
+                    ReminderWorkflowManager.shared.stop()
                 }
             }
             .onAppear {
