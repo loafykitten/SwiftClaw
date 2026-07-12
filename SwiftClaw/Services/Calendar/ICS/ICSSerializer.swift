@@ -2,7 +2,10 @@ import Foundation
 
 /// Minimal RFC 5545 writer for the VEVENT subset SwiftClaw exports:
 /// UID/DTSTAMP/DTSTART/DTEND/SUMMARY/LOCATION/DESCRIPTION/URL/RRULE/EXDATE/
-/// VALARM, with text escaping and 75-octet line folding.
+/// VALARM, with text escaping and 75-octet line folding. Also writes the
+/// VTODO subset (`serialize(todos:)`): DUE/STATUS/COMPLETED/PRIORITY/RRULE
+/// plus SwiftClaw's X- properties for flags, checklists, and
+/// after-completion repeats.
 ///
 /// Date policy: all-day events use VALUE=DATE (exclusive DTEND per spec);
 /// non-recurring timed events serialize as UTC instants ("...Z" — universally
@@ -23,6 +26,23 @@ nonisolated enum ICSSerializer {
         }
         for event in events {
             lines.append(contentsOf: serializeEvent(event))
+        }
+        lines.append("END:VCALENDAR")
+        return lines.map(fold).joined(separator: "\r\n") + "\r\n"
+    }
+
+    static func serialize(todos: [ICSTodoRepresentation], listName: String? = nil) -> String {
+        var lines: [String] = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//SwiftClaw//Reminders//EN",
+            "CALSCALE:GREGORIAN",
+        ]
+        if let listName, !listName.isEmpty {
+            lines.append("X-WR-CALNAME:\(escapeText(listName))")
+        }
+        for todo in todos {
+            lines.append(contentsOf: serializeTodo(todo))
         }
         lines.append("END:VCALENDAR")
         return lines.map(fold).joined(separator: "\r\n") + "\r\n"
@@ -90,6 +110,61 @@ nonisolated enum ICSSerializer {
             lines.append("END:VALARM")
         }
         lines.append("END:VEVENT")
+        return lines
+    }
+
+    // MARK: - VTODO
+
+    private static func serializeTodo(_ todo: ICSTodoRepresentation) -> [String] {
+        var lines = ["BEGIN:VTODO"]
+        lines.append("UID:\(todo.uid)")
+        lines.append("DTSTAMP:\(ICSDateFormat.utcString(from: .now))")
+
+        if let due = todo.due {
+            if todo.isDateOnly {
+                // Date-only dues are floating local days (stored as local
+                // midnight instants) — format them in the local calendar,
+                // same as all-day DTSTART.
+                let calendar = ICSDateFormat.calendar(for: TimeZone.current.identifier)
+                lines.append("DUE;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: due, calendar: calendar))")
+            } else if todo.rruleString != nil, let zone = todo.timeZoneIdentifier {
+                // Repeating timed to-dos keep their zone so wall-clock
+                // semantics survive DST, matching the VEVENT policy.
+                let calendar = ICSDateFormat.calendar(for: zone)
+                lines.append("DUE;TZID=\(zone):\(ICSDateFormat.localString(from: due, calendar: calendar))")
+            } else {
+                lines.append("DUE:\(ICSDateFormat.utcString(from: due))")
+            }
+        }
+
+        lines.append("SUMMARY:\(escapeText(todo.title))")
+        if let notes = todo.notes, !notes.isEmpty {
+            lines.append("DESCRIPTION:\(escapeText(notes))")
+        }
+        if let urlString = todo.urlString, !urlString.isEmpty {
+            lines.append("URL:\(urlString)")
+        }
+        if todo.priority != 0 {
+            lines.append("PRIORITY:\(todo.priority)")
+        }
+        if todo.isCompleted || todo.completedAt != nil {
+            lines.append("STATUS:COMPLETED")
+            lines.append("COMPLETED:\(ICSDateFormat.utcString(from: todo.completedAt ?? .now))")
+        } else {
+            lines.append("STATUS:NEEDS-ACTION")
+        }
+        if let rrule = todo.rruleString {
+            lines.append("RRULE:\(rrule)")
+        } else if let repeatAfter = todo.afterCompletionRepeat {
+            lines.append("X-SWIFTCLAW-REPEAT-AFTER:\(repeatAfter.count) \(repeatAfter.unit.rawValue)")
+        }
+        if todo.isFlagged {
+            lines.append("X-SWIFTCLAW-FLAGGED:TRUE")
+        }
+        for item in todo.checklist {
+            lines.append("X-SWIFTCLAW-CHECKLIST;ID=\(item.id.uuidString);DONE=\(item.isDone ? "TRUE" : "FALSE"):\(escapeText(item.text))")
+        }
+        lines.append("END:VTODO")
         return lines
     }
 
@@ -220,6 +295,16 @@ nonisolated enum ICSDateFormat {
                 return nil
             }
         }
-        return calendar(for: zoneIdentifier ?? TimeZone.current.identifier).date(from: components)
+        let calendar = calendar(for: zoneIdentifier ?? TimeZone.current.identifier)
+        guard let date = calendar.date(from: components) else { return nil }
+
+        let fields: Set<Calendar.Component> = isDateOnly || characters.count == 8
+            ? [.year, .month, .day]
+            : [.year, .month, .day, .hour, .minute, .second]
+        let resolved = calendar.dateComponents(fields, from: date)
+        for field in fields where resolved.value(for: field) != components.value(for: field) {
+            return nil
+        }
+        return date
     }
 }

@@ -342,6 +342,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "SwiftClaw reads your Apple Reminders to import the lists and to-dos you choose.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -386,6 +387,7 @@
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocationUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "SwiftClaw uses your location to tailor the home greeting to local daylight and weather.";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "SwiftClaw reads your Apple Reminders to import the lists and to-dos you choose.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

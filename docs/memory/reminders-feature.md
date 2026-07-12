@@ -85,15 +85,33 @@ NOTE: the stale-content and clear-race fixes were NOT back-ported to
 scope) — tracked as its own task in `calendar-alert-scheduler-backports.md`
 so the note survives this file's deletion at Phase 8.
 
+**Phase 5 (Apple Reminders + VTODO import/export + onboarding) implemented and reviewed** —
+the first-open Reminders sheet now offers Apple Reminders import, `.ics`
+import, or a fresh start, with both import paths and per-list export also
+available later in Settings. Apple import requests full EventKit access,
+copies selected lists and reminders into the SwiftClaw store, maps dates,
+completion, priority, and supported fixed recurrence, and safely re-runs by
+stable EventKit identity. VTODO import/export shares the Calendar ICS reader
+and writer, keeps standard fields plus SwiftClaw flags, checklists, and
+after-completion repeats, and accepts mixed VEVENT/VTODO files without the
+component types interfering.
+
+The requested sub-agent review and fix-verification pass found six edge-case
+bugs, all fixed with regression tests: Apple re-import clears the local-only
+after-completion repeat only when the source carries a fixed rule, status-only
+completed imports keep their original fallback timestamp, reminders without a
+cross-device EventKit identifier use the stable local identifier and migrate
+the same row if an external identity appears later, and impossible ICS dates
+are rejected instead of Calendar-normalized into another day. The new focused
+suites, existing Calendar ICS suite, and full macOS suite pass.
+
 ## Next steps
 
-1. Phase 5: Apple Reminders EventKit import + VTODO ICS + onboarding hook/sheet
-   + entitlement/INFOPLIST key.
-2. Phase 6: AI review loop (`ReviewType.reminders` already exists; replace
+1. Phase 6: AI review loop (`ReviewType.reminders` already exists; replace
    placeholder branch at `ReviewCardRendererRegistry` line ~42).
-3. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
+2. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
    `EventOccurrence`) + `WorkspaceRemindersSummary` tile.
-4. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
+3. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
    final commit.
 
 ## Decisions & constraints
@@ -135,4 +153,6 @@ so the note survives this file's deletion at Phase 8.
 - `SwiftClaw/ContentView.swift`, `SwiftClaw/Shared/AppBootstrap.swift` — sync coordinator lifecycle wiring.
 - `SwiftClaw/Features/Reminders/QuickEntry/ReminderQuickEntryService.swift` — NL quick entry parsing into a `ReminderDraft`; `RemindersView` grew the entry bar + fallback.
 - `SwiftClaw/Services/Reminders/ReminderAlertScheduler.swift` — due-date alert reconciliation; `AppNotificationService`/`NotificationRoutingPayload` grew the reminder posting path, `Kind.reminder`, and fingerprinted identifiers; `AppRouter`/`WorkspaceView`/`RemindersView` thread `pendingReminderFocusID`; `NotificationSettingsView` has the toggle + all-day time picker; calendar budget now 36.
-- `SwiftClawTests/Reminders/` — foundation plus `ReminderDraftTests`, `ReminderSmartListTests`, `ReminderQuickEntryServiceTests`, and `ReminderAlertSchedulerTests`; all seven suites green.
+- `SwiftClaw/Services/Reminders/Import/`, `Features/Reminders/Import/` — EventKit mapping/import, list picker, and first-open onboarding; Reminders Settings now exposes repeatable Apple/ICS import and per-list export; permission strings and the Reminders entitlement are wired for both build configurations.
+- `SwiftClaw/Services/Reminders/ICS/`, `Services/Calendar/ICS/` — neutral VTODO representation, store transfer, and shared parser/serializer support for standard to-do fields plus SwiftClaw round-trip extensions.
+- `SwiftClawTests/Reminders/` — foundation, UI/service phases, alert scheduling, EventKit import mapping/application, and VTODO round trips; all ten suites green.

@@ -18,6 +18,8 @@ struct RemindersView: View {
     @State private var selection: ReminderListDetailView.Selection? = .smart(.today)
     @State private var editorRequest: ReminderEditorRequest?
     @State private var isShowingListPopover = false
+    @AppStorage(SettingsKeys.remindersHasCompletedOnboarding) private var hasCompletedOnboarding = false
+    @State private var isShowingOnboarding = false
     @State private var quickEntryText = ""
     @State private var isParsingQuickEntry = false
     @State private var quickEntryService = ReminderQuickEntryService()
@@ -45,10 +47,16 @@ struct RemindersView: View {
         .sheet(item: $editorRequest) { request in
             ReminderEditorSheet(request: request)
         }
+        .sheet(isPresented: $isShowingOnboarding) {
+            RemindersOnboardingSheet()
+        }
         .onAppear {
             now = .now
             normalizeSelection()
             applyPendingFocus()
+            if !hasCompletedOnboarding {
+                isShowingOnboarding = true
+            }
         }
         .onChange(of: focusReminderID) { _, _ in
             applyPendingFocus()

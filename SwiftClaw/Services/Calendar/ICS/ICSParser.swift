@@ -1,9 +1,11 @@
 import Foundation
 
 /// Tolerant RFC 5545 reader: unfolds lines, walks components, extracts the
-/// VEVENT subset SwiftClaw supports, and skips everything it doesn't
-/// recognize (VTIMEZONE, VTODO, X- properties, unknown params) rather than
-/// failing — real-world .ics from Google/Outlook is full of extensions.
+/// VEVENT subset (`parse`) or VTODO subset (`parseTodos`) SwiftClaw supports,
+/// and skips everything it doesn't recognize (VTIMEZONE, X- properties,
+/// unknown params) rather than failing — real-world .ics from Google/Outlook
+/// is full of extensions. The two walks are independent, so a mixed file
+/// yields its events and its to-dos without either affecting the other.
 nonisolated enum ICSParser {
     /// One NAME;PARAM=V;PARAM=V:value content line.
     struct ContentLine {
@@ -30,6 +32,26 @@ nonisolated enum ICSParser {
             }
         }
         return events
+    }
+
+    static func parseTodos(_ text: String) -> [ICSTodoRepresentation] {
+        let lines = unfold(text)
+        var todos: [ICSTodoRepresentation] = []
+
+        var index = 0
+        while index < lines.count {
+            let line = lines[index]
+            if line.name == "BEGIN" && line.value.uppercased() == "VTODO" {
+                let (todo, nextIndex) = parseTodo(lines, from: index + 1)
+                if let todo {
+                    todos.append(todo)
+                }
+                index = nextIndex
+            } else {
+                index += 1
+            }
+        }
+        return todos
     }
 
     // MARK: - VEVENT
@@ -135,6 +157,103 @@ nonisolated enum ICSParser {
             index += 1
         }
         return (nil, index) // ran out of lines without END:VEVENT
+    }
+
+    // MARK: - VTODO
+
+    private static func parseTodo(
+        _ lines: [ContentLine],
+        from startIndex: Int
+    ) -> (ICSTodoRepresentation?, Int) {
+        var uid: String?
+        var title = ""
+        var notes: String?
+        var urlString: String?
+        var due: Date?
+        var isDateOnly = false
+        var timeZoneIdentifier: String?
+        var priority = 0
+        var isFlagged = false
+        var completedAt: Date?
+        var statusCompleted = false
+        var rruleString: String?
+        var afterCompletionRepeat: ReminderAfterCompletionRepeat?
+        var checklist: [ReminderChecklistItem] = []
+
+        var index = startIndex
+        while index < lines.count {
+            let line = lines[index]
+            switch line.name {
+            case "END" where line.value.uppercased() == "VTODO":
+                index += 1
+                guard let uid else { return (nil, index) }
+                var todo = ICSTodoRepresentation(uid: uid)
+                todo.title = title
+                todo.notes = notes
+                todo.urlString = urlString
+                todo.due = due
+                todo.isDateOnly = due != nil && isDateOnly
+                todo.timeZoneIdentifier = isDateOnly ? nil : timeZoneIdentifier
+                todo.priority = priority
+                todo.isFlagged = isFlagged
+                todo.completedAt = completedAt
+                todo.isCompleted = statusCompleted || completedAt != nil
+                todo.rruleString = rruleString
+                todo.afterCompletionRepeat = rruleString == nil ? afterCompletionRepeat : nil
+                todo.checklist = checklist
+                return (todo, index)
+
+            case "BEGIN":
+                // Nested components (VALARM and anything else) — skip whole.
+                index = skipComponent(lines, from: index + 1, component: line.value.uppercased())
+                continue
+
+            case "UID":
+                uid = line.value
+            case "SUMMARY":
+                title = unescapeText(line.value)
+            case "DESCRIPTION":
+                notes = unescapeText(line.value)
+            case "URL":
+                urlString = line.value
+            case "RRULE":
+                rruleString = line.value
+            case "DUE":
+                isDateOnly = line.parameters["VALUE"]?.uppercased() == "DATE"
+                timeZoneIdentifier = line.parameters["TZID"] ?? timeZoneIdentifier
+                due = ICSDateFormat.parse(line.value, timeZoneIdentifier: line.parameters["TZID"], isDateOnly: isDateOnly)
+            case "PRIORITY":
+                priority = min(max(Int(line.value) ?? 0, 0), 9)
+            case "STATUS":
+                statusCompleted = line.value.uppercased() == "COMPLETED"
+            case "COMPLETED":
+                completedAt = ICSDateFormat.parse(line.value, timeZoneIdentifier: line.parameters["TZID"], isDateOnly: false)
+            case "X-SWIFTCLAW-FLAGGED":
+                isFlagged = line.value.uppercased() == "TRUE"
+            case "X-SWIFTCLAW-REPEAT-AFTER":
+                afterCompletionRepeat = parseRepeatAfter(line.value)
+            case "X-SWIFTCLAW-CHECKLIST":
+                checklist.append(ReminderChecklistItem(
+                    id: line.parameters["ID"].flatMap(UUID.init(uuidString:)) ?? UUID(),
+                    text: unescapeText(line.value),
+                    isDone: line.parameters["DONE"]?.uppercased() == "TRUE"
+                ))
+            default:
+                break
+            }
+            index += 1
+        }
+        return (nil, index) // ran out of lines without END:VTODO
+    }
+
+    /// "<count> <unit>" (e.g. "2 week") → after-completion repeat.
+    private static func parseRepeatAfter(_ value: String) -> ReminderAfterCompletionRepeat? {
+        let parts = value.split(separator: " ")
+        guard parts.count == 2,
+              let count = Int(parts[0]), count >= 1,
+              let unit = ReminderAfterCompletionRepeat.Unit(rawValue: String(parts[1]).lowercased())
+        else { return nil }
+        return ReminderAfterCompletionRepeat(count: count, unit: unit)
     }
 
     private static func parseAlarm(

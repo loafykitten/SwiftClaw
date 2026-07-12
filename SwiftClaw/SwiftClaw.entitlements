@@ -10,6 +10,8 @@
 	<true/>
 	<key>com.apple.security.personal-information.calendars</key>
 	<true/>
+	<key>com.apple.security.personal-information.reminders</key>
+	<true/>
 	<!--
 	  CloudKit sync for the calendar store is code-complete but dormant:
 	  personal development teams can't carry iCloud/push entitlements. On a
