@@ -45,9 +45,11 @@ pass on remote-change notifications once sync is live.
   unmappable recurrences to windowed one-offs. Needs the calendars entitlement
   + `NSCalendarsFullAccessUsageDescription` (an `INFOPLIST_KEY_*` build
   setting; Info.plist is generated).
-- `ICSSerializer` / `ICSParser`: in-house minimal RFC 5545 (VEVENT subset,
-  folding/escaping, tolerant parse). All usage funnels through
-  `ICSTransfer.swift` so the backend is swappable. All-day values serialize as
+- `ICSSerializer` / `ICSParser`: in-house minimal RFC 5545 (VEVENT + VTODO
+  subsets — VTODO serves the Reminders subsystem — folding/escaping,
+  tolerant parse; mixed-component files work). All VEVENT usage funnels
+  through `ICSTransfer.swift` (VTODO through the Reminders subsystem's
+  `ICSTodoTransfer.swift`) so the backend is swappable. All-day values serialize as
   floating local dates (`VALUE=DATE`, including EXDATEs — never UTC, which
   would shift the date in non-UTC zones); `RECURRENCE-ID` VEVENTs import as
   detached override rows keyed `uid@detached@<original-start>`, masters first
@@ -66,7 +68,10 @@ popover; week/day (`Grid/CalendarTimelineView`) render frames precomputed by
 the pure `CalendarTimelineLayoutEngine` and support drag-create/move/resize
 (recurring masters and overlay events excluded — edits go through the
 editor's explicit scope prompts). The editor sheet works off a
-`CalendarEventDraft` value; Save is the only write.
+`CalendarEventDraft` value; Save is the only write. When the opt-in
+`settings.reminders.showInCalendar` toggle is on, due-dated reminders render
+as chips in the month grid, all-day strip, and agenda — see
+`docs/features/REMINDERS.md`.
 
 ## Alerts (`Services/Calendar/CalendarAlertScheduler.swift`)
 
@@ -74,7 +79,8 @@ Event alarms become `UNCalendarNotificationTrigger` requests through
 `AppNotificationService` (the service's only scheduled posting path).
 The scheduler reconciles a rolling 7-day window **by fire date** (occurrences
 are expanded a further 28 days out so long-lead alarms still book;
-deterministic identifiers, soonest-first under a 48-request budget) on every
+deterministic identifiers, soonest-first under a 36-request budget — lowered
+from 48 to leave room for reminder alerts under the 64-request system cap) on every
 store save (`.calendarStoreDidChange`), remote change, and a 12 h tick.
 Disabling the notification toggle empties the desired set, so the next
 reconcile *clears* already-booked requests (`settingsDidChange()` triggers one

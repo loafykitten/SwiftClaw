@@ -2,8 +2,9 @@
 
 SwiftUI + SwiftData app (`@main SwiftClawApp`). The schemas and store
 configurations live in `Shared/SwiftClawModelContainerFactory.swift` — a main
-store plus the CloudKit-shaped calendar configuration (see
-`docs/features/CALENDAR.md`). Additive `@Model` changes are covered by
+store plus the CloudKit-shaped calendar configuration, which also holds the
+reminders models (see `docs/features/CALENDAR.md` and
+`docs/features/REMINDERS.md`). Additive `@Model` changes are covered by
 lightweight migration as long as new properties are optional or defaulted — no
 versioned schema needed.
 

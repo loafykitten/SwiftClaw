@@ -17,6 +17,8 @@ this file to stay scannable:
   → `docs/features/EMAIL.md`
 - **The Calendar subsystem** (events/recurrence model, import/export, alerts, review loop, overlay, dormant CloudKit sync)
   → `docs/features/CALENDAR.md`
+- **The Reminders subsystem** (roll-forward recurrence, quick entry, import/export, due-date alerts, review loop, calendar chips)
+  → `docs/features/REMINDERS.md`
 
 ## Working-task memory (`docs/memory/`)
 
