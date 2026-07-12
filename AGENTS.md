@@ -49,9 +49,10 @@ Rule of thumb: `rg`/`fd` to locate, `ast-grep` for surgical multi-file edits, `d
 
 ## Build & Test
 
-- `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build -derivedDataPath /tmp/DerivedData` — app bundle build. Run from the repo root.
-- `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' test -derivedDataPath /tmp/DerivedData` — runs all `SwiftClawTests` suites (Swift Testing). Run from the repo root.
-- To run a single suite: `xcodebuild -scheme SwiftClaw -destination 'platform=macOS' test -derivedDataPath /tmp/DerivedData -only-testing:SwiftClawTests/<SuiteName>`.
+- `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -scheme SwiftClaw -destination 'platform=macOS' build -derivedDataPath /tmp/DerivedData CODE_SIGNING_ALLOWED=NO` — SSH-safe app bundle build. Run from the repo root.
+- `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -scheme SwiftClaw -destination 'platform=macOS' test -derivedDataPath /tmp/DerivedData CODE_SIGNING_ALLOWED=NO` — runs all `SwiftClawTests` suites (Swift Testing). Run from the repo root.
+- To run a single suite: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -scheme SwiftClaw -destination 'platform=macOS' test -derivedDataPath /tmp/DerivedData CODE_SIGNING_ALLOWED=NO -only-testing:SwiftClawTests/<SuiteName>`.
+- The SSH host may have Command Line Tools selected globally. `DEVELOPER_DIR` selects the installed Xcode without changing system settings; unsigned builds avoid requiring a local development certificate.
 - The Xcode project uses `PBXFileSystemSynchronizedRootGroup`, so new files under `SwiftClaw/` are picked up automatically.
 - Piping through `xcbeautify --quiet` makes the `xcodebuild` output readable.
 - No linter — the Swift 6 strict-concurrency checker (`-swift-version 6`) is the static-analysis gate.
