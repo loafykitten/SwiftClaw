@@ -48,20 +48,34 @@ accessibility labels, the empty state, and cancel-without-write. The UI
 automation connection dropped during deeper editor interaction while the app
 remained running with no crash in its logs.
 
+**Phase 3 (NL quick entry) implemented and reviewed** —
+`ReminderQuickEntryService` mirrors `CalendarQuickEntryService` (injectable
+`completeProvider`, `.standalone`, strict JSON: title/due/has_time/list/
+priority/rrule/repeat_after) but degrades instead of throwing where reminders
+allow it: no due date is valid, a repeat without a due date is dropped so the
+draft stays saveable, and an unmatched/omitted list stays nil (editor applies
+the default; quick entry inherits the open user list). Quick entry bar sits
+above the panes in `RemindersView`; any failure falls back to the manual
+editor with the phrase as the title. Codex review (gpt-5.6-sol, after
+`brew upgrade codex` → 0.144.1 — the gpt-5.5 workaround is obsolete) found
+three valid P2s, all fixed with regression tests: blank parsed title now
+throws (preserves the typed phrase), `has_time: true` with an offset-less
+timestamp parses as local time (never downgrades to date-only; unreadable →
+dateless), and impossible dates like 2026-02-30 are rejected by round-trip
+validation instead of Calendar-normalized. 15 suite tests; full macOS suite
+green.
+
 ## Next steps
 
-1. Phase 3: NL quick entry (`ReminderQuickEntryService`) and wire the
-   `RemindersView` entry field to the existing `.quickEntry(ReminderDraft)`
-   editor seam.
-2. Phase 4: `ReminderAlertScheduler` + `Kind.reminder` routing
+1. Phase 4: `ReminderAlertScheduler` + `Kind.reminder` routing
    (**lower calendar budget 48→36, reminders 12**).
-3. Phase 5: Apple Reminders EventKit import + VTODO ICS + onboarding hook/sheet
+2. Phase 5: Apple Reminders EventKit import + VTODO ICS + onboarding hook/sheet
    + entitlement/INFOPLIST key.
-4. Phase 6: AI review loop (`ReviewType.reminders` already exists; replace
+3. Phase 6: AI review loop (`ReviewType.reminders` already exists; replace
    placeholder branch at `ReviewCardRendererRegistry` line ~42).
-5. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
+4. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
    `EventOccurrence`) + `WorkspaceRemindersSummary` tile.
-6. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
+5. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
    final commit.
 
 ## Decisions & constraints
@@ -101,4 +115,5 @@ remained running with no crash in its logs.
 - `SwiftClaw/Features/Reminders/` — smart/user-list sidebar, list detail and rows, list management, and draft-backed editor/checklist/repeat controls.
 - `SwiftClaw/Settings/Sections/RemindersSettingsView.swift`, `SwiftClaw/Settings/AppSettings.swift` — feature toggle, default-list preference, and future onboarding key.
 - `SwiftClaw/ContentView.swift`, `SwiftClaw/Shared/AppBootstrap.swift` — sync coordinator lifecycle wiring.
-- `SwiftClawTests/Reminders/` — foundation plus `ReminderDraftTests` and `ReminderSmartListTests`; all five suites green.
+- `SwiftClaw/Features/Reminders/QuickEntry/ReminderQuickEntryService.swift` — NL quick entry parsing into a `ReminderDraft`; `RemindersView` grew the entry bar + fallback.
+- `SwiftClawTests/Reminders/` — foundation plus `ReminderDraftTests`, `ReminderSmartListTests`, and `ReminderQuickEntryServiceTests`; all six suites green.

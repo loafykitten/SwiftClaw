@@ -13,6 +13,9 @@ struct RemindersView: View {
     @State private var selection: ReminderListDetailView.Selection? = .smart(.today)
     @State private var editorRequest: ReminderEditorRequest?
     @State private var isShowingListPopover = false
+    @State private var quickEntryText = ""
+    @State private var isParsingQuickEntry = false
+    @State private var quickEntryService = ReminderQuickEntryService()
     /// Re-evaluated on save/appear so "Today" boundaries stay honest in a
     /// long-lived window.
     @State private var now: Date = .now
@@ -22,11 +25,15 @@ struct RemindersView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-                .frame(width: 210)
+        VStack(spacing: 0) {
+            quickEntryBar
             Divider()
-            detail
+            HStack(spacing: 0) {
+                sidebar
+                    .frame(width: 210)
+                Divider()
+                detail
+            }
         }
         .toolbar { toolbarContent }
         .background { shortcutButtons }
@@ -140,6 +147,74 @@ struct RemindersView: View {
                 description: Text("Choose a smart view or list from the sidebar.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    // MARK: - Quick entry
+
+    /// Natural-language quick entry: type a phrase, ⏎, review the parsed
+    /// draft in the editor, save. Parsing failures fall back to a blank
+    /// editor carrying the phrase as the title — typing is never lost.
+    /// Lives in a slim bar above the panes, not the toolbar — a text field
+    /// wide enough to type in would push every toolbar control into the
+    /// overflow menu at normal window widths.
+    private var quickEntryBar: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                if isParsingQuickEntry {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "sparkles")
+                        .font(.caption)
+                        .foregroundStyle(.tint)
+                }
+                TextField("New reminder in plain words — “Email Priya tomorrow 9am”", text: $quickEntryText)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .onSubmit(submitQuickEntry)
+                    .disabled(isParsingQuickEntry)
+                    .accessibilityLabel("New reminder in plain words")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(.quaternary.opacity(0.5), in: Capsule())
+            .frame(maxWidth: 460)
+            .help("The model fills in the reminder for you to confirm before saving.")
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
+    private func submitQuickEntry() {
+        let phrase = quickEntryText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !phrase.isEmpty, !isParsingQuickEntry else { return }
+        isParsingQuickEntry = true
+        let listOptions = visibleLists.map { (id: $0.id, name: $0.name) }
+        let contextListID: UUID? = switch selection {
+        case .list(let id): id
+        default: nil
+        }
+        Task {
+            defer { isParsingQuickEntry = false }
+            do {
+                var draft = try await quickEntryService.draft(from: phrase, lists: listOptions)
+                // An unmatched list inherits the open list; the editor applies
+                // the default when that's nil too.
+                if draft.listID == nil {
+                    draft.listID = contextListID
+                }
+                quickEntryText = ""
+                editorRequest = .quickEntry(draft)
+            } catch {
+                // Fall back to the manual editor with the phrase preserved.
+                var draft = ReminderDraft(newAt: nil, listID: contextListID)
+                draft.title = phrase
+                quickEntryText = ""
+                editorRequest = .quickEntry(draft)
+            }
         }
     }
 
