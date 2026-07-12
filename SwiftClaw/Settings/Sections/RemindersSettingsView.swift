@@ -8,6 +8,8 @@ struct RemindersSettingsView: View {
     @AppStorage(SettingsKeys.remindersDefaultListID) private var defaultListIDString = ""
     @AppStorage(SettingsKeys.remindersReviewIntervalSeconds)
     private var reviewIntervalSeconds = SettingsStorage.defaultRemindersReviewIntervalSeconds
+    @AppStorage(SettingsKeys.remindersShowInCalendar)
+    private var isShownInCalendar = SettingsStorage.defaultRemindersShowInCalendar
     @Query(sort: \ReminderList.sortOrder) private var lists: [ReminderList]
 
     @State private var isShowingAppleImport = false
@@ -43,6 +45,12 @@ struct RemindersSettingsView: View {
                             .tag(list.id.uuidString)
                         }
                     }
+                }
+
+                Section {
+                    Toggle("Show in Calendar", isOn: $isShownInCalendar)
+                } footer: {
+                    Text("Due reminders appear on their day in the Calendar views. Overdue reminders stay on today until completed.")
                 }
 
                 Section {

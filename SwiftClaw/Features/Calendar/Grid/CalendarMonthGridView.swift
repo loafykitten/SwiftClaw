@@ -11,6 +11,9 @@ struct CalendarMonthGridView: View {
     let onCreate: (Date) -> Void
     let onSelectOccurrence: (EventOccurrence) -> Void
     let onDeleteOccurrence: (EventOccurrence) -> Void
+    var reminderItems: [ReminderCalendarItem] = []
+    var onSelectReminder: (ReminderCalendarItem) -> Void = { _ in }
+    var onCompleteReminder: (ReminderCalendarItem) -> Void = { _ in }
 
     @State private var overflowDay: Date?
 
@@ -34,6 +37,10 @@ struct CalendarMonthGridView: View {
             }
         }
         return byDay
+    }
+
+    private var remindersByDay: [Date: [ReminderCalendarItem]] {
+        Dictionary(grouping: reminderItems, by: \.day)
     }
 
     var body: some View {
@@ -76,7 +83,11 @@ struct CalendarMonthGridView: View {
     @ViewBuilder
     private func dayCell(_ day: CalendarMonthMath.Day) -> some View {
         let dayOccurrences = occurrencesByDay[day.date] ?? []
-        let overflowCount = max(0, dayOccurrences.count - Self.maxChipsPerCell)
+        let dayReminders = remindersByDay[day.date] ?? []
+        // Events and reminders share the cell's chip budget; events lead
+        // because they structure the day.
+        let reminderSlots = max(0, Self.maxChipsPerCell - dayOccurrences.count)
+        let overflowCount = max(0, dayOccurrences.count + dayReminders.count - Self.maxChipsPerCell)
 
         VStack(alignment: .leading, spacing: 3) {
             Text(calendar.component(.day, from: day.date), format: .number)
@@ -98,6 +109,13 @@ struct CalendarMonthGridView: View {
                     .contextMenu { chipMenu(occurrence) }
             }
 
+            ForEach(dayReminders.prefix(reminderSlots)) { item in
+                ReminderCalendarChipView(item: item)
+                    .opacity(day.isInMonth ? 1 : 0.45)
+                    .onTapGesture { onSelectReminder(item) }
+                    .contextMenu { reminderMenu(item) }
+            }
+
             if overflowCount > 0 {
                 Button {
                     overflowDay = day.date
@@ -113,7 +131,7 @@ struct CalendarMonthGridView: View {
                         set: { if !$0 { overflowDay = nil } }
                     )
                 ) {
-                    overflowList(day: day.date, occurrences: dayOccurrences)
+                    overflowList(day: day.date, occurrences: dayOccurrences, reminders: dayReminders)
                 }
             }
 
@@ -130,7 +148,11 @@ struct CalendarMonthGridView: View {
         day.isInMonth ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary)
     }
 
-    private func overflowList(day: Date, occurrences: [EventOccurrence]) -> some View {
+    private func overflowList(
+        day: Date,
+        occurrences: [EventOccurrence],
+        reminders: [ReminderCalendarItem]
+    ) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 4) {
                 Text(day, format: .dateTime.weekday(.wide).month().day())
@@ -144,6 +166,14 @@ struct CalendarMonthGridView: View {
                         }
                         .contextMenu { chipMenu(occurrence) }
                 }
+                ForEach(reminders) { item in
+                    ReminderCalendarChipView(item: item, showsTime: true)
+                        .onTapGesture {
+                            overflowDay = nil
+                            onSelectReminder(item)
+                        }
+                        .contextMenu { reminderMenu(item) }
+                }
             }
             .padding(12)
         }
@@ -154,5 +184,11 @@ struct CalendarMonthGridView: View {
     private func chipMenu(_ occurrence: EventOccurrence) -> some View {
         Button("Edit") { onSelectOccurrence(occurrence) }
         Button("Delete", role: .destructive) { onDeleteOccurrence(occurrence) }
+    }
+
+    @ViewBuilder
+    private func reminderMenu(_ item: ReminderCalendarItem) -> some View {
+        Button("Mark Completed") { onCompleteReminder(item) }
+        Button("Open in Reminders") { onSelectReminder(item) }
     }
 }

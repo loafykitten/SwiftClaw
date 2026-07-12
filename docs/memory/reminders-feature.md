@@ -121,11 +121,32 @@ through `AppRouter.showReminders(focusing:)`, refresh re-runs
 `reviewNow(appendingTo:)`. Lifecycle wired in AppBootstrap + ContentView
 alongside the sync coordinator and alert scheduler.
 
+**Phase 7 (calendar chips + Workspace tile) implemented and reviewed** — new
+`ReminderCalendarItem`/`ReminderCalendarItemBuilder` (parallel to
+`EventOccurrence`/`CalendarOccurrenceBuilder`; one item per pending master, no
+expansion; overdue rolls forward to render on today, Today-smart-list style;
+respects `ReminderList.isVisible`). Opt-in via new default-off
+`settings.reminders.showInCalendar` key (toggle in Reminders Settings) AND the
+reminders feature toggle. `ReminderCalendarChipView` (open-circle icon,
+list-colored, red overdue detail) renders in the month grid (shared per-cell
+chip budget + overflow popover), timeline all-day strip, and agenda sections
+(agenda rows get a complete-in-place circle button). Tap →
+`AppRouter.shared.showReminders(focusing:)`; context menu Mark Completed goes
+through `ReminderRepository.complete` so recurrence rolls forward. Workspace
+tile: pure `WorkspaceRemindersSummary` (Today incl. overdue / Overdue / This
+Week / Flagged + next timed deadline footer) + `WorkspaceRemindersStatsView`
+in the panel switch. Codex review (gpt-5.6-sol — NOTE: ~/.codex/config.toml
+now defaults to gpt-5.6-terra, so pass `-m gpt-5.6-sol` explicitly) found
+three valid P2s, all fixed: the agenda's fixed 30×24h window leaked a partial
+31st day across spring DST (now calendar-day arithmetic, DST regression test
+added), and both the calendar chips and the Workspace tile sampled `now` only
+on re-render, so deadlines/midnight never moved overdue state while a window
+sat open (both now tick via `TimelineView(.everyMinute)`). Two new suites
+(builder + summary); full macOS suite green.
+
 ## Next steps
 
-1. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
-   `EventOccurrence`) + `WorkspaceRemindersSummary` tile.
-2. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
+1. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
    final commit.
 
 ## Decisions & constraints
@@ -169,4 +190,5 @@ alongside the sync coordinator and alert scheduler.
 - `SwiftClaw/Services/Reminders/ReminderAlertScheduler.swift` — due-date alert reconciliation; `AppNotificationService`/`NotificationRoutingPayload` grew the reminder posting path, `Kind.reminder`, and fingerprinted identifiers; `AppRouter`/`WorkspaceView`/`RemindersView` thread `pendingReminderFocusID`; `NotificationSettingsView` has the toggle + all-day time picker; calendar budget now 36.
 - `SwiftClaw/Services/Reminders/Import/`, `Features/Reminders/Import/` — EventKit mapping/import, list picker, and first-open onboarding; Reminders Settings now exposes repeatable Apple/ICS import and per-list export; permission strings and the Reminders entitlement are wired for both build configurations.
 - `SwiftClaw/Services/Reminders/ICS/`, `Services/Calendar/ICS/` — neutral VTODO representation, store transfer, and shared parser/serializer support for standard to-do fields plus SwiftClaw round-trip extensions.
-- `SwiftClawTests/Reminders/` — foundation, UI/service phases, alert scheduling, EventKit import mapping/application, and VTODO round trips; all ten suites green.
+- `SwiftClaw/Services/Reminders/ReminderCalendarItem.swift`, `Features/Calendar/Grid/ReminderCalendarChipView.swift` — calendar-chip value type/builder + pill view; `CalendarView` queries reminders and threads items/handlers into the month grid, timeline all-day strip, and agenda; `Features/Workspace/WorkspaceRemindersSummary.swift` + stats view in `WorkspaceView`; `settings.reminders.showInCalendar` key/helper + toggle in Reminders Settings.
+- `SwiftClawTests/Reminders/` — foundation, UI/service phases, alert scheduling, EventKit import mapping/application, VTODO round trips, calendar-item builder, and Workspace summary; all twelve suites green.

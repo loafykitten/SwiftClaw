@@ -23,6 +23,11 @@ struct CalendarTimelineView: View {
     let onCreate: (Date, Date) -> Void
     let onMove: (EventOccurrence, Date) -> Void
     let onResize: (EventOccurrence, Date) -> Void
+    /// Reminders render in the all-day strip (they have no duration, so the
+    /// hour grid has nowhere honest to put them), timed ones with their time.
+    var reminderItems: [ReminderCalendarItem] = []
+    var onSelectReminder: (ReminderCalendarItem) -> Void = { _ in }
+    var onCompleteReminder: (ReminderCalendarItem) -> Void = { _ in }
 
     /// Floor for the hour row height; tall windows stretch hours further so
     /// the day fills the viewport instead of leaving dead space below 11 PM.
@@ -99,7 +104,7 @@ struct CalendarTimelineView: View {
     @ViewBuilder
     private var allDayRow: some View {
         let allDay = occurrences.filter(\.isAllDay)
-        if !allDay.isEmpty {
+        if !allDay.isEmpty || !reminderItems.isEmpty {
             HStack(alignment: .top, spacing: 0) {
                 Text("all-day")
                     .font(.caption2)
@@ -117,6 +122,14 @@ struct CalendarTimelineView: View {
                                 .contextMenu {
                                     Button("Edit") { onSelectOccurrence(occurrence) }
                                     Button("Delete", role: .destructive) { onDeleteOccurrence(occurrence) }
+                                }
+                        }
+                        ForEach(reminderItems.filter { calendar.isDate($0.day, inSameDayAs: day) }) { item in
+                            ReminderCalendarChipView(item: item, showsTime: true)
+                                .onTapGesture { onSelectReminder(item) }
+                                .contextMenu {
+                                    Button("Mark Completed") { onCompleteReminder(item) }
+                                    Button("Open in Reminders") { onSelectReminder(item) }
                                 }
                         }
                     }

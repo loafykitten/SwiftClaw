@@ -290,6 +290,8 @@ private struct WorkspaceWidgetPanel: View {
                 WorkspaceEmailStatsView(summary: emailContent.summary)
             case .calendar:
                 WorkspaceCalendarStatsView()
+            case .reminders:
+                WorkspaceRemindersStatsView()
             default:
                 Text("Coming soon")
                     .font(.subheadline)
@@ -352,6 +354,61 @@ private struct WorkspaceCalendarStatsView: View {
                     }
                 } else {
                     Text("Nothing scheduled this week")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Reminders widget body: today / overdue / week / flagged counts plus a
+/// "next deadline" footer. `@Query` keeps it live as reminders change; the
+/// summary itself is the testable `WorkspaceRemindersSummary`.
+private struct WorkspaceRemindersStatsView: View {
+    @Query private var reminders: [Reminder]
+
+    var body: some View {
+        // Minute ticks keep the counts honest while Workspace sits open —
+        // deadlines cross into Overdue (and Today rolls at midnight) without
+        // waiting for a store change to re-render.
+        TimelineView(.everyMinute) { timeline in
+            stats(now: timeline.date)
+        }
+    }
+
+    private func stats(now: Date) -> some View {
+        let summary = WorkspaceRemindersSummary(
+            reminders: reminders,
+            now: now,
+            calendar: .current
+        )
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                GridRow(alignment: .firstTextBaseline) {
+                    WorkspaceEmailStatTile(count: summary.todayCount, label: "Today")
+                    WorkspaceEmailStatTile(count: summary.overdueCount, label: "Overdue")
+                }
+                GridRow(alignment: .firstTextBaseline) {
+                    WorkspaceEmailStatTile(count: summary.weekCount, label: "This Week")
+                    WorkspaceEmailStatTile(count: summary.flaggedCount, label: "Flagged")
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                if let next = summary.nextReminder {
+                    Text(next.title)
+                        .lineLimit(1)
+                    if next.due > now {
+                        Text("due in \(Text(next.due, style: .relative))")
+                    } else {
+                        Text("due now")
+                    }
+                } else if summary.todayCount > 0 {
+                    Text("\(summary.todayCount) to finish today")
+                } else {
+                    Text("Nothing due soon")
                 }
             }
             .font(.caption)

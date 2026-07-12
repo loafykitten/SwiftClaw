@@ -7,15 +7,26 @@ struct CalendarAgendaListView: View {
     let calendar: Calendar
     let onSelectOccurrence: (EventOccurrence) -> Void
     let onDeleteOccurrence: (EventOccurrence) -> Void
+    var reminderItems: [ReminderCalendarItem] = []
+    var onSelectReminder: (ReminderCalendarItem) -> Void = { _ in }
+    var onCompleteReminder: (ReminderCalendarItem) -> Void = { _ in }
 
-    private var groupedDays: [(day: Date, occurrences: [EventOccurrence])] {
-        Dictionary(grouping: occurrences) { calendar.startOfDay(for: $0.start) }
-            .sorted { $0.key < $1.key }
-            .map { (day: $0.key, occurrences: $0.value.sorted { $0.start < $1.start }) }
+    private var groupedDays: [(day: Date, occurrences: [EventOccurrence], reminders: [ReminderCalendarItem])] {
+        let occurrencesByDay = Dictionary(grouping: occurrences) { calendar.startOfDay(for: $0.start) }
+        let remindersByDay = Dictionary(grouping: reminderItems, by: \.day)
+        return Set(occurrencesByDay.keys).union(remindersByDay.keys)
+            .sorted()
+            .map { day in
+                (
+                    day: day,
+                    occurrences: (occurrencesByDay[day] ?? []).sorted { $0.start < $1.start },
+                    reminders: remindersByDay[day] ?? []
+                )
+            }
     }
 
     var body: some View {
-        if occurrences.isEmpty {
+        if occurrences.isEmpty && reminderItems.isEmpty {
             ContentUnavailableView(
                 "No Upcoming Events",
                 systemImage: "calendar",
@@ -27,6 +38,9 @@ struct CalendarAgendaListView: View {
                     Section {
                         ForEach(group.occurrences) { occurrence in
                             row(occurrence)
+                        }
+                        ForEach(group.reminders) { item in
+                            reminderRow(item)
                         }
                     } header: {
                         Text(sectionTitle(for: group.day))
@@ -65,6 +79,60 @@ struct CalendarAgendaListView: View {
             Button("Edit") { onSelectOccurrence(occurrence) }
             Button("Delete", role: .destructive) { onDeleteOccurrence(occurrence) }
         }
+    }
+
+    /// A reminder in the agenda: the leading circle completes it in place
+    /// (the row is gone on the next render — done is done); the rest of the
+    /// row opens it in Reminders.
+    private func reminderRow(_ item: ReminderCalendarItem) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                onCompleteReminder(item)
+            } label: {
+                Image(systemName: "circle")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Color(calendarHex: item.colorHex))
+            }
+            .buttonStyle(.plain)
+            .help("Mark Completed")
+            .accessibilityLabel("Mark \(item.title) completed")
+
+            Button {
+                onSelectReminder(item)
+            } label: {
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(item.title.isEmpty ? "New Reminder" : item.title)
+                            .font(.body)
+                            .lineLimit(1)
+                        Text(reminderTimeLabel(item))
+                            .font(.caption)
+                            .foregroundStyle(item.isOverdue ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                            .monospacedDigit()
+                    }
+
+                    Spacer(minLength: 0)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        }
+        .contextMenu {
+            Button("Mark Completed") { onCompleteReminder(item) }
+            Button("Open in Reminders") { onSelectReminder(item) }
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func reminderTimeLabel(_ item: ReminderCalendarItem) -> String {
+        if item.isOverdue && !calendar.isDate(item.due, inSameDayAs: item.day) {
+            return "Overdue — was due \(item.due.formatted(.dateTime.month(.abbreviated).day()))"
+        }
+        if item.hasDueTime {
+            let time = item.due.formatted(date: .omitted, time: .shortened)
+            return item.isOverdue ? "Overdue — was due \(time)" : "Due \(time)"
+        }
+        return "Any time"
     }
 
     private func timeLabel(_ occurrence: EventOccurrence) -> String {

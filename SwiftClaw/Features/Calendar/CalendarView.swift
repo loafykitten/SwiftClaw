@@ -17,12 +17,16 @@ struct CalendarView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var events: [CalendarEvent]
     @Query(sort: \UserCalendar.sortOrder) private var calendars: [UserCalendar]
+    @Query private var reminders: [Reminder]
 
     @State private var displayMode: DisplayMode = .month
     @State private var anchorDate: Date = .now
     @State private var editorRequest: CalendarEditorRequest?
     @AppStorage(SettingsKeys.calendarHasCompletedOnboarding) private var hasCompletedOnboarding = false
     @AppStorage(SettingsKeys.calendarOverlayEnabled) private var isOverlayEnabled = SettingsStorage.defaultCalendarOverlayEnabled
+    @AppStorage(SettingsKeys.remindersEnabled) private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
+    @AppStorage(SettingsKeys.remindersShowInCalendar)
+    private var isShowingReminders = SettingsStorage.defaultRemindersShowInCalendar
     @State private var isShowingOnboarding = false
     @State private var quickEntryText = ""
     @State private var isParsingQuickEntry = false
@@ -43,7 +47,12 @@ struct CalendarView: View {
         VStack(spacing: 0) {
             quickEntryBar
             Divider()
-            content
+            // Minute ticks keep time-derived state honest while the window
+            // sits open: reminder chips cross into overdue (and roll forward
+            // at midnight) without waiting for a store change to re-render.
+            TimelineView(.everyMinute) { timeline in
+                content(now: timeline.date)
+            }
         }
             .toolbar { toolbarContent }
             .navigationSubtitle(periodTitle)
@@ -125,7 +134,7 @@ struct CalendarView: View {
     // MARK: - Content
 
     @ViewBuilder
-    private var content: some View {
+    private func content(now: Date) -> some View {
         // Reading `changeVersion` makes the body re-evaluate when the Apple
         // Calendar database changes while the overlay is on.
         let overlayVersion = CalendarOverlayProvider.shared.changeVersion
@@ -135,6 +144,9 @@ struct CalendarView: View {
             ? (native + CalendarOverlayProvider.shared.occurrences(in: visibleInterval))
                 .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
             : native
+        let reminderItems: [ReminderCalendarItem] = isRemindersEnabled && isShowingReminders
+            ? ReminderCalendarItemBuilder.items(from: reminders, in: visibleInterval, now: now, calendar: calendar)
+            : []
         switch displayMode {
         case .month:
             CalendarMonthGridView(
@@ -149,7 +161,10 @@ struct CalendarView: View {
                     editorRequest = .new(start: day, isAllDay: true)
                 },
                 onSelectOccurrence: requestEdit,
-                onDeleteOccurrence: requestDelete
+                onDeleteOccurrence: requestDelete,
+                reminderItems: reminderItems,
+                onSelectReminder: openReminder,
+                onCompleteReminder: completeReminder
             )
         case .week, .day:
             CalendarTimelineView(
@@ -163,14 +178,20 @@ struct CalendarView: View {
                     editorRequest = .newTimed(start: start, end: end)
                 },
                 onMove: moveOccurrence,
-                onResize: resizeOccurrence
+                onResize: resizeOccurrence,
+                reminderItems: reminderItems,
+                onSelectReminder: openReminder,
+                onCompleteReminder: completeReminder
             )
         case .agenda:
             CalendarAgendaListView(
                 occurrences: occurrences,
                 calendar: calendar,
                 onSelectOccurrence: requestEdit,
-                onDeleteOccurrence: requestDelete
+                onDeleteOccurrence: requestDelete,
+                reminderItems: reminderItems,
+                onSelectReminder: openReminder,
+                onCompleteReminder: completeReminder
             )
         }
     }
@@ -318,8 +339,12 @@ struct CalendarView: View {
             return calendar.dateInterval(of: .day, for: anchorDate)
                 ?? DateInterval(start: anchorDate, duration: 24 * 3600)
         case .agenda:
+            // Calendar-day arithmetic: a fixed 30 × 24h duration would end
+            // mid-morning after a DST transition and leak a 31st day.
             let start = calendar.startOfDay(for: anchorDate)
-            return DateInterval(start: start, duration: 30 * 24 * 3600)
+            let end = calendar.date(byAdding: .day, value: 30, to: start)
+                ?? start.addingTimeInterval(30 * 24 * 3600)
+            return DateInterval(start: start, end: end)
         }
     }
 
@@ -433,11 +458,26 @@ struct CalendarView: View {
         event.endDate = newEnd
         repository.noteUpdated(event)
     }
+
+    // Reminder chips are a window into another feature: opening routes to the
+    // Reminders view (their editor lives there), completing goes through the
+    // reminder repository so recurrence rolls forward exactly as it would
+    // from a Reminders row.
+
+    private func openReminder(_ item: ReminderCalendarItem) {
+        AppRouter.shared.showReminders(focusing: item.reminderID)
+    }
+
+    private func completeReminder(_ item: ReminderCalendarItem) {
+        let reminderRepository = ReminderRepository(modelContext: modelContext)
+        guard let reminder = reminderRepository.reminder(withID: item.reminderID) else { return }
+        reminderRepository.complete(reminder)
+    }
 }
 
 #Preview {
     NavigationStack {
         CalendarView()
     }
-    .modelContainer(for: [CalendarEvent.self, UserCalendar.self], inMemory: true)
+    .modelContainer(for: [CalendarEvent.self, UserCalendar.self, Reminder.self, ReminderList.self], inMemory: true)
 }

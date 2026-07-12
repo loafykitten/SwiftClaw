@@ -165,6 +165,8 @@ extension SettingsKeys {
     static let remindersReviewIntervalSeconds = "settings.reminders.reviewIntervalSeconds"
     /// App state: when the last reminders review pass completed.
     static let remindersLastReviewCompletedAt = "settings.reminders.lastReviewCompletedAt"
+    /// Whether pending due reminders render as chips in the Calendar views.
+    static let remindersShowInCalendar = "settings.reminders.showInCalendar"
 }
 
 // MARK: - Notification keys
@@ -1118,6 +1120,16 @@ enum SettingsStorage {
         } else {
             userDefaults.removeObject(forKey: SettingsKeys.remindersDefaultListID)
         }
+    }
+
+    static let defaultRemindersShowInCalendar = false
+
+    static func areRemindersShownInCalendar(userDefaults: UserDefaults = .standard) -> Bool {
+        boolSetting(
+            forKey: SettingsKeys.remindersShowInCalendar,
+            defaultValue: defaultRemindersShowInCalendar,
+            userDefaults: userDefaults
+        )
     }
 
     static let defaultRemindersReviewIntervalSeconds = 24 * 3600
