@@ -24,6 +24,10 @@ struct NotificationSettingsView: View {
     private var chatRepliesEnabled = SettingsStorage.defaultChatReplyNotificationsEnabled
     @AppStorage(SettingsKeys.notificationsCalendarAlertsEnabled)
     private var calendarAlertsEnabled = SettingsStorage.defaultCalendarAlertNotificationsEnabled
+    @AppStorage(SettingsKeys.notificationsReminderAlertsEnabled)
+    private var reminderAlertsEnabled = SettingsStorage.defaultReminderAlertNotificationsEnabled
+    @AppStorage(SettingsKeys.remindersAllDayAlertMinutes)
+    private var remindersAllDayAlertMinutes = SettingsStorage.defaultRemindersAllDayAlertMinutes
 
     private var isDenied: Bool {
         notificationService.authorizationStatus == .denied
@@ -47,6 +51,14 @@ struct NotificationSettingsView: View {
                 Toggle("Inbox review results", isOn: $reviewResultsEnabled)
                 Toggle("Chat replies", isOn: $chatRepliesEnabled)
                 Toggle("Calendar event alerts", isOn: $calendarAlertsEnabled)
+                Toggle("Reminder alerts", isOn: $reminderAlertsEnabled)
+                if reminderAlertsEnabled {
+                    DatePicker(
+                        "Time for reminders without a due time",
+                        selection: allDayAlertTimeBinding,
+                        displayedComponents: .hourAndMinute
+                    )
+                }
             } header: {
                 Text("Notify about")
             }
@@ -55,6 +67,7 @@ struct NotificationSettingsView: View {
         .formStyle(.grouped)
         .onChange(of: notificationsEnabled) { _, isOn in
             CalendarAlertScheduler.shared.settingsDidChange()
+            ReminderAlertScheduler.shared.settingsDidChange()
             guard isOn else { return }
             Task {
                 await notificationService.enableNotifications()
@@ -65,12 +78,38 @@ struct NotificationSettingsView: View {
             // already-booked requests instead of letting them fire.
             CalendarAlertScheduler.shared.settingsDidChange()
         }
+        .onChange(of: reminderAlertsEnabled) {
+            ReminderAlertScheduler.shared.settingsDidChange()
+        }
+        .onChange(of: remindersAllDayAlertMinutes) {
+            // Date-only fire dates derive from this time; rebook them.
+            ReminderAlertScheduler.shared.settingsDidChange()
+        }
         .onAppear {
             Task { await notificationService.refreshAuthorizationStatus() }
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
             Task { await notificationService.refreshAuthorizationStatus() }
+        }
+    }
+
+    /// Bridges the minutes-after-midnight setting to the hour-and-minute
+    /// `DatePicker`; the anchor day is irrelevant, only the wall-clock time
+    /// is stored. Built from calendar components (not elapsed seconds after
+    /// midnight) so a DST transition day can't shift the displayed time.
+    private var allDayAlertTimeBinding: Binding<Date> {
+        Binding {
+            let calendar = Calendar.current
+            return calendar.date(
+                bySettingHour: remindersAllDayAlertMinutes / 60,
+                minute: remindersAllDayAlertMinutes % 60,
+                second: 0,
+                of: .now
+            ) ?? calendar.startOfDay(for: .now)
+        } set: { newValue in
+            let components = Calendar.current.dateComponents([.hour, .minute], from: newValue)
+            remindersAllDayAlertMinutes = (components.hour ?? 0) * 60 + (components.minute ?? 0)
         }
     }
 

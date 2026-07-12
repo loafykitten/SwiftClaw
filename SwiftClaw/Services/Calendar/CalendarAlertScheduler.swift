@@ -24,8 +24,9 @@ final class CalendarAlertScheduler {
     /// inside the horizon still get considered.
     static let maximumAlarmLeadTime: TimeInterval = 28 * 24 * 3600
     /// Booked-alarm budget (iOS caps pending requests at 64 app-wide; leave
-    /// room for the immediate notifications).
-    static let maximumPendingAlerts = 48
+    /// room for `ReminderAlertScheduler`'s 12 plus the immediate
+    /// notifications).
+    static let maximumPendingAlerts = 36
     private static let refreshInterval: Duration = .seconds(12 * 3600)
     private static let debounceInterval: Duration = .seconds(2)
 

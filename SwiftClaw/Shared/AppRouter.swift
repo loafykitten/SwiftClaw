@@ -20,6 +20,9 @@ final class AppRouter {
     /// Set when a calendar-event alert is tapped: Workspace navigates to the
     /// Calendar view, then clears it.
     var pendingCalendarFocus = false
+    /// Set when a reminder alert is tapped: Workspace navigates to the
+    /// Reminders view (selecting the reminder's list), then clears it.
+    var pendingReminderFocusID: UUID?
 
     @ObservationIgnored private var notificationObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var notificationBridgeUseCount = 0
@@ -88,6 +91,15 @@ final class AppRouter {
 
     func clearPendingCalendarFocus() {
         pendingCalendarFocus = false
+    }
+
+    func showReminders(focusing reminderID: UUID) {
+        pendingReminderFocusID = reminderID
+        selectedNavigationItem = .workspace
+    }
+
+    func clearPendingReminderFocus() {
+        pendingReminderFocusID = nil
     }
 
     func openSettings(section: SettingsSection? = nil, highlightingToolsFeature feature: WorkspaceFeature? = nil) {
@@ -198,6 +210,8 @@ final class AppRouter {
         pendingToolsFeatureHighlight = nil
         unreadChatIDs.removeAll()
         pendingEmailViewID = nil
+        pendingCalendarFocus = false
+        pendingReminderFocusID = nil
         self.unreadStore = unreadStore
         syncDockBadge()
     }

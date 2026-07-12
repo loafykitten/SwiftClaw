@@ -6,6 +6,11 @@ import SwiftData
 /// pane, one editor sheet; no boards, no badges competing for attention.
 /// ⌘N creates a reminder in the current context.
 struct RemindersView: View {
+    /// Reminder routed in from a notification tap; the view selects the pane
+    /// containing it and reports back so the router clears the focus.
+    var focusReminderID: UUID?
+    var onFocusHandled: () -> Void = {}
+
     @Environment(\.modelContext) private var modelContext
     @Query private var reminders: [Reminder]
     @Query(sort: \ReminderList.sortOrder) private var lists: [ReminderList]
@@ -43,6 +48,10 @@ struct RemindersView: View {
         .onAppear {
             now = .now
             normalizeSelection()
+            applyPendingFocus()
+        }
+        .onChange(of: focusReminderID) { _, _ in
+            applyPendingFocus()
         }
         .onChange(of: visibleLists.map(\.id)) { _, _ in
             normalizeSelection()
@@ -307,6 +316,23 @@ struct RemindersView: View {
     private func normalizeSelection() {
         let visibleIDs = Set(visibleLists.map(\.id))
         if selection?.isAvailable(visibleListIDs: visibleIDs) != true {
+            selection = .smart(.today)
+        }
+    }
+
+    /// Selects the pane holding the notification-tapped reminder: its list
+    /// when visible, otherwise Today (which includes everything due or
+    /// overdue — the only reminders that fire alerts). Always reports the
+    /// focus handled so a stale ID can't re-trigger later.
+    private func applyPendingFocus() {
+        guard let focusReminderID else { return }
+        defer { onFocusHandled() }
+        guard let reminder = activeReminders.first(where: { $0.id == focusReminderID }) else {
+            return
+        }
+        if let list = reminder.list, list.isVisible {
+            selection = .list(list.id)
+        } else {
             selection = .smart(.today)
         }
     }

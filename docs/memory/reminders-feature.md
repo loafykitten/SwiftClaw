@@ -65,17 +65,34 @@ dateless), and impossible dates like 2026-02-30 are rejected by round-trip
 validation instead of Calendar-normalized. 15 suite tests; full macOS suite
 green.
 
+**Phase 4 (due-date notifications) implemented and reviewed** —
+`ReminderAlertScheduler` mirrors `CalendarAlertScheduler` (`.reminderStoreDidChange`
++ 12h tick, 7-day fire horizon, budget 12; calendar lowered 48→36). One alert
+per pending due-dated reminder: timed fires at `dueDate`, date-only at
+`settings.reminders.allDayAlertMinutes` (default 9:00 AM; toggle + time picker
+in Notification Settings, key `settings.notifications.reminderAlerts.enabled`).
+Routing: `Kind.reminder` → `AppRouter.showReminders(focusing:)` →
+`pendingReminderFocusID` threads ContentView → WorkspaceView → RemindersView,
+which selects the reminder's list (Today fallback) and clears the focus.
+Lifecycle in ContentView/AppBootstrap; disable clears booked alerts. Codex
+review (gpt-5.6-sol) found three valid issues, all fixed with regression
+tests: date-only fire dates are now built from calendar components (DST-safe),
+identifiers embed a stable SHA256 content fingerprint so title edits rebook
+the request, and reconcile awaits an in-flight `clearAllPendingAlerts` so a
+quick disable→enable can't strand alerts. 19 scheduler tests; full suite green.
+NOTE: the stale-content and clear-race fixes were NOT back-ported to
+`CalendarAlertScheduler` (same latent issues there, pre-existing, out of
+scope) — flagged to the user.
+
 ## Next steps
 
-1. Phase 4: `ReminderAlertScheduler` + `Kind.reminder` routing
-   (**lower calendar budget 48→36, reminders 12**).
-2. Phase 5: Apple Reminders EventKit import + VTODO ICS + onboarding hook/sheet
+1. Phase 5: Apple Reminders EventKit import + VTODO ICS + onboarding hook/sheet
    + entitlement/INFOPLIST key.
-3. Phase 6: AI review loop (`ReviewType.reminders` already exists; replace
+2. Phase 6: AI review loop (`ReviewType.reminders` already exists; replace
    placeholder branch at `ReviewCardRendererRegistry` line ~42).
-4. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
+3. Phase 7: calendar chips (parallel `ReminderCalendarItem` type, NOT
    `EventOccurrence`) + `WorkspaceRemindersSummary` tile.
-5. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
+4. Phase 8: `docs/features/REMINDERS.md`, doc updates, delete this file in the
    final commit.
 
 ## Decisions & constraints
@@ -116,4 +133,5 @@ green.
 - `SwiftClaw/Settings/Sections/RemindersSettingsView.swift`, `SwiftClaw/Settings/AppSettings.swift` — feature toggle, default-list preference, and future onboarding key.
 - `SwiftClaw/ContentView.swift`, `SwiftClaw/Shared/AppBootstrap.swift` — sync coordinator lifecycle wiring.
 - `SwiftClaw/Features/Reminders/QuickEntry/ReminderQuickEntryService.swift` — NL quick entry parsing into a `ReminderDraft`; `RemindersView` grew the entry bar + fallback.
-- `SwiftClawTests/Reminders/` — foundation plus `ReminderDraftTests`, `ReminderSmartListTests`, and `ReminderQuickEntryServiceTests`; all six suites green.
+- `SwiftClaw/Services/Reminders/ReminderAlertScheduler.swift` — due-date alert reconciliation; `AppNotificationService`/`NotificationRoutingPayload` grew the reminder posting path, `Kind.reminder`, and fingerprinted identifiers; `AppRouter`/`WorkspaceView`/`RemindersView` thread `pendingReminderFocusID`; `NotificationSettingsView` has the toggle + all-day time picker; calendar budget now 36.
+- `SwiftClawTests/Reminders/` — foundation plus `ReminderDraftTests`, `ReminderSmartListTests`, `ReminderQuickEntryServiceTests`, and `ReminderAlertSchedulerTests`; all seven suites green.

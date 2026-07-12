@@ -155,6 +155,9 @@ extension SettingsKeys {
 extension SettingsKeys {
     /// UUID string of the list new reminders default into.
     static let remindersDefaultListID = "settings.reminders.defaultListID"
+    /// Minutes after local midnight when date-only (no due time) reminders
+    /// fire their alert.
+    static let remindersAllDayAlertMinutes = "settings.reminders.allDayAlertMinutes"
     /// App state (not a user setting): whether the first-enable import
     /// onboarding has been completed or dismissed.
     static let remindersHasCompletedOnboarding = "settings.reminders.hasCompletedOnboarding"
@@ -168,6 +171,7 @@ extension SettingsKeys {
     static let notificationsReviewResultsEnabled = "settings.notifications.reviewResults.enabled"
     static let notificationsChatRepliesEnabled = "settings.notifications.chatReplies.enabled"
     static let notificationsCalendarAlertsEnabled = "settings.notifications.calendarAlerts.enabled"
+    static let notificationsReminderAlertsEnabled = "settings.notifications.reminderAlerts.enabled"
     /// App state (not a user setting): whether the one-time launch offer to
     /// enable notifications has been answered (either way), so it never nags.
     static let notificationsLaunchPromptCompleted = "state.notifications.launchPromptCompleted"
@@ -1068,6 +1072,32 @@ enum SettingsStorage {
             defaultValue: defaultRemindersEnabled,
             userDefaults: userDefaults
         )
+    }
+
+    static let defaultReminderAlertNotificationsEnabled = true
+
+    static func areReminderAlertNotificationsEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        areNotificationsEnabled(userDefaults: userDefaults)
+            && boolSetting(
+                forKey: SettingsKeys.notificationsReminderAlertsEnabled,
+                defaultValue: defaultReminderAlertNotificationsEnabled,
+                userDefaults: userDefaults
+            )
+    }
+
+    /// 9:00 AM — when date-only reminders fire their alert.
+    static let defaultRemindersAllDayAlertMinutes = 9 * 60
+
+    static func loadRemindersAllDayAlertMinutes(userDefaults: UserDefaults = .standard) -> Int {
+        guard userDefaults.object(forKey: SettingsKeys.remindersAllDayAlertMinutes) != nil else {
+            return defaultRemindersAllDayAlertMinutes
+        }
+        let minutes = userDefaults.integer(forKey: SettingsKeys.remindersAllDayAlertMinutes)
+        return min(max(minutes, 0), 24 * 60 - 1)
+    }
+
+    static func saveRemindersAllDayAlertMinutes(_ minutes: Int, userDefaults: UserDefaults = .standard) {
+        userDefaults.set(minutes, forKey: SettingsKeys.remindersAllDayAlertMinutes)
     }
 
     static func loadRemindersDefaultListID(userDefaults: UserDefaults = .standard) -> UUID? {

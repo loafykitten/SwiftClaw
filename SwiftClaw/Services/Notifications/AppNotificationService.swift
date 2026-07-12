@@ -275,6 +275,54 @@ final class AppNotificationService: NSObject {
         center?.removePendingNotificationRequests(withIdentifiers: identifiers)
     }
 
+    // MARK: - Reminder due-date alerts (scheduled)
+
+    /// Schedules one reminder due-date notification for a future fire date.
+    /// `ReminderAlertScheduler` owns which alerts exist; this just books one.
+    /// For date-only reminders the fire date is the user's chosen morning
+    /// time, so the body shows just the day.
+    func scheduleReminderAlert(
+        identifier: String,
+        reminderID: UUID,
+        title: String,
+        dueDate: Date,
+        fireDate: Date,
+        hasDueTime: Bool
+    ) {
+        guard canPost(source: .reminderAlerts), fireDate > .now else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title.isEmpty ? "Reminder" : title
+        content.body = hasDueTime
+            ? "Due \(dueDate.formatted(date: .abbreviated, time: .shortened))"
+            : "Due \(dueDate.formatted(.dateTime.weekday(.wide).month().day()))"
+        content.sound = .default
+        content.threadIdentifier = "reminders"
+        content.userInfo = NotificationRoutingPayload(kind: .reminder, targetID: reminderID).userInfo
+
+        let components = Calendar.current.dateComponents(
+            [.year, .month, .day, .hour, .minute, .second],
+            from: fireDate
+        )
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
+        post(content: content, identifier: identifier, trigger: trigger)
+    }
+
+    /// Pending (not yet fired) reminder-alert identifiers, for the scheduler's
+    /// reconciliation diff.
+    func pendingReminderAlertIdentifiers() async -> Set<String> {
+        guard let center else { return [] }
+        let pending = await center.pendingNotificationRequests()
+        return Set(
+            pending.map(\.identifier)
+                .filter { $0.hasPrefix(NotificationIdentifier.reminderAlertPrefix) }
+        )
+    }
+
+    func removePendingReminderAlerts(identifiers: [String]) {
+        guard !identifiers.isEmpty else { return }
+        center?.removePendingNotificationRequests(withIdentifiers: identifiers)
+    }
+
     // MARK: - Cleanup when the user reads the thing in-app
 
     func removeDeliveredChatNotifications(chatID: UUID) {
@@ -303,6 +351,7 @@ final class AppNotificationService: NSObject {
         case reviewResults
         case chatReplies
         case calendarAlerts
+        case reminderAlerts
     }
 
     private var isAuthorized: Bool {
@@ -325,6 +374,8 @@ final class AppNotificationService: NSObject {
             return SettingsStorage.areChatReplyNotificationsEnabled(userDefaults: userDefaults)
         case .calendarAlerts:
             return SettingsStorage.areCalendarAlertNotificationsEnabled(userDefaults: userDefaults)
+        case .reminderAlerts:
+            return SettingsStorage.areReminderAlertNotificationsEnabled(userDefaults: userDefaults)
         }
     }
 
@@ -438,8 +489,9 @@ extension AppNotificationService: UNUserNotificationCenterDelegate {
             return router.isViewingChat(payload.targetID)
         case .newMail, .mailDigest:
             return router.selectedNavigationItem == .workspace
-        case .calendarEvent:
-            // Event alerts are time-critical; show them even in Workspace.
+        case .calendarEvent, .reminder:
+            // Event and reminder alerts are time-critical; show them even in
+            // Workspace.
             return false
         }
     }
@@ -481,6 +533,8 @@ extension AppNotificationService: UNUserNotificationCenterDelegate {
             AppRouter.shared.selectedNavigationItem = .workspace
         case .calendarEvent:
             AppRouter.shared.showCalendar()
+        case .reminder:
+            AppRouter.shared.showReminders(focusing: payload.targetID)
         }
     }
 }

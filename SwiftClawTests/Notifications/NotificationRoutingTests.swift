@@ -61,6 +61,19 @@ struct NotificationRoutingTests {
         #expect(router.pendingEmailViewID == nil)
     }
 
+    @Test func reminderTapShowsRemindersWithTheFocusID() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+
+        let reminderID = UUID()
+        AppNotificationService.shared.routeNotificationTap(
+            payload: NotificationRoutingPayload(kind: .reminder, targetID: reminderID)
+        )
+
+        #expect(router.selectedNavigationItem == .workspace)
+        #expect(router.pendingReminderFocusID == reminderID)
+    }
+
     @Test func undecodablePayloadRoutesNowhere() throws {
         let (router, fixture) = try Self.isolatedRouter()
         defer { Self.restore(router, fixture) }
@@ -101,6 +114,17 @@ struct NotificationRoutingTests {
         #expect(AppNotificationService.shouldSuppressPresentation(payload: payload, router: router))
 
         router.selectedNavigationItem = .home
+        #expect(!AppNotificationService.shouldSuppressPresentation(payload: payload, router: router))
+    }
+
+    @Test func reminderBannerIsNeverSuppressed() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+
+        let payload = NotificationRoutingPayload(kind: .reminder, targetID: UUID())
+
+        // Time-critical: shown even while the user is in Workspace.
+        router.selectedNavigationItem = .workspace
         #expect(!AppNotificationService.shouldSuppressPresentation(payload: payload, router: router))
     }
 

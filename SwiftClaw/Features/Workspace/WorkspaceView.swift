@@ -40,6 +40,8 @@ struct WorkspaceView: View {
     var onEmailPresented: () -> Void = {}
     var pendingCalendarFocus = false
     var onCalendarPresented: () -> Void = {}
+    var pendingReminderFocusID: UUID?
+    var onReminderPresented: () -> Void = {}
 
     @Query(sort: \Email.date, order: .reverse)
     private var emails: [Email]
@@ -119,6 +121,9 @@ struct WorkspaceView: View {
         .onChange(of: pendingCalendarFocus) { _, _ in
             prepareSelection()
         }
+        .onChange(of: pendingReminderFocusID) { _, _ in
+            prepareSelection()
+        }
     }
 
     @ViewBuilder
@@ -133,7 +138,10 @@ struct WorkspaceView: View {
         case .calendar:
             CalendarView()
         case .reminders:
-            RemindersView()
+            RemindersView(
+                focusReminderID: pendingReminderFocusID,
+                onFocusHandled: onReminderPresented
+            )
         case .notes:
             NotesView()
         case .memory:
@@ -159,6 +167,10 @@ struct WorkspaceView: View {
         } else if pendingCalendarFocus, isCalendarEnabled {
             navigate(to: .calendar)
             onCalendarPresented()
+        } else if pendingReminderFocusID != nil, isRemindersEnabled {
+            // RemindersView clears the focus once it has applied the
+            // selection, so the ID stays available while the view appears.
+            navigate(to: .reminders)
         }
     }
 

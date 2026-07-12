@@ -39,6 +39,7 @@ final class AppBootstrap {
         EmailWorkflowManager.shared.start(modelContainer: modelContainer)
         if SettingsStorage.isRemindersEnabled() {
             ReminderSyncCoordinator.shared.start(modelContainer: modelContainer)
+            ReminderAlertScheduler.shared.start(modelContainer: modelContainer)
         }
         if SettingsStorage.isCalendarEnabled() {
             CalendarSyncCoordinator.shared.start(modelContainer: modelContainer)

@@ -27,6 +27,18 @@ nonisolated enum NotificationIdentifier {
     }
 
     static let calendarAlertPrefix = "calendar.alert."
+
+    /// One identifier per (reminder, fire date, content). The fire date
+    /// participates so completing a recurring master (which rolls `dueDate`
+    /// forward) or moving the date-only alert time books a fresh request and
+    /// retires the old one; the content fingerprint (stable across launches)
+    /// does the same for title edits, which would otherwise leave a booked
+    /// request showing stale text.
+    static func reminderAlert(reminderID: UUID, fireDate: Date, contentFingerprint: String) -> String {
+        "\(reminderAlertPrefix)\(reminderID.uuidString).\(Int64(fireDate.timeIntervalSinceReferenceDate)).\(contentFingerprint)"
+    }
+
+    static let reminderAlertPrefix = "reminder.alert."
 }
 
 /// Category + action identifiers registered in
@@ -52,11 +64,13 @@ nonisolated struct NotificationRoutingPayload: Codable, Equatable, Sendable {
         case newMail
         case mailDigest
         case calendarEvent
+        case reminder
     }
 
     let kind: Kind
     /// Chat ID for `chatReply`/`review`, email ID for `newMail`, account ID
-    /// for `mailDigest`, event ID for `calendarEvent`.
+    /// for `mailDigest`, event ID for `calendarEvent`, reminder ID for
+    /// `reminder`.
     let targetID: UUID
 
     private enum UserInfoKey {

@@ -135,8 +135,11 @@ struct ContentView: View {
             .onChange(of: isRemindersEnabled) { _, enabled in
                 if enabled {
                     ReminderSyncCoordinator.shared.start(modelContainer: modelContext.container)
+                    ReminderAlertScheduler.shared.start(modelContainer: modelContext.container)
                 } else {
                     ReminderSyncCoordinator.shared.stop()
+                    ReminderAlertScheduler.shared.stop()
+                    ReminderAlertScheduler.shared.clearAllPendingAlerts()
                 }
             }
             .onAppear {
@@ -215,7 +218,9 @@ struct ContentView: View {
                 pendingEmailID: router.pendingEmailViewID,
                 onEmailPresented: router.clearPendingEmailView,
                 pendingCalendarFocus: router.pendingCalendarFocus,
-                onCalendarPresented: router.clearPendingCalendarFocus
+                onCalendarPresented: router.clearPendingCalendarFocus,
+                pendingReminderFocusID: router.pendingReminderFocusID,
+                onReminderPresented: router.clearPendingReminderFocus
             )
         default:
             item.destination

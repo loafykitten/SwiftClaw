@@ -297,7 +297,7 @@ struct AppNotificationServiceTests {
     }
 
     @Test func routingPayloadRoundTripsThroughUserInfo() {
-        for kind in [NotificationRoutingPayload.Kind.chatReply, .review, .newMail, .mailDigest] {
+        for kind in [NotificationRoutingPayload.Kind.chatReply, .review, .newMail, .mailDigest, .calendarEvent, .reminder] {
             let payload = NotificationRoutingPayload(kind: kind, targetID: UUID())
             #expect(NotificationRoutingPayload(userInfo: payload.userInfo) == payload)
         }
