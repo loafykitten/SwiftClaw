@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import SwiftData
 import os
@@ -5,8 +6,8 @@ import os
 /// Keeps `UNUserNotificationCenter`'s pending requests in step with the
 /// calendar: expands the coming week's occurrences, computes each alarm's
 /// fire date, and reconciles against what's already booked (add the missing,
-/// remove the stale). Identifiers are deterministic per (event, fire date),
-/// so reconciliation is idempotent.
+/// remove the stale). Identifiers are deterministic per (event, fire date,
+/// content), so reconciliation is idempotent and title changes rebook alerts.
 ///
 /// A rolling window keeps the pending count well under iOS's 64-request cap;
 /// soonest alarms win when the cap bites. Re-runs on every calendar-store
@@ -39,6 +40,10 @@ final class CalendarAlertScheduler {
     private var storeObserver: (any NSObjectProtocol)?
     private var refreshLoop: Task<Void, Never>?
     private var pendingReconcile: Task<Void, Never>?
+    /// In-flight `clearAllPendingAlerts` removal. Reconciliation awaits it so
+    /// a quick feature disable→enable can't read booked identifiers that the
+    /// straggling clear is about to delete (which would skip rebooking them).
+    private var pendingClear: Task<Void, Never>?
 
     /// Injectable clock so tests pin "now".
     var now: () -> Date = { .now }
@@ -113,7 +118,7 @@ final class CalendarAlertScheduler {
     /// would never run again to clean these up.
     func clearAllPendingAlerts() {
         let service = notificationService
-        Task { @MainActor in
+        pendingClear = Task { @MainActor in
             let booked = await service.pendingCalendarAlertIdentifiers()
             service.removePendingCalendarAlerts(identifiers: Array(booked))
         }
@@ -132,6 +137,10 @@ final class CalendarAlertScheduler {
     /// so tests drive it directly.
     func reconcile(modelContainer overrideContainer: ModelContainer? = nil) async {
         guard let container = overrideContainer ?? modelContainer else { return }
+        if let pendingClear {
+            await pendingClear.value
+            self.pendingClear = nil
+        }
         let currentDate = now()
         // Booked by fire date; occurrences are expanded further out so an
         // alarm with a long lead ("1 week before" an event 10 days away)
@@ -170,7 +179,14 @@ final class CalendarAlertScheduler {
                     let fireDate = occurrence.start.addingTimeInterval(alarm.offsetSeconds)
                     guard fireDate > currentDate, fireDate <= fireWindow.end else { continue }
                     desired.append(DesiredAlert(
-                        identifier: NotificationIdentifier.calendarAlert(eventID: eventID, fireDate: fireDate),
+                        identifier: NotificationIdentifier.calendarAlert(
+                            eventID: eventID,
+                            fireDate: fireDate,
+                            contentFingerprint: Self.contentFingerprint(
+                                title: occurrence.title,
+                                isAllDay: occurrence.isAllDay
+                            )
+                        ),
                         eventID: eventID,
                         title: occurrence.title,
                         occurrenceStart: occurrence.start,
@@ -212,6 +228,14 @@ final class CalendarAlertScheduler {
                 (\(desired.count, privacy: .public) booked in window)
                 """)
         }
+    }
+
+    /// Stable (cross-launch) digest of the user-visible alert content, folded
+    /// into the identifier so edits rebook the request. `String.hashValue` is
+    /// process-seeded and would rebook everything on every launch.
+    private static func contentFingerprint(title: String, isAllDay: Bool) -> String {
+        let digest = SHA256.hash(data: Data("\(title)|\(isAllDay)".utf8))
+        return digest.prefix(4).map { String(format: "%02x", $0) }.joined()
     }
 
     #if DEBUG

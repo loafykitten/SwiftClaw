@@ -20,10 +20,13 @@ nonisolated enum NotificationIdentifier {
         "mail.digest.\(accountID.uuidString)"
     }
 
-    /// One identifier per event alarm occurrence, so the rolling scheduler
-    /// can reconcile (add/remove) individual instances idempotently.
-    static func calendarAlert(eventID: UUID, fireDate: Date) -> String {
-        "\(calendarAlertPrefix)\(eventID.uuidString).\(Int64(fireDate.timeIntervalSinceReferenceDate))"
+    /// One identifier per (event, fire date, content). The fire date
+    /// participates so moving an event or alarm books a fresh request and
+    /// retires the old one; the content fingerprint (stable across launches)
+    /// does the same for title or all-day edits, which would otherwise leave
+    /// a booked request showing stale text.
+    static func calendarAlert(eventID: UUID, fireDate: Date, contentFingerprint: String) -> String {
+        "\(calendarAlertPrefix)\(eventID.uuidString).\(Int64(fireDate.timeIntervalSinceReferenceDate)).\(contentFingerprint)"
     }
 
     static let calendarAlertPrefix = "calendar.alert."

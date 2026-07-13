@@ -264,6 +264,58 @@ struct CalendarAlertSchedulerTests {
         #expect(harness.spy.removedPendingIdentifierBatches.flatMap(\.self).count == 1)
     }
 
+    @Test func editingTheTitleRebooksTheAlertWithFreshContent() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+
+        let event = harness.repository.insert(CalendarEvent(
+            title: "Old title",
+            startDate: Self.hoursFromNow(30),
+            endDate: Self.hoursFromNow(31),
+            calendar: harness.repository.defaultCalendar()
+        ))
+        event.alarms = [CalendarAlarmPayload(offsetSeconds: -900)]
+        harness.repository.noteUpdated(event)
+        await harness.reconcileAndFlush()
+        let originalIdentifier = try #require(harness.spy.addedRequests.first?.identifier)
+
+        event.title = "New title"
+        harness.repository.noteUpdated(event)
+        await harness.reconcileAndFlush()
+
+        // Same event, same fire date — but the stale banner text must be
+        // replaced, so the request is rebooked under a fresh identifier.
+        #expect(harness.spy.addedRequests.count == 1)
+        let request = try #require(harness.spy.addedRequests.first)
+        #expect(request.content.title == "New title")
+        #expect(request.identifier != originalIdentifier)
+        #expect(harness.spy.removedPendingIdentifierBatches.flatMap(\.self) == [originalIdentifier])
+    }
+
+    @Test func reconcileAfterClearAllRebooksPromptly() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+
+        let event = harness.repository.insert(CalendarEvent(
+            title: "Call the dentist",
+            startDate: Self.hoursFromNow(30),
+            endDate: Self.hoursFromNow(31),
+            calendar: harness.repository.defaultCalendar()
+        ))
+        event.alarms = [CalendarAlarmPayload(offsetSeconds: -900)]
+        harness.repository.noteUpdated(event)
+        await harness.reconcileAndFlush()
+        #expect(harness.spy.addedRequests.count == 1)
+
+        // Feature toggled off and immediately back on: reconcile must wait
+        // out the in-flight clear instead of reading identifiers the clear is
+        // about to delete (and then never rebooking them).
+        harness.scheduler.clearAllPendingAlerts()
+        await harness.reconcileAndFlush()
+
+        #expect(harness.spy.addedRequests.count == 1)
+    }
+
     @Test func longLeadAlarmInsideHorizonIsBooked() async throws {
         let harness = try Harness()
         defer { harness.cleanup() }
