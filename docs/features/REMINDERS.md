@@ -82,15 +82,18 @@ back to the manual editor with the typed phrase as the title.
 A `CalendarAlertScheduler` mirror: one alert per pending due-dated reminder,
 reconciled over a rolling 7-day fire window on every store save
 (`.reminderStoreDidChange`) and a 12 h tick, soonest-first under a
-12-request budget (the calendar's was lowered to 36 to share the 64-request
-system cap). Timed reminders fire at `dueDate`; date-only reminders fire at
+12-request budget (the calendar drops from 48 to 36 only while reminder
+alerts can actually book, sharing the 64-request system cap). Timed
+reminders fire at `dueDate`; date-only reminders fire at
 `settings.reminders.allDayAlertMinutes` (default 9:00 AM; toggle + time
 picker in Settings › Notifications), with fire dates built from calendar
 components so DST can't shift them. Identifiers embed a content fingerprint
 so edits rebook the request. Disabling the toggle or the feature clears
 booked alerts. Taps route via `NotificationRoutingPayload.Kind.reminder` →
-`AppRouter.showReminders(focusing:)`, which threads a focus ID down
-ContentView → WorkspaceView → RemindersView to select the reminder's list.
+`AppRouter.showReminders(focusing:)` (a no-op while the feature is disabled —
+a delivered banner can outlive the toggle), which threads a focus ID down
+ContentView → WorkspaceView → RemindersView to select the reminder's list,
+or its editor directly when that list is hidden.
 
 ## Reminders Review (`Services/Reminders/Review/`, `ReminderWorkflowManager`)
 

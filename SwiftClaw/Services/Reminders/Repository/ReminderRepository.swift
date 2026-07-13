@@ -135,22 +135,6 @@ final class ReminderRepository {
         allReminders().filter { !$0.isCompleted && !$0.isCompletionLog }
     }
 
-    func scheduled() -> [Reminder] {
-        pendingReminders().filter { $0.dueDate != nil }
-    }
-
-    func flagged() -> [Reminder] {
-        pendingReminders().filter(\.isFlagged)
-    }
-
-    func completed() -> [Reminder] {
-        allReminders().filter { $0.completedAt != nil }
-    }
-
-    func inbox() -> [Reminder] {
-        pendingReminders().filter { $0.dueDate == nil }
-    }
-
     func reminders(in list: ReminderList) -> [Reminder] {
         let listID = list.id
         return allReminders().filter { $0.list?.id == listID && !$0.isCompletionLog }
@@ -161,8 +145,17 @@ final class ReminderRepository {
     /// Completes a reminder in one transaction. Recurring masters keep one row
     /// for the next pending occurrence and insert detached completed log rows
     /// so undo and history stay cheap and deterministic.
-    func complete(_ reminder: Reminder, at date: Date = .now) {
+    ///
+    /// `expectedOccurrence` is the due date the caller rendered. A recurring
+    /// master stays pending after completing (its `dueDate` rolls forward), so
+    /// a double-click would otherwise consume two occurrences; passing the
+    /// rendered date makes the stale second call a no-op. `nil` skips the
+    /// check (non-UI callers).
+    func complete(_ reminder: Reminder, at date: Date = .now, expectedOccurrence: Date?? = nil) {
         guard !reminder.isCompletionLog else { return }
+        if reminder.isRecurring, let expectedOccurrence, reminder.dueDate != expectedOccurrence {
+            return
+        }
         if let repeatRule = reminder.afterCompletionRepeat {
             completeAfterCompletionMaster(reminder, repeatRule: repeatRule, at: date)
         } else if reminder.recurrenceRuleString != nil {
@@ -188,8 +181,10 @@ final class ReminderRepository {
     }
 
     /// Advances a recurring master without writing history. Used for an
-    /// explicit "skip this occurrence" action.
-    func skipOccurrence(of master: Reminder) {
+    /// explicit "skip this occurrence" action. Skipping the final COUNT
+    /// occurrence retires the series at `date` (without it the master would
+    /// stay pending at the same due date forever).
+    func skipOccurrence(of master: Reminder, at date: Date = .now) {
         guard !master.isCompletionLog else { return }
         if let repeatRule = master.afterCompletionRepeat, let dueDate = master.dueDate {
             master.dueDate = ReminderRecurrenceEngine.nextDueDate(
@@ -200,7 +195,7 @@ final class ReminderRepository {
             )
             master.modifiedAt = .now
         } else if master.recurrenceRuleString != nil {
-            advanceFixedScheduleMaster(master, markExhaustedAt: nil)
+            advanceFixedScheduleMaster(master, markExhaustedAt: date)
         }
         save()
     }
@@ -361,6 +356,12 @@ final class ReminderRepository {
             return
         }
 
+        // Only the latest log may rewind the master — undoing an older
+        // occurrence would drag `dueDate` back behind still-present logs and
+        // re-inflate COUNT for an advance that still stands.
+        let latest = completionLog(of: master).last
+        guard log.id == latest?.id else { return }
+
         let oldDueDate = master.dueDate
         if let original = log.originalOccurrenceDate {
             master.dueDate = original
@@ -402,7 +403,14 @@ final class ReminderRepository {
     }
 
     private func dedupeReminders() {
-        let all = allReminders()
+        // Earliest `createdAt` wins (the repository's identity rule);
+        // `allReminders()` is sortOrder-first, which would pick the wrong
+        // survivor when a duplicate was manually reordered.
+        let all = allReminders().sorted {
+            $0.createdAt != $1.createdAt
+                ? $0.createdAt < $1.createdAt
+                : $0.id.uuidString < $1.id.uuidString
+        }
         var byKey: [String: Reminder] = [:]
         var replacedIDs: [UUID: UUID] = [:]
         for reminder in all {
@@ -438,12 +446,9 @@ final class ReminderRepository {
     }
 
     private func allReminders() -> [Reminder] {
-        let descriptor = FetchDescriptor<Reminder>(
-            sortBy: [
-                SortDescriptor(\.sortOrder),
-                SortDescriptor(\.createdAt),
-            ]
-        )
+        // Unordered fetch: the comparator below is the single ordering
+        // authority (a descriptor sortBy would be discarded by it anyway).
+        let descriptor = FetchDescriptor<Reminder>()
         return ((try? modelContext.fetch(descriptor)) ?? []).sorted {
             if $0.sortOrder != $1.sortOrder {
                 return $0.sortOrder < $1.sortOrder

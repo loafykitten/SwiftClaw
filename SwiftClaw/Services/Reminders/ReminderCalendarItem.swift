@@ -42,9 +42,7 @@ enum ReminderCalendarItemBuilder {
             else { continue }
 
             let dueDay = calendar.startOfDay(for: due)
-            // Timed reminders go overdue the moment they pass; date-only ones
-            // only once their whole day is over (smart-list semantics).
-            let isOverdue = reminder.hasDueTime ? due < now : dueDay < startOfToday
+            let isOverdue = reminder.isOverdue(now: now, calendar: calendar)
             let day = max(dueDay, startOfToday)
             guard day >= window.start && day < window.end else { continue }
 

@@ -25,7 +25,9 @@ nonisolated struct WorkspaceRemindersSummary: Equatable {
     let nextReminder: NextReminder?
 
     init(reminders: [Reminder], now: Date, calendar: Calendar) {
-        let pending = reminders.filter { !$0.isCompleted && !$0.isCompletionLog }
+        // Hidden lists are excluded everywhere outside their own list view,
+        // matching the calendar chips.
+        let pending = reminders.filter { !$0.isCompleted && !$0.isCompletionLog && $0.isInVisibleList }
         let startOfToday = calendar.startOfDay(for: now)
         let endOfToday = calendar.dateInterval(of: .day, for: now)?.end
             ?? startOfToday.addingTimeInterval(24 * 3600)
@@ -36,10 +38,7 @@ nonisolated struct WorkspaceRemindersSummary: Equatable {
             guard let due = reminder.dueDate else { return false }
             return due < endOfToday
         }
-        overdueCount = pending.count { reminder in
-            guard let due = reminder.dueDate else { return false }
-            return reminder.hasDueTime ? due < now : due < startOfToday
-        }
+        overdueCount = pending.count { $0.isOverdue(now: now, calendar: calendar) }
         weekCount = pending.count { reminder in
             guard let due = reminder.dueDate else { return false }
             return due >= startOfToday && due < endOfWeek

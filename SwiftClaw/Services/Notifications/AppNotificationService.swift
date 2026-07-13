@@ -39,6 +39,11 @@ final class AppNotificationService: NSObject {
     /// In-flight `center.add` tasks. Tracked so DEBUG tests can await
     /// deterministic delivery into the spy; pruned on completion.
     @ObservationIgnored private var postTasks: [UUID: Task<Void, Never>] = [:]
+    /// Injectable Reminders feature gate for the `.reminder` tap route
+    /// (routing tests run against `.shared`, whose defaults are `.standard`).
+    @ObservationIgnored var isRemindersFeatureEnabled: () -> Bool = {
+        SettingsStorage.isRemindersEnabled()
+    }
 
     /// Use `shared` in app code. The initializer is internal (not private)
     /// so tests can build isolated instances — suites run in parallel, and
@@ -159,7 +164,7 @@ final class AppNotificationService: NSObject {
         content.sound = .default
         content.threadIdentifier = "chat.\(chatID.uuidString)"
         content.userInfo = NotificationRoutingPayload(kind: .chatReply, targetID: chatID).userInfo
-        post(content: content, identifier: NotificationIdentifier.chatReply(chatID))
+        post(content: content, identifier: NotificationIdentifier.chatReply(chatID), source: .chatReplies)
     }
 
     func notifyReviewResult(chatID: UUID, summary: String, title: String = "Inbox review ready") {
@@ -172,7 +177,7 @@ final class AppNotificationService: NSObject {
         content.sound = .default
         content.threadIdentifier = "chat.\(chatID.uuidString)"
         content.userInfo = NotificationRoutingPayload(kind: .review, targetID: chatID).userInfo
-        post(content: content, identifier: NotificationIdentifier.review(chatID))
+        post(content: content, identifier: NotificationIdentifier.review(chatID), source: .reviewResults)
     }
 
     /// New-mail entry point; owns the digest policy. Per account per sync
@@ -195,7 +200,7 @@ final class AppNotificationService: NSObject {
                     kind: .mailDigest,
                     targetID: accountID
                 ).userInfo
-                post(content: content, identifier: NotificationIdentifier.mailDigest(accountID))
+                post(content: content, identifier: NotificationIdentifier.mailDigest(accountID), source: .newMail)
             } else {
                 for message in accountMessages {
                     let content = UNMutableNotificationContent()
@@ -209,7 +214,7 @@ final class AppNotificationService: NSObject {
                         kind: .newMail,
                         targetID: message.emailID
                     ).userInfo
-                    post(content: content, identifier: NotificationIdentifier.mail(message.emailID))
+                    post(content: content, identifier: NotificationIdentifier.mail(message.emailID), source: .newMail)
                 }
             }
         }
@@ -217,6 +222,9 @@ final class AppNotificationService: NSObject {
 
     /// Posts the Phase-4 inline-reply failure fallback. Routed like a
     /// regular new-mail notification so tapping it reopens the email.
+    /// Deliberately posts with no source gate (and therefore no `source:`
+    /// re-check): a failed reply must surface even when new-mail
+    /// notifications are switched off.
     func notifyReplyFailed(emailID: UUID) {
         guard isActivated else { return }
         let content = UNMutableNotificationContent()
@@ -256,7 +264,7 @@ final class AppNotificationService: NSObject {
             from: fireDate
         )
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
-        post(content: content, identifier: identifier, trigger: trigger)
+        post(content: content, identifier: identifier, source: .calendarAlerts, trigger: trigger)
     }
 
     /// Pending (not yet fired) event-alert identifiers, for the scheduler's
@@ -304,7 +312,7 @@ final class AppNotificationService: NSObject {
             from: fireDate
         )
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
-        post(content: content, identifier: identifier, trigger: trigger)
+        post(content: content, identifier: identifier, source: .reminderAlerts, trigger: trigger)
     }
 
     /// Pending (not yet fired) reminder-alert identifiers, for the scheduler's
@@ -387,6 +395,7 @@ final class AppNotificationService: NSObject {
     private func post(
         content: UNMutableNotificationContent,
         identifier: String,
+        source: NotificationSource? = nil,
         trigger: UNNotificationTrigger? = nil
     ) {
         guard let center else { return }
@@ -398,6 +407,13 @@ final class AppNotificationService: NSObject {
             // Authorization is read fresh at post time (see `canPost`).
             await self.refreshAuthorizationStatus()
             guard self.isAuthorized else { return }
+            // Re-check the source gate too: this task suspends above, so a
+            // disable can land after the caller's gate but before `add` —
+            // without this a scheduled alert books despite the reconcile
+            // that just cleared everything (nothing was pending to remove).
+            if let source {
+                guard self.canPost(source: source) else { return }
+            }
             do {
                 try await center.add(request)
             } catch {
@@ -534,6 +550,10 @@ extension AppNotificationService: UNUserNotificationCenterDelegate {
         case .calendarEvent:
             AppRouter.shared.showCalendar()
         case .reminder:
+            // A delivered alert can outlive the feature being switched off;
+            // routing anyway would set a focus ID nothing ever presents
+            // RemindersView to clear.
+            guard isRemindersFeatureEnabled() else { return }
             AppRouter.shared.showReminders(focusing: payload.targetID)
         }
     }

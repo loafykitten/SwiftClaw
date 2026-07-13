@@ -27,6 +27,10 @@ final class CalendarAlertScheduler {
     /// room for `ReminderAlertScheduler`'s 12 plus the immediate
     /// notifications).
     static let maximumPendingAlerts = 36
+    /// The budget when reminder alerts can't book at all (feature or toggle
+    /// off) — reserving 12 slots nothing will use would just drop calendar
+    /// alarms.
+    static let standaloneMaximumPendingAlerts = 48
     private static let refreshInterval: Duration = .seconds(12 * 3600)
     private static let debounceInterval: Duration = .seconds(2)
 
@@ -44,6 +48,13 @@ final class CalendarAlertScheduler {
     /// stops new requests, leaving previously scheduled ones to fire.
     var alertsEnabledProvider: () -> Bool = {
         SettingsStorage.areCalendarAlertNotificationsEnabled()
+    }
+
+    /// Injectable: whether the reminder scheduler is competing for the
+    /// 64-request cap; picks between the shared and standalone budgets.
+    var reminderAlertsActiveProvider: () -> Bool = {
+        SettingsStorage.isRemindersEnabled()
+            && SettingsStorage.areReminderAlertNotificationsEnabled()
     }
 
     private init() {}
@@ -170,8 +181,11 @@ final class CalendarAlertScheduler {
             }
         }
         desired.sort { $0.fireDate < $1.fireDate }
-        if desired.count > Self.maximumPendingAlerts {
-            desired.removeLast(desired.count - Self.maximumPendingAlerts)
+        let budget = reminderAlertsActiveProvider()
+            ? Self.maximumPendingAlerts
+            : Self.standaloneMaximumPendingAlerts
+        if desired.count > budget {
+            desired.removeLast(desired.count - budget)
         }
 
         let booked = await notificationService.pendingCalendarAlertIdentifiers()

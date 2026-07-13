@@ -46,8 +46,15 @@ struct ReminderListDetailView: View {
         case .smart(let smart):
             smart == .completed ? [] : smart.filter(reminders, now: now)
         case .list(let id):
+            // sortOrder is what moveRows writes; without sorting here the
+            // manual order would never display.
             reminders.filter {
                 $0.list?.id == id && !$0.isCompleted && !$0.isCompletionLog
+            }
+            .sorted {
+                $0.sortOrder != $1.sortOrder
+                    ? $0.sortOrder < $1.sortOrder
+                    : $0.createdAt < $1.createdAt
             }
         }
     }
@@ -132,11 +139,21 @@ struct ReminderListDetailView: View {
     }
 
     private func rows(_ rows: [Reminder]) -> some ForEachView {
-        ForEach(rows) { reminder in
+        // Latest-log identity spans ALL logs, not just the displayed section:
+        // a master that moved lists leaves older logs behind in the previous
+        // list, and those must not offer an undo the repository will reject.
+        let latestLogIDs = latestLogIDs(in: reminders)
+        return ForEach(rows) { reminder in
+            // Snapshot the rendered occurrence: a second click before the row
+            // re-renders must not complete the next occurrence too.
+            let renderedOccurrence = reminder.dueDate
             ReminderRowView(
                 reminder: reminder,
                 now: now,
-                onToggleCompletion: { toggleCompletion(reminder) }
+                // Only the newest log per master can be uncompleted — undoing
+                // an older occurrence would rewind the series' state.
+                isToggleEnabled: !reminder.isCompletionLog || latestLogIDs.contains(reminder.id),
+                onToggleCompletion: { toggleCompletion(reminder, renderedOccurrence: renderedOccurrence) }
             )
             .onTapGesture {
                 guard !reminder.isCompletionLog else { return }
@@ -187,11 +204,26 @@ struct ReminderListDetailView: View {
 
     // MARK: - Actions
 
-    private func toggleCompletion(_ reminder: Reminder) {
+    /// The newest completion log per master — the only history rows whose
+    /// undo may rewind the master (the repository enforces the same rule).
+    private func latestLogIDs(in rows: [Reminder]) -> Set<UUID> {
+        var newest: [UUID: Reminder] = [:]
+        for row in rows where row.isCompletionLog {
+            guard let parentID = row.parentReminderID else { continue }
+            if let current = newest[parentID],
+               (current.completedAt ?? .distantPast) >= (row.completedAt ?? .distantPast) {
+                continue
+            }
+            newest[parentID] = row
+        }
+        return Set(newest.values.map(\.id))
+    }
+
+    private func toggleCompletion(_ reminder: Reminder, renderedOccurrence: Date?) {
         if reminder.isCompleted {
             repository.uncomplete(reminder)
         } else {
-            repository.complete(reminder)
+            repository.complete(reminder, expectedOccurrence: renderedOccurrence)
         }
     }
 

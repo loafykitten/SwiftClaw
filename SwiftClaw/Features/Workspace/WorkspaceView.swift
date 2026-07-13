@@ -366,7 +366,10 @@ private struct WorkspaceCalendarStatsView: View {
 /// "next deadline" footer. `@Query` keeps it live as reminders change; the
 /// summary itself is the testable `WorkspaceRemindersSummary`.
 private struct WorkspaceRemindersStatsView: View {
-    @Query private var reminders: [Reminder]
+    /// Masters and one-offs only — the summary never counts completion-log
+    /// history, which grows unbounded.
+    @Query(filter: #Predicate<Reminder> { $0.parentReminderID == nil })
+    private var reminders: [Reminder]
 
     var body: some View {
         // Minute ticks keep the counts honest while Workspace sits open —

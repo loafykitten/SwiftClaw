@@ -103,4 +103,38 @@ struct ReminderReviewNotifyToolTests {
             ])
         }
     }
+
+    /// A syntactically valid UUID the store has never seen (a model
+    /// hallucination) is dropped like a malformed one; a payload with only
+    /// such IDs fails instead of creating a card that routes to nothing.
+    @Test func rejectsHallucinatedGUIDsAndKeepsResolvedOnes() async throws {
+        let container = try Self.makeContainer()
+        let reminder = Self.insertReminder(into: container, title: "Real one")
+        let tool = ReminderReviewNotifyTool(modelContainer: container)
+
+        let result = try await tool.execute(arguments: [
+            "reminder_actions": .array([
+                .object(["reminder_guid": .string(UUID().uuidString), "summary": .string("Invented")]),
+                .object(["reminder_guid": .string(reminder.id.uuidString), "summary": .string("Real")]),
+            ]),
+            "message": .string("Mixed bag."),
+        ])
+        #expect(result.contains("1 item"))
+
+        let chats = try container.mainContext.fetch(FetchDescriptor<Chat>())
+        let card = try #require(
+            chats.first { $0.isRemindersReviewChat }?.messages.compactMap(\.reviewCard).first
+        )
+        #expect(card.items.map(\.itemID) == [reminder.id])
+
+        let allHallucinated = ReminderReviewNotifyTool(modelContainer: container)
+        await #expect(throws: ToolError.self) {
+            _ = try await allHallucinated.execute(arguments: [
+                "reminder_actions": .array([
+                    .object(["reminder_guid": .string(UUID().uuidString), "summary": .string("?")]),
+                ]),
+                "message": .string("hm"),
+            ])
+        }
+    }
 }

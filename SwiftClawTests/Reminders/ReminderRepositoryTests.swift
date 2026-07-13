@@ -67,8 +67,6 @@ struct ReminderRepositoryTests {
 
         #expect(repository.reminder(withID: reminder.id)?.title == "File taxes")
         #expect(repository.pendingReminders().map(\.id) == [reminder.id])
-        #expect(repository.scheduled().map(\.id) == [reminder.id])
-        #expect(repository.flagged().map(\.id) == [reminder.id])
         #expect(repository.reminders(in: list).map(\.id) == [reminder.id])
 
         reminder.title = "File tax extension"
@@ -79,13 +77,6 @@ struct ReminderRepositoryTests {
         #expect(repository.pendingReminders().isEmpty)
     }
 
-    @Test func inboxReturnsPendingRemindersWithoutDueDates() throws {
-        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
-        let inbox = repository.insert(Reminder(title: "Inbox"))
-        _ = repository.insert(Reminder(title: "Scheduled", dueDate: Self.date(2026, 6, 5)))
-        #expect(repository.inbox().map(\.id) == [inbox.id])
-    }
-
     // MARK: - Completion
 
     @Test func completeAndUncompletePlainReminderRoundTrips() throws {
@@ -94,7 +85,6 @@ struct ReminderRepositoryTests {
 
         repository.complete(reminder, at: Self.date(2026, 6, 1, 12))
         #expect(reminder.completedAt == Self.date(2026, 6, 1, 12))
-        #expect(repository.completed().map(\.id) == [reminder.id])
         #expect(repository.pendingReminders().isEmpty)
 
         repository.uncomplete(reminder)
@@ -295,6 +285,101 @@ struct ReminderRepositoryTests {
 
         repository.deleteReminder(master)
         #expect(repository.pendingReminders().isEmpty)
-        #expect(repository.completed().isEmpty)
+        #expect(repository.completionLog(of: master).isEmpty)
+    }
+
+    // MARK: - Review-fix regressions
+
+    /// Undoing an old occurrence must not rewind the master: only the latest
+    /// log restores state (older logs' circles are disabled in the UI, and
+    /// the repository enforces the same rule).
+    @Test func uncompletingAnOlderLogIsRejected() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let master = repository.insert(Reminder(
+            title: "Daily",
+            dueDate: Self.date(2026, 6, 1, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY;COUNT=3"
+        ))
+        repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        repository.complete(master, at: Self.date(2026, 6, 2, 10))
+        let logs = repository.completionLog(of: master)
+        #expect(logs.count == 2)
+        let ruleBefore = master.recurrenceRuleString
+        let dueBefore = master.dueDate
+
+        repository.uncomplete(logs[0]) // the older occurrence
+
+        #expect(repository.completionLog(of: master).count == 2)
+        #expect(master.dueDate == dueBefore)
+        #expect(master.recurrenceRuleString == ruleBefore)
+
+        // The latest log still undoes normally.
+        repository.uncomplete(logs[1])
+        #expect(repository.completionLog(of: master).count == 1)
+        #expect(master.dueDate == logs[1].originalOccurrenceDate)
+    }
+
+    /// A stale completion (double-click: the second call carries the
+    /// occurrence the row rendered before the first advanced it) is a no-op.
+    @Test func completingWithStaleExpectedOccurrenceIsIgnored() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let master = repository.insert(Reminder(
+            title: "Water plants",
+            dueDate: Self.date(2026, 6, 1, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY"
+        ))
+        let rendered = master.dueDate
+
+        repository.complete(master, at: Self.date(2026, 6, 1, 10), expectedOccurrence: rendered)
+        #expect(master.dueDate == Self.date(2026, 6, 2, 9))
+        #expect(repository.completionLog(of: master).count == 1)
+
+        // Second click, same rendered occurrence — must not consume Jun 2.
+        repository.complete(master, at: Self.date(2026, 6, 1, 10), expectedOccurrence: rendered)
+        #expect(master.dueDate == Self.date(2026, 6, 2, 9))
+        #expect(repository.completionLog(of: master).count == 1)
+    }
+
+    /// Skipping the final COUNT occurrence retires the series instead of
+    /// leaving it pending at the same due date forever.
+    @Test func skippingTheFinalCountOccurrenceRetiresTheSeries() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let master = repository.insert(Reminder(
+            title: "Last one",
+            dueDate: Self.date(2026, 6, 5, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=WEEKLY;COUNT=1"
+        ))
+
+        repository.skipOccurrence(of: master, at: Self.date(2026, 6, 4, 12))
+
+        #expect(master.isCompleted)
+        #expect(master.completedAt == Self.date(2026, 6, 4, 12))
+        #expect(master.dueDate == Self.date(2026, 6, 5, 9))
+        #expect(repository.completionLog(of: master).isEmpty)
+    }
+
+    /// The dedupe survivor is the earliest-created row even when a newer
+    /// duplicate sorts first by manual order.
+    @Test func dedupeKeepsEarliestCreatedReminderRegardlessOfSortOrder() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let original = Reminder(title: "Original", externalIdentifier: "shared-id")
+        original.createdAt = Self.date(2026, 1, 1)
+        original.sortOrder = 5
+        repository.insert(original)
+        let duplicate = Reminder(title: "Duplicate", externalIdentifier: "shared-id")
+        duplicate.createdAt = Self.date(2026, 3, 1)
+        duplicate.sortOrder = 0 // sorts before the original
+        repository.insert(duplicate)
+
+        repository.dedupeAfterRemoteMerge()
+
+        let survivors = repository.pendingReminders()
+        #expect(survivors.map(\.title) == ["Original"])
     }
 }

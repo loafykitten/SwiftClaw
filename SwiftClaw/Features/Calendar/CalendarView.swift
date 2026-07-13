@@ -17,7 +17,10 @@ struct CalendarView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var events: [CalendarEvent]
     @Query(sort: \UserCalendar.sortOrder) private var calendars: [UserCalendar]
-    @Query private var reminders: [Reminder]
+    /// Masters and one-offs only — chips never render completion-log history,
+    /// which grows unbounded (one row per completed recurring occurrence).
+    @Query(filter: #Predicate<Reminder> { $0.parentReminderID == nil })
+    private var reminders: [Reminder]
 
     @State private var displayMode: DisplayMode = .month
     @State private var anchorDate: Date = .now
@@ -471,7 +474,9 @@ struct CalendarView: View {
     private func completeReminder(_ item: ReminderCalendarItem) {
         let reminderRepository = ReminderRepository(modelContext: modelContext)
         guard let reminder = reminderRepository.reminder(withID: item.reminderID) else { return }
-        reminderRepository.complete(reminder)
+        // The chip's dueDate is the occurrence it rendered; a stale
+        // double-click must not consume the next occurrence too.
+        reminderRepository.complete(reminder, expectedOccurrence: item.due)
     }
 }
 

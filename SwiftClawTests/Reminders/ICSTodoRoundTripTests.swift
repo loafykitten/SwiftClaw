@@ -111,6 +111,31 @@ struct ICSTodoRoundTripTests {
         #expect(ICSParser.parseTodos(timed).first?.due == nil)
     }
 
+    /// A wall-clock time inside a DST spring-forward gap is legitimate in
+    /// real-world files and must normalize (to the shifted instant), not be
+    /// rejected like an impossible date — rejection would silently drop
+    /// whole VEVENTs/VTODOs and EXDATEs on import.
+    @Test func dstGapTimesNormalizeInsteadOfBeingRejected() throws {
+        // 2026-03-08 02:30 does not exist in America/New_York (02:00 → 03:00).
+        let text = [
+            "BEGIN:VTODO",
+            "UID:dst-gap",
+            "DUE;TZID=America/New_York:20260308T023000",
+            "SUMMARY:Gap time",
+            "END:VTODO",
+        ].joined(separator: "\r\n")
+
+        let parsed = try #require(ICSParser.parseTodos(text).first)
+        let due = try #require(parsed.due)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let components = calendar.dateComponents([.year, .month, .day, .hour], from: due)
+        #expect(components.year == 2026)
+        #expect(components.month == 3)
+        #expect(components.day == 8)
+        #expect(components.hour == 3) // sprung forward, same day
+    }
+
     @Test func recurringTimedTodoKeepsZoneAndRule() throws {
         var todo = ICSTodoRepresentation(uid: "todo-4")
         todo.title = "Weekly review"
@@ -154,6 +179,25 @@ struct ICSTodoRoundTripTests {
         let parsed = try #require(ICSParser.parseTodos(output).first)
         #expect(parsed.afterCompletionRepeat == ReminderAfterCompletionRepeat(count: 3, unit: .month))
         #expect(parsed.rruleString == nil)
+    }
+
+    /// A timed after-completion repeat does zone-sensitive month/DST math, so
+    /// its stored zone must survive export like an RRULE's does (UTC export
+    /// would drop `timeZoneIdentifier` on re-import).
+    @Test func timedAfterCompletionRepeatKeepsZone() throws {
+        var todo = ICSTodoRepresentation(uid: "todo-7")
+        todo.title = "Rebalance portfolio"
+        todo.due = Self.date(2026, 7, 6, 16) // 09:00 Pacific
+        todo.timeZoneIdentifier = "America/Los_Angeles"
+        todo.afterCompletionRepeat = ReminderAfterCompletionRepeat(count: 1, unit: .month)
+
+        let output = ICSSerializer.serialize(todos: [todo])
+        #expect(output.contains("DUE;TZID=America/Los_Angeles:20260706T090000"))
+
+        let parsed = try #require(ICSParser.parseTodos(output).first)
+        #expect(parsed.due == todo.due)
+        #expect(parsed.timeZoneIdentifier == "America/Los_Angeles")
+        #expect(parsed.afterCompletionRepeat == ReminderAfterCompletionRepeat(count: 1, unit: .month))
     }
 
     // MARK: - Mixed files

@@ -127,9 +127,12 @@ nonisolated enum ICSSerializer {
                 // same as all-day DTSTART.
                 let calendar = ICSDateFormat.calendar(for: TimeZone.current.identifier)
                 lines.append("DUE;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: due, calendar: calendar))")
-            } else if todo.rruleString != nil, let zone = todo.timeZoneIdentifier {
+            } else if todo.rruleString != nil || todo.afterCompletionRepeat != nil,
+                      let zone = todo.timeZoneIdentifier {
                 // Repeating timed to-dos keep their zone so wall-clock
-                // semantics survive DST, matching the VEVENT policy.
+                // semantics survive DST, matching the VEVENT policy —
+                // after-completion repeats do zone-sensitive month/DST math
+                // too, so they need the TZID as much as RRULEs do.
                 let calendar = ICSDateFormat.calendar(for: zone)
                 lines.append("DUE;TZID=\(zone):\(ICSDateFormat.localString(from: due, calendar: calendar))")
             } else {
@@ -298,9 +301,12 @@ nonisolated enum ICSDateFormat {
         let calendar = calendar(for: zoneIdentifier ?? TimeZone.current.identifier)
         guard let date = calendar.date(from: components) else { return nil }
 
-        let fields: Set<Calendar.Component> = isDateOnly || characters.count == 8
-            ? [.year, .month, .day]
-            : [.year, .month, .day, .hour, .minute, .second]
+        // Reject impossible calendar dates (20260431 would silently roll to
+        // May 1) but validate only the DATE fields: a wall-clock time inside a
+        // DST spring-forward gap is legitimate in real-world files and must
+        // keep normalizing to the shifted instant, not drop the component.
+        // Hour overflow still fails here because it rolls the day.
+        let fields: Set<Calendar.Component> = [.year, .month, .day]
         let resolved = calendar.dateComponents(fields, from: date)
         for field in fields where resolved.value(for: field) != components.value(for: field) {
             return nil

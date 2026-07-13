@@ -23,9 +23,6 @@ struct RemindersView: View {
     @State private var quickEntryText = ""
     @State private var isParsingQuickEntry = false
     @State private var quickEntryService = ReminderQuickEntryService()
-    /// Re-evaluated on save/appear so "Today" boundaries stay honest in a
-    /// long-lived window.
-    @State private var now: Date = .now
 
     private var repository: ReminderRepository {
         ReminderRepository(modelContext: modelContext)
@@ -35,11 +32,11 @@ struct RemindersView: View {
         VStack(spacing: 0) {
             quickEntryBar
             Divider()
-            HStack(spacing: 0) {
-                sidebar
-                    .frame(width: 210)
-                Divider()
-                detail
+            // Minute ticks keep Today membership and overdue styling honest
+            // while the window sits open (matching CalendarView) — a store
+            // write is not required for time to pass.
+            TimelineView(.everyMinute) { timeline in
+                panes(now: timeline.date)
             }
         }
         .toolbar { toolbarContent }
@@ -51,7 +48,6 @@ struct RemindersView: View {
             RemindersOnboardingSheet()
         }
         .onAppear {
-            now = .now
             normalizeSelection()
             applyPendingFocus()
             if !hasCompletedOnboarding {
@@ -64,25 +60,43 @@ struct RemindersView: View {
         .onChange(of: visibleLists.map(\.id)) { _, _ in
             normalizeSelection()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .reminderStoreDidChange)) { _ in
-            now = .now
+    }
+
+    private func panes(now: Date) -> some View {
+        HStack(spacing: 0) {
+            sidebar(now: now)
+                .frame(width: 210)
+            Divider()
+            detail(now: now)
         }
     }
 
     // MARK: - Sidebar
 
-    private var sidebar: some View {
-        List(selection: $selection) {
+    private func sidebar(now: Date) -> some View {
+        // One pass over the store per render for every badge; the row
+        // builders must not re-filter per row.
+        let active = activeReminders
+        let smartCounts = Dictionary(
+            uniqueKeysWithValues: ReminderSmartList.allCases.map { smart in
+                (smart, smart == .completed ? 0 : smart.filter(active, now: now).count)
+            }
+        )
+        let listCounts: [UUID: Int] = active.reduce(into: [:]) { counts, reminder in
+            guard !reminder.isCompleted, let listID = reminder.list?.id else { return }
+            counts[listID, default: 0] += 1
+        }
+        return List(selection: $selection) {
             Section {
                 ForEach(ReminderSmartList.allCases) { smart in
-                    smartRow(smart)
+                    smartRow(smart, count: smartCounts[smart] ?? 0)
                         .tag(ReminderListDetailView.Selection.smart(smart))
                 }
             }
 
             Section("My Lists") {
                 ForEach(visibleLists) { list in
-                    listRow(list)
+                    listRow(list, count: listCounts[list.id] ?? 0)
                         .tag(ReminderListDetailView.Selection.list(list.id))
                 }
             }
@@ -90,34 +104,32 @@ struct RemindersView: View {
         .listStyle(.sidebar)
     }
 
-    private func smartRow(_ smart: ReminderSmartList) -> some View {
+    private func smartRow(_ smart: ReminderSmartList, count: Int) -> some View {
         Label {
             HStack {
                 Text(smart.rawValue)
                 Spacer(minLength: 4)
-                if smart != .completed {
-                    let count = smart.filter(activeReminders, now: now).count
-                    if count > 0 {
-                        Text("\(count)")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
+                if smart != .completed, count > 0 {
+                    Text("\(count)")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
                 }
             }
         } icon: {
             Image(systemName: smart.systemImage)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(smartAccessibilityLabel(smart))
+        .accessibilityLabel(
+            smart == .completed ? smart.rawValue : "\(smart.rawValue), \(count) pending"
+        )
         .accessibilityAddTraits(selection == .smart(smart) ? .isSelected : [])
     }
 
-    private func listRow(_ list: ReminderList) -> some View {
+    private func listRow(_ list: ReminderList, count: Int) -> some View {
         Label {
             HStack {
                 Text(list.name)
                 Spacer(minLength: 4)
-                let count = pendingCount(in: list)
                 if count > 0 {
                     Text("\(count)")
                         .monospacedDigit()
@@ -130,14 +142,14 @@ struct RemindersView: View {
                 .font(.caption)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(list.name), \(pendingCount(in: list)) pending")
+        .accessibilityLabel("\(list.name), \(count) pending")
         .accessibilityAddTraits(selection == .list(list.id) ? .isSelected : [])
     }
 
     // MARK: - Detail
 
     @ViewBuilder
-    private var detail: some View {
+    private func detail(now: Date) -> some View {
         if let selection {
             VStack(alignment: .leading, spacing: 0) {
                 Text(detailTitle(for: selection))
@@ -150,7 +162,7 @@ struct RemindersView: View {
 
                 ReminderListDetailView(
                     selection: selection,
-                    reminders: reminders,
+                    reminders: visibleReminders,
                     lists: lists,
                     now: now,
                     onEdit: { editorRequest = .edit(id: $0.id) }
@@ -271,17 +283,20 @@ struct RemindersView: View {
 
     // MARK: - Derived
 
+    /// Everything shown outside a specific list view: hidden lists are
+    /// excluded here so smart views, badges, and history match the calendar
+    /// chips' visibility semantics.
+    private var visibleReminders: [Reminder] {
+        reminders.filter(\.isInVisibleList)
+    }
+
     /// Rows that can appear in pending views (masters and one-offs).
     private var activeReminders: [Reminder] {
-        reminders.filter { !$0.isCompletionLog }
+        visibleReminders.filter { !$0.isCompletionLog }
     }
 
     private var visibleLists: [ReminderList] {
         lists.filter(\.isVisible)
-    }
-
-    private func pendingCount(in list: ReminderList) -> Int {
-        activeReminders.count { $0.list?.id == list.id && !$0.isCompleted }
     }
 
     /// A new reminder inherits the current context: today's date in Today,
@@ -289,7 +304,7 @@ struct RemindersView: View {
     private var newReminderRequest: ReminderEditorRequest {
         switch selection {
         case .smart(.today):
-            .new(dueDate: Calendar.current.startOfDay(for: now), listID: nil)
+            .new(dueDate: Calendar.current.startOfDay(for: .now), listID: nil)
         case .list(let id):
             .new(dueDate: nil, listID: id)
         default:
@@ -315,12 +330,6 @@ struct RemindersView: View {
         }
     }
 
-    private func smartAccessibilityLabel(_ smart: ReminderSmartList) -> String {
-        guard smart != .completed else { return smart.rawValue }
-        let count = smart.filter(activeReminders, now: now).count
-        return "\(smart.rawValue), \(count) pending"
-    }
-
     private func normalizeSelection() {
         let visibleIDs = Set(visibleLists.map(\.id))
         if selection?.isAvailable(visibleListIDs: visibleIDs) != true {
@@ -329,19 +338,21 @@ struct RemindersView: View {
     }
 
     /// Selects the pane holding the notification-tapped reminder: its list
-    /// when visible, otherwise Today (which includes everything due or
-    /// overdue — the only reminders that fire alerts). Always reports the
-    /// focus handled so a stale ID can't re-trigger later.
+    /// when visible, otherwise its editor directly — no smart view is
+    /// guaranteed to contain a hidden-list reminder (its due date may have
+    /// rolled past Today). Always reports the focus handled so a stale ID
+    /// can't re-trigger later.
     private func applyPendingFocus() {
         guard let focusReminderID else { return }
         defer { onFocusHandled() }
-        guard let reminder = activeReminders.first(where: { $0.id == focusReminderID }) else {
-            return
-        }
+        // Unfiltered lookup: hidden-list reminders still fire alerts.
+        guard let reminder = reminders.first(where: {
+            $0.id == focusReminderID && !$0.isCompletionLog
+        }) else { return }
         if let list = reminder.list, list.isVisible {
             selection = .list(list.id)
         } else {
-            selection = .smart(.today)
+            editorRequest = .edit(id: reminder.id)
         }
     }
 }

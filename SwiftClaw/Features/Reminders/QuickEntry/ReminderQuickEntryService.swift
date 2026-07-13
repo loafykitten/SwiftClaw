@@ -151,35 +151,9 @@ final class ReminderQuickEntryService {
     // MARK: - Parsing
 
     /// Extracts the JSON object from the model response, tolerating markdown
-    /// code fences and surrounding prose.
+    /// code fences and surrounding prose (shared scanner).
     nonisolated static func parseResponse(_ response: String) -> ParsedReminder? {
-        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Try raw, then fenced, then first {...} span.
-        let candidates: [String] = [
-            trimmed,
-            Self.fencedBody(of: trimmed) ?? "",
-            Self.firstJSONObject(in: trimmed) ?? "",
-        ]
-        for candidate in candidates where !candidate.isEmpty {
-            if let parsed = try? JSONDecoder().decode(ParsedReminder.self, from: Data(candidate.utf8)) {
-                return parsed
-            }
-        }
-        return nil
-    }
-
-    private nonisolated static func fencedBody(of text: String) -> String? {
-        guard let fenceStart = text.range(of: "```") else { return nil }
-        let afterFence = text[fenceStart.upperBound...].drop { $0 != "\n" }.dropFirst()
-        guard let fenceEnd = afterFence.range(of: "```") else { return nil }
-        return String(afterFence[..<fenceEnd.lowerBound])
-    }
-
-    private nonisolated static func firstJSONObject(in text: String) -> String? {
-        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start < end else {
-            return nil
-        }
-        return String(text[start...end])
+        ModelResponseJSON.decode(ParsedReminder.self, from: response)
     }
 
     /// "YYYY-MM-DD" (or a longer string starting with it) → local midnight,

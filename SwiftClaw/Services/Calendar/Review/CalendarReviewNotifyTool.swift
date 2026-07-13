@@ -109,15 +109,24 @@ final class CalendarReviewNotifyTool: Tool {
             let context = modelContainer.mainContext
             let repository = CalendarRepository(modelContext: context)
 
-            let reviewItems: [ReviewItem] = actionsWithGUIDs.map { action, uuid in
-                let event = repository.event(withID: uuid)
-                return ReviewItem(
+            // Drop GUIDs that resolve to nothing — the model can hallucinate
+            // syntactically valid UUIDs, and a card action routed at a
+            // missing event helps no one. All-unresolved fails the call just
+            // like all-malformed does (mirrors ReminderReviewNotifyTool).
+            let resolved = actionsWithGUIDs.compactMap { action, uuid -> (CalendarReviewAction, UUID, CalendarEvent)? in
+                guard let event = repository.event(withID: uuid) else { return nil }
+                return (action, uuid, event)
+            }
+            guard !resolved.isEmpty else { return .noStoredEvents }
+
+            let reviewItems: [ReviewItem] = resolved.map { action, uuid, event in
+                ReviewItem(
                     itemID: uuid,
                     actionToken: .review,
                     actionLabel: "View",
                     summary: action.summary,
-                    subject: event?.title,
-                    date: event.map { event in
+                    subject: event.title,
+                    date: {
                         // For a recurring series the master's startDate is
                         // the original DTSTART (possibly years back); the
                         // card should show the occurrence the review is
@@ -126,8 +135,8 @@ final class CalendarReviewNotifyTool: Tool {
                         return event.isAllDay
                             ? displayStart.formatted(.dateTime.weekday(.abbreviated).month().day())
                             : displayStart.formatted(date: .abbreviated, time: .shortened)
-                    },
-                    accountLabel: event?.calendar?.name
+                    }(),
+                    accountLabel: event.calendar?.name
                 )
             }
             let payload = ReviewCardPayload(reviewType: .calendar, items: reviewItems)
@@ -145,23 +154,25 @@ final class CalendarReviewNotifyTool: Tool {
             }
             guard let createdChatID else { return .failed }
             self.hasCreatedChatForRun = true
-            return .created(createdChatID)
+            return .created(createdChatID, itemCount: reviewItems.count)
         }
 
         switch outcome {
         case .skippedIdempotent:
             return "Already created a review chat for this pass — additional `notify_user_about_events` call ignored."
+        case .noStoredEvents:
+            throw ToolError.invalidArguments("event_actions contained no GUIDs matching stored events — use IDs returned by fetch_events")
         case .failed:
             throw ToolError.executionFailed("the review chat could not be saved and was NOT created")
-        case .created:
-            let count = actionsWithGUIDs.count
+        case .created(_, let count):
             return "\(targetChatID == nil ? "Created" : "Updated") review chat with \(count) item\(count == 1 ? "" : "s")."
         }
     }
 
     private enum CreationOutcome {
         case skippedIdempotent
-        case created(UUID)
+        case noStoredEvents
+        case created(UUID, itemCount: Int)
         case failed
     }
 

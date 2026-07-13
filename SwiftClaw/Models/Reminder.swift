@@ -120,6 +120,24 @@ final class Reminder {
         recurrenceRuleString != nil || afterCompletionRepeatData != nil
     }
 
+    /// The one overdue rule every surface shares (rows, calendar chips,
+    /// workspace tile, AI review): timed reminders are overdue past their due
+    /// instant; date-only ones keep all of their local day and only go
+    /// overdue once that day has passed. Completed reminders never are.
+    func isOverdue(now: Date, calendar: Calendar = .current) -> Bool {
+        guard !isCompleted, let dueDate else { return false }
+        if hasDueTime {
+            return dueDate < now
+        }
+        return dueDate < calendar.startOfDay(for: now)
+    }
+
+    /// Whether the reminder's list is shown in the UI (list-less reminders
+    /// are always visible).
+    var isInVisibleList: Bool {
+        list?.isVisible ?? true
+    }
+
     var timeZone: TimeZone? {
         timeZoneIdentifier.flatMap(TimeZone.init(identifier:))
     }

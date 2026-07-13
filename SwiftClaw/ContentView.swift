@@ -143,6 +143,9 @@ struct ContentView: View {
                     ReminderAlertScheduler.shared.clearAllPendingAlerts()
                     ReminderWorkflowManager.shared.stop()
                 }
+                // Either direction moves the calendar between its shared and
+                // standalone alert budgets.
+                CalendarAlertScheduler.shared.settingsDidChange()
             }
             .onAppear {
                 applyLaunchNavigationIfNeeded()

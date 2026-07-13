@@ -48,6 +48,9 @@ struct CalendarAlertSchedulerTests {
             scheduler.alertsEnabledProvider = {
                 SettingsStorage.areCalendarAlertNotificationsEnabled(userDefaults: defaults)
             }
+            // Deterministic shared-mode budget; the production default reads
+            // the real reminders settings.
+            scheduler.reminderAlertsActiveProvider = { true }
         }
 
         @MainActor
@@ -192,6 +195,31 @@ struct CalendarAlertSchedulerTests {
         let titles = Set(harness.spy.addedRequests.map(\.content.title))
         #expect(titles.contains("Event 0"))
         #expect(!titles.contains("Event 59"))
+    }
+
+    /// With reminder alerts unable to book (feature or toggle off) the
+    /// calendar keeps the full standalone budget instead of reserving slots
+    /// nothing will use.
+    @Test func budgetExpandsWhileReminderAlertsAreIdle() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+        harness.scheduler.reminderAlertsActiveProvider = { false }
+
+        let calendar = harness.repository.defaultCalendar()
+        for index in 0..<60 {
+            let start = Self.hoursFromNow(1 + Double(index) * 0.5)
+            let event = harness.repository.insert(CalendarEvent(
+                title: "Event \(index)",
+                startDate: start,
+                endDate: start.addingTimeInterval(900),
+                calendar: calendar
+            ))
+            event.alarms = [CalendarAlarmPayload(offsetSeconds: 0)]
+            harness.repository.noteUpdated(event)
+        }
+
+        await harness.reconcileAndFlush()
+        #expect(harness.spy.addedRequests.count == CalendarAlertScheduler.standaloneMaximumPendingAlerts)
     }
 
     @Test func disabledCalendarAlertSettingSuppressesBooking() async throws {

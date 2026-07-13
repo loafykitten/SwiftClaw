@@ -80,6 +80,9 @@ struct NotificationSettingsView: View {
         }
         .onChange(of: reminderAlertsEnabled) {
             ReminderAlertScheduler.shared.settingsDidChange()
+            // The calendar budget depends on whether reminder alerts can
+            // book (36 shared vs 48 standalone).
+            CalendarAlertScheduler.shared.settingsDidChange()
         }
         .onChange(of: remindersAllDayAlertMinutes) {
             // Date-only fire dates derive from this time; rebook them.

@@ -7,14 +7,13 @@ import SwiftUI
 struct ReminderRowView: View {
     let reminder: Reminder
     let now: Date
+    /// False only for non-latest completion logs, whose undo the repository
+    /// rejects (it would rewind the master's series state).
+    var isToggleEnabled: Bool = true
     let onToggleCompletion: () -> Void
 
     private var isOverdue: Bool {
-        guard !reminder.isCompleted, let dueDate = reminder.dueDate else { return false }
-        if reminder.hasDueTime {
-            return dueDate < now
-        }
-        return dueDate < Calendar.current.startOfDay(for: now)
+        reminder.isOverdue(now: now)
     }
 
     private var listColor: Color {
@@ -60,8 +59,18 @@ struct ReminderRowView: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(reminder.isCompleted ? "Mark incomplete" : "Complete")
-        .help(reminder.isCompleted ? "Mark incomplete" : "Complete")
+        .disabled(!isToggleEnabled)
+        .accessibilityLabel(toggleLabel)
+        .help(toggleLabel)
+    }
+
+    private var toggleLabel: String {
+        guard isToggleEnabled else {
+            return String(localized: "Undo the most recent completion first")
+        }
+        return reminder.isCompleted
+            ? String(localized: "Mark incomplete")
+            : String(localized: "Complete")
     }
 
     @ViewBuilder
@@ -97,11 +106,13 @@ struct ReminderRowView: View {
                 Image(systemName: "repeat")
                     .accessibilityLabel("Repeats")
             }
-            if !reminder.checklist.isEmpty {
-                let done = reminder.checklist.count(where: \.isDone)
-                Text("\(done) of \(reminder.checklist.count)")
+            // Bound once: `checklist` JSON-decodes its blob on every access.
+            let checklist = reminder.checklist
+            if !checklist.isEmpty {
+                let done = checklist.count(where: \.isDone)
+                Text("\(done) of \(checklist.count)")
                     .monospacedDigit()
-                    .accessibilityLabel("\(done) of \(reminder.checklist.count) steps done")
+                    .accessibilityLabel("\(done) of \(checklist.count) steps done")
             }
             if reminder.notes?.isEmpty == false {
                 Image(systemName: "note.text")

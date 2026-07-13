@@ -79,8 +79,10 @@ Event alarms become `UNCalendarNotificationTrigger` requests through
 `AppNotificationService` (the service's only scheduled posting path).
 The scheduler reconciles a rolling 7-day window **by fire date** (occurrences
 are expanded a further 28 days out so long-lead alarms still book;
-deterministic identifiers, soonest-first under a 36-request budget — lowered
-from 48 to leave room for reminder alerts under the 64-request system cap) on every
+deterministic identifiers, soonest-first under a 36-request budget while
+reminder alerts can book, 48 when they can't — the split shares the
+64-request system cap without reserving slots an idle reminder scheduler
+never uses) on every
 store save (`.calendarStoreDidChange`), remote change, and a 12 h tick.
 Disabling the notification toggle empties the desired set, so the next
 reconcile *clears* already-booked requests (`settingsDidChange()` triggers one

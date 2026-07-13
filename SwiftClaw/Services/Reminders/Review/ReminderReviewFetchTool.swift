@@ -121,13 +121,7 @@ final class ReminderReviewFetchTool: Tool {
         }
     }
 
-    /// Timed reminders are overdue past their due instant; date-only ones
-    /// keep all of their local day and are overdue once that day has passed.
     static func isOverdue(_ reminder: Reminder, now: Date) -> Bool {
-        guard let due = reminder.dueDate else { return false }
-        if reminder.hasDueTime {
-            return due < now
-        }
-        return due < Calendar.current.startOfDay(for: now)
+        reminder.isOverdue(now: now)
     }
 }

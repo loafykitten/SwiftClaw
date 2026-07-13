@@ -64,6 +64,8 @@ struct NotificationRoutingTests {
     @Test func reminderTapShowsRemindersWithTheFocusID() throws {
         let (router, fixture) = try Self.isolatedRouter()
         defer { Self.restore(router, fixture) }
+        AppNotificationService.shared.isRemindersFeatureEnabled = { true }
+        defer { AppNotificationService.shared.isRemindersFeatureEnabled = { SettingsStorage.isRemindersEnabled() } }
 
         let reminderID = UUID()
         AppNotificationService.shared.routeNotificationTap(
@@ -72,6 +74,24 @@ struct NotificationRoutingTests {
 
         #expect(router.selectedNavigationItem == .workspace)
         #expect(router.pendingReminderFocusID == reminderID)
+    }
+
+    /// A delivered reminder alert can outlive the feature being switched
+    /// off; its tap must be a no-op instead of stranding a focus ID nothing
+    /// will ever clear.
+    @Test func reminderTapIsIgnoredWhileTheFeatureIsDisabled() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+        AppNotificationService.shared.isRemindersFeatureEnabled = { false }
+        defer { AppNotificationService.shared.isRemindersFeatureEnabled = { SettingsStorage.isRemindersEnabled() } }
+
+        let previousSelection = router.selectedNavigationItem
+        AppNotificationService.shared.routeNotificationTap(
+            payload: NotificationRoutingPayload(kind: .reminder, targetID: UUID())
+        )
+
+        #expect(router.selectedNavigationItem == previousSelection)
+        #expect(router.pendingReminderFocusID == nil)
     }
 
     @Test func undecodablePayloadRoutesNowhere() throws {

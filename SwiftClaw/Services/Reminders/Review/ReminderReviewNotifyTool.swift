@@ -109,23 +109,31 @@ final class ReminderReviewNotifyTool: Tool {
             let context = modelContainer.mainContext
             let repository = ReminderRepository(modelContext: context)
 
-            let reviewItems: [ReviewItem] = actionsWithGUIDs.map { action, uuid in
-                let reminder = repository.reminder(withID: uuid)
-                return ReviewItem(
+            // Drop GUIDs that resolve to nothing — the model can hallucinate
+            // syntactically valid UUIDs, and a card action routed at a
+            // missing reminder helps no one. All-unresolved fails the call
+            // just like all-malformed does.
+            let resolved = actionsWithGUIDs.compactMap { action, uuid -> (ReminderReviewAction, UUID, Reminder)? in
+                guard let reminder = repository.reminder(withID: uuid) else { return nil }
+                return (action, uuid, reminder)
+            }
+            guard !resolved.isEmpty else { return .noStoredReminders }
+
+            let reviewItems: [ReviewItem] = resolved.map { action, uuid, reminder in
+                ReviewItem(
                     itemID: uuid,
                     actionToken: .review,
                     actionLabel: "View",
                     summary: action.summary,
-                    subject: reminder?.title,
+                    subject: reminder.title,
                     // A recurring master's dueDate is already the next
                     // pending occurrence — no expansion needed.
-                    date: reminder.flatMap { reminder in
-                        guard let due = reminder.dueDate else { return nil }
-                        return reminder.hasDueTime
+                    date: reminder.dueDate.map { due in
+                        reminder.hasDueTime
                             ? due.formatted(date: .abbreviated, time: .shortened)
                             : due.formatted(.dateTime.weekday(.abbreviated).month().day())
                     },
-                    accountLabel: reminder?.list?.name
+                    accountLabel: reminder.list?.name
                 )
             }
             let payload = ReviewCardPayload(reviewType: .reminders, items: reviewItems)
@@ -143,23 +151,25 @@ final class ReminderReviewNotifyTool: Tool {
             }
             guard let createdChatID else { return .failed }
             self.hasCreatedChatForRun = true
-            return .created(createdChatID)
+            return .created(createdChatID, itemCount: reviewItems.count)
         }
 
         switch outcome {
         case .skippedIdempotent:
             return "Already created a review chat for this pass — additional `notify_user_about_reminders` call ignored."
+        case .noStoredReminders:
+            throw ToolError.invalidArguments("reminder_actions contained no GUIDs matching stored reminders — use IDs returned by fetch_reminders")
         case .failed:
             throw ToolError.executionFailed("the review chat could not be saved and was NOT created")
-        case .created:
-            let count = actionsWithGUIDs.count
+        case .created(_, let count):
             return "\(targetChatID == nil ? "Created" : "Updated") review chat with \(count) item\(count == 1 ? "" : "s")."
         }
     }
 
     private enum CreationOutcome {
         case skippedIdempotent
-        case created(UUID)
+        case noStoredReminders
+        case created(UUID, itemCount: Int)
         case failed
     }
 
