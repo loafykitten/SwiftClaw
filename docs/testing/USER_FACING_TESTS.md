@@ -198,6 +198,22 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   after-completion tasks. Early completion, late completion, skip, undo, COUNT
   exhaustion, and history should match the language shown to the user.
 
+### Notes
+
+- **H-NOTE-001 — External vault interoperability.** Connect a disposable folder
+  containing Markdown notes and Obsidian metadata. Add, edit, rename, and remove
+  notes from another editor. SwiftClaw must reconcile the visible catalog while
+  leaving dotfiles, `.obsidian/`, non-Markdown files, and symlinks untouched.
+- **H-NOTE-002 — Concurrent-edit safety.** Edit the same note in SwiftClaw and an
+  external editor. Saving must preserve the external version and create a clearly
+  surfaced conflict copy containing the SwiftClaw edits. If the file is deleted
+  externally while SwiftClaw has unsaved text, that text must remain visible and
+  the deleted path must not be silently recreated.
+- **H-NOTE-003 — External-vault permission recovery.** Disconnect or revoke access
+  while a note has unsaved edits, then restore access. The editor must keep the
+  text readable and selected, explain the save failure, and save successfully on
+  retry without requiring a relaunch.
+
 ### Settings
 
 - **H-SET-001 — Theme quality and propagation.** Judge System/Light/Dark and
@@ -235,7 +251,7 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   Reminders, and Notes. Workspace widgets and feature-backed Settings sections
   must update immediately, and hidden destinations must be pruned from selection
   and navigation history.
-- **CU-SHELL-005 — Placeholder features.** Deep Research, Notes, and Memory must
+- **CU-SHELL-005 — Placeholder features.** Deep Research and Memory must
   show intentional Coming Soon states with correct titles rather than blank or
   interactive-looking unfinished UI.
 - **CU-SHELL-006 — Theme persistence.** Change theme/accent, open both windows,
@@ -522,6 +538,31 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   its visible list, or open the reminder's editor directly when its list is
   hidden.
 
+### Notes
+
+- **CU-NOTE-001 — Onboarding and vault choice.** Reset first-open state and cover
+  app-managed vault creation, choosing a prepared external folder, cancellation,
+  Not Now, and completion persistence. No vault work should run before Notes is
+  enabled and configured.
+- **CU-NOTE-002 — Create, edit, autosave, and search.** Create several notes,
+  type distinctive content, wait for idle autosave, switch selections, relaunch,
+  and confirm content persists. New filenames must be safe and unique; title
+  search and empty states must track the visible list.
+- **CU-NOTE-003 — External catalog refresh.** With a prepared disposable vault,
+  add, rename, modify, and remove selected and non-selected Markdown files outside
+  SwiftClaw. The list and Settings note count must refresh; clean selected files
+  may close, while dirty deleted files retain their editor buffer and warning.
+- **CU-NOTE-004 — Conflict and failed-save presentation.** Trigger a hash conflict
+  and a recoverable write failure with safe fixtures. Conflict-copy and save-error
+  banners must be readable and accessible, failed selection changes must keep the
+  original dirty note open, and editable text must never be replaced by an error
+  placeholder.
+- **CU-NOTE-005 — Editor layout and resizing.** At minimum and common window
+  sizes, resize the Notes list/detail split and inspect screenshots as well as
+  accessibility state. The selected note text must keep normal leading padding;
+  the list, editor, New Note, and Search notes must remain visible without
+  clipping or overlap.
+
 ### Settings Window
 
 - **CU-SET-001 — Open and reuse.** Command-, and the app menu must open the native
@@ -574,8 +615,10 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
 - **CU-SET-019 — Reminders settings.** Enable reveals default list, Show in
   Calendar, review cadence, imports, and per-list export; values persist and
   disable hides the feature-backed section safely.
-- **CU-SET-020 — Notes settings.** Enabling Notes reveals its Settings section and
-  Workspace tile; both must show a consistent Coming Soon state.
+- **CU-SET-020 — Notes settings.** Enabling Notes reveals vault location, resolved
+  path, note count, default folder and review defaults, plus Change, Reveal, and
+  Reset controls. Notes and Settings must agree on the active vault; Reset must
+  disconnect without deleting files, and disabling Notes must stop vault activity.
 
 ## Maintenance Log
 
@@ -586,3 +629,6 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   and rapid disable-then-enable fixes landed in `CalendarAlertScheduler`, so the
   former H-CAL-006 expected-failure entry was removed; both cases are now
   positive checks under H-CAL-005.
+- **2026-07-13 — Notes Phase 1.** Replaced placeholder coverage with the vault
+  onboarding, plain-editor autosave, external reconciliation, conflict safety,
+  permission recovery, and Settings behavior delivered by the vault foundation.

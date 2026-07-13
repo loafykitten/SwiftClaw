@@ -57,6 +57,8 @@ Workspace tile + review service). Work happens on the `feature/notes` branch.
 
 ## Phase 1 — Vault foundation (files, safety, settings, onboarding)
 
+**Status: Complete (2026-07-13).**
+
 User can pick/create a vault, list notes, create/edit with an interim plain
 editor, and never lose data. Behind `settings.notes.enabled`.
 

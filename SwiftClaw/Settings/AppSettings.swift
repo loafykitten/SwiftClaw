@@ -169,6 +169,43 @@ extension SettingsKeys {
     static let remindersShowInCalendar = "settings.reminders.showInCalendar"
 }
 
+// MARK: - Notes keys
+
+extension SettingsKeys {
+    /// Which case of `VaultLocation` is active — `"appManaged"` or
+    /// `"external"`. Paired with `notesVaultBookmarkKey` rather than
+    /// encoding the whole `VaultLocation` as one JSON blob, so switching
+    /// location types is a plain two-key write/clear.
+    static let notesVaultLocationType = "settings.notes.vaultLocationType"
+    /// The `SecurityScopedBookmarkStore` key naming the saved bookmark for
+    /// an `.external` vault. Only meaningful when `notesVaultLocationType`
+    /// is `"external"`; cleared when switching back to `.appManaged`.
+    static let notesVaultBookmarkKey = "settings.notes.vaultBookmarkKey"
+    /// Stable identifier for the current vault; keys its on-disk
+    /// index/revisions directories (see `VaultConfigurationStore`).
+    static let notesVaultID = "settings.notes.vaultID"
+    /// App state (not a user setting): whether the vault-picker onboarding
+    /// has completed with a usable vault. Also gates whether `NotesFeatureModel`
+    /// auto-configures a vault on launch — `loadNotesVaultLocation()` defaults
+    /// to `.appManaged` even before this is set, so this flag is what stops
+    /// an app-managed vault from being silently created before the user has
+    /// chosen anything.
+    static let notesHasCompletedOnboarding = "settings.notes.hasCompletedOnboarding"
+    /// Subfolder (vault-relative) that quick-capture writes today's daily
+    /// note into.
+    static let notesDailyNoteFolder = "settings.notes.dailyNoteFolder"
+    /// Subfolder (vault-relative) new notes default into; `nil`/empty means
+    /// the vault root.
+    static let notesDefaultNewNoteFolder = "settings.notes.defaultNewNoteFolder"
+    /// Seconds between scheduled notes-review passes; 0 = manual only.
+    static let notesReviewIntervalSeconds = "settings.notes.reviewInterval"
+    /// App state: when the last notes review pass completed.
+    static let notesLastReviewCompletedAt = "settings.notes.lastReviewCompletedAt"
+    /// Whether on-device `NLEmbedding` vector search runs alongside FTS
+    /// (Phase 3) — degrades to FTS-only when off or unavailable.
+    static let notesEmbeddingsEnabled = "settings.notes.embeddingsEnabled"
+}
+
 // MARK: - Notification keys
 
 extension SettingsKeys {
@@ -229,6 +266,9 @@ enum SettingsNotifications {
     )
     static let remindersReviewScheduleDidChange = Notification.Name(
         "settings.reminders.reviewSchedule.didChange"
+    )
+    static let notesReviewScheduleDidChange = Notification.Name(
+        "settings.notes.reviewSchedule.didChange"
     )
     /// Posted after each review pass finishes (whether or not it produced a
     /// card) so views showing "Reviewed … ago / Next review …" re-read the
@@ -1153,6 +1193,97 @@ enum SettingsStorage {
         toolEnabled(
             forKey: SettingsKeys.notesEnabled,
             defaultValue: defaultNotesEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
+    private static let notesVaultLocationTypeAppManaged = "appManaged"
+    private static let notesVaultLocationTypeExternal = "external"
+
+    /// Combines `notesVaultLocationType` + `notesVaultBookmarkKey` into a
+    /// `VaultLocation`. An `"external"` type with no saved bookmark key
+    /// (shouldn't happen via `saveNotesVaultLocation`, but is possible from
+    /// hand-edited defaults) falls back to `.appManaged` rather than
+    /// producing an unusable location.
+    static func loadNotesVaultLocation(userDefaults: UserDefaults = .standard) -> VaultLocation {
+        guard userDefaults.string(forKey: SettingsKeys.notesVaultLocationType) == notesVaultLocationTypeExternal,
+              let bookmarkKey = userDefaults.string(forKey: SettingsKeys.notesVaultBookmarkKey)
+        else {
+            return .appManaged
+        }
+        return .external(bookmarkKey: bookmarkKey)
+    }
+
+    /// Persists `location`. Switching to `.appManaged` clears the stale
+    /// `notesVaultBookmarkKey` pointer so a later switch back to `.external`
+    /// never resurrects a bookmark key naming a folder no longer selected —
+    /// callers that also want the underlying `SecurityScopedBookmarkStore`
+    /// entry removed should do so with the key returned by the previous
+    /// `loadNotesVaultLocation()` before calling this.
+    static func saveNotesVaultLocation(_ location: VaultLocation, userDefaults: UserDefaults = .standard) {
+        switch location {
+        case .appManaged:
+            userDefaults.set(notesVaultLocationTypeAppManaged, forKey: SettingsKeys.notesVaultLocationType)
+            userDefaults.removeObject(forKey: SettingsKeys.notesVaultBookmarkKey)
+        case .external(let bookmarkKey):
+            userDefaults.set(notesVaultLocationTypeExternal, forKey: SettingsKeys.notesVaultLocationType)
+            userDefaults.set(bookmarkKey, forKey: SettingsKeys.notesVaultBookmarkKey)
+        }
+    }
+
+    static let defaultNotesDailyNoteFolder = "Daily Notes"
+
+    static func loadNotesDailyNoteFolder(userDefaults: UserDefaults = .standard) -> String {
+        userDefaults.string(forKey: SettingsKeys.notesDailyNoteFolder) ?? defaultNotesDailyNoteFolder
+    }
+
+    static func saveNotesDailyNoteFolder(_ folder: String, userDefaults: UserDefaults = .standard) {
+        userDefaults.set(folder, forKey: SettingsKeys.notesDailyNoteFolder)
+    }
+
+    /// `nil` means the vault root — no default subfolder is imposed on new
+    /// notes unless the user configures one.
+    static func loadNotesDefaultNewNoteFolder(userDefaults: UserDefaults = .standard) -> String? {
+        userDefaults.string(forKey: SettingsKeys.notesDefaultNewNoteFolder)
+    }
+
+    static func saveNotesDefaultNewNoteFolder(_ folder: String?, userDefaults: UserDefaults = .standard) {
+        guard let folder, !folder.isEmpty else {
+            userDefaults.removeObject(forKey: SettingsKeys.notesDefaultNewNoteFolder)
+            return
+        }
+        userDefaults.set(folder, forKey: SettingsKeys.notesDefaultNewNoteFolder)
+    }
+
+    /// 24 hours; 0 means manual-only (matches the Calendar/Reminders review
+    /// interval semantics).
+    static let defaultNotesReviewIntervalSeconds = 24 * 3600
+
+    static func loadNotesReviewInterval(userDefaults: UserDefaults = .standard) -> Int {
+        guard userDefaults.object(forKey: SettingsKeys.notesReviewIntervalSeconds) != nil else {
+            return defaultNotesReviewIntervalSeconds
+        }
+        return max(0, userDefaults.integer(forKey: SettingsKeys.notesReviewIntervalSeconds))
+    }
+
+    static func saveNotesReviewInterval(_ seconds: Int, userDefaults: UserDefaults = .standard) {
+        userDefaults.set(max(0, seconds), forKey: SettingsKeys.notesReviewIntervalSeconds)
+    }
+
+    static func loadNotesLastReviewCompletedAt(userDefaults: UserDefaults = .standard) -> Date? {
+        userDefaults.object(forKey: SettingsKeys.notesLastReviewCompletedAt) as? Date
+    }
+
+    static func saveNotesLastReviewCompletedAt(_ date: Date, userDefaults: UserDefaults = .standard) {
+        userDefaults.set(date, forKey: SettingsKeys.notesLastReviewCompletedAt)
+    }
+
+    static let defaultNotesEmbeddingsEnabled = true
+
+    static func isNotesEmbeddingsEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        boolSetting(
+            forKey: SettingsKeys.notesEmbeddingsEnabled,
+            defaultValue: defaultNotesEmbeddingsEnabled,
             userDefaults: userDefaults
         )
     }
