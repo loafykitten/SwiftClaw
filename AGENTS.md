@@ -19,6 +19,13 @@ this file to stay scannable:
   → `docs/features/CALENDAR.md`
 - **The Reminders subsystem** (roll-forward recurrence, quick entry, import/export, due-date alerts, review loop, calendar chips)
   → `docs/features/REMINDERS.md`
+- **End-of-feature/phase user-facing test catalog**
+  → `docs/testing/USER_FACING_TESTS.md`
+
+`docs/testing/USER_FACING_TESTS.md` is irrelevant during ordinary implementation
+and review. Do not read it as requirements or implementation guidance. Only open
+it at the end of a feature or phase, then add or update tests for changed
+user-facing behavior.
 
 ## Working-task memory (`docs/memory/`)
 
@@ -28,6 +35,8 @@ check it** — if a file there matches the task you were given, read it and
 resume from its "Next steps". For any multi-session task, create/update a
 `<task-slug>.md` file there as you go, and delete it when the task ships.
 Format and rules: `docs/memory/README.md`.
+
+Small tasks and bug fixes must be handled as normal work, not deferred.
 
 ## Additional Agent-friendly CLI tools
 `rg` - text/regex search (`rg -n "pattern" --type swift`)
