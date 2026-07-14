@@ -141,17 +141,14 @@ struct InferenceQueryTests {
     }
 
     @Test func assistantPersonaPromptUsesCustomPersonality() throws {
-        let suiteName = "AssistantPersonaPromptUsesCustomPersonality-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
 
-        defaults.set("Clawdia", forKey: SettingsKeys.assistantDisplayName)
-        defaults.set(true, forKey: SettingsKeys.assistantUsesCustomPersonality)
-        defaults.set("Be exact, kind, and lightly funny.", forKey: SettingsKeys.assistantCustomPersonality)
+        fixture.defaults.set("Clawdia", forKey: SettingsKeys.assistantDisplayName)
+        fixture.defaults.set(true, forKey: SettingsKeys.assistantUsesCustomPersonality)
+        fixture.defaults.set("Be exact, kind, and lightly funny.", forKey: SettingsKeys.assistantCustomPersonality)
 
-        let prompt = AssistantPersona.personaPrompt(userDefaults: defaults)
+        let prompt = AssistantPersona.personaPrompt(userDefaults: fixture.defaults)
 
         #expect(prompt.contains("You are Clawdia"))
         #expect(prompt.contains("# Personality"))

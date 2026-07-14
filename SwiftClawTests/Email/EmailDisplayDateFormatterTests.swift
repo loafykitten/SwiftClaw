@@ -30,37 +30,20 @@ struct EmailDisplayDateFormatterTests {
         #expect(normalizedLabel == "Yesterday, 11:30 PM")
     }
 
-    @Test func sameDayUnderMinuteUsesNow() throws {
+    @Test(arguments: [
+        (-30.0, "now"),
+        (-120.0, "2m ago"),
+        (-7_200.0, "2h ago"),
+    ])
+    func sameDayUsesRelativeLabels(_ offset: TimeInterval, _ expected: String) throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
         let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 6, day: 25, hour: 9)))
-        let date = now.addingTimeInterval(-30)
+        let date = now.addingTimeInterval(offset)
 
         let label = EmailDisplayDateFormatter.label(for: date, now: now, calendar: calendar)
 
-        #expect(label == "now")
-    }
-
-    @Test func sameDayRecentMailUsesMinutesAgo() throws {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
-        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 6, day: 25, hour: 9)))
-        let date = now.addingTimeInterval(-120)
-
-        let label = EmailDisplayDateFormatter.label(for: date, now: now, calendar: calendar)
-
-        #expect(label == "2m ago")
-    }
-
-    @Test func sameDayOlderMailUsesHoursAgo() throws {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = try #require(TimeZone(secondsFromGMT: 0))
-        let now = try #require(calendar.date(from: DateComponents(year: 2026, month: 6, day: 25, hour: 9)))
-        let date = now.addingTimeInterval(-7_200)
-
-        let label = EmailDisplayDateFormatter.label(for: date, now: now, calendar: calendar)
-
-        #expect(label == "2h ago")
+        #expect(label == expected)
     }
 
     @Test func twoDaysAgoFallsBackToNormalDateLabel() throws {

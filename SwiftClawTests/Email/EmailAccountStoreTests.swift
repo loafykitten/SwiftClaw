@@ -5,7 +5,7 @@ import Testing
 @MainActor
 struct EmailAccountStoreTests {
     @Test func startsEmptyWithFreshUserDefaults() throws {
-        let fixture = try makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = EmailAccountStore(userDefaults: fixture.defaults)
@@ -14,18 +14,11 @@ struct EmailAccountStoreTests {
     }
 
     @Test func addPersistsAcrossInstances() throws {
-        let fixture = try makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = EmailAccountStore(userDefaults: fixture.defaults)
-        let account = StoredEmailAccount(
-            displayName: "Work",
-            imapHost: "imap.work.com",
-            imapUsername: "me@work.com",
-            smtpHost: "smtp.work.com",
-            smtpUsername: "me@work.com",
-            fromAddress: "me@work.com"
-        )
+        let account = Self.completeAccount()
         store.add(account)
 
         let reload = EmailAccountStore(userDefaults: fixture.defaults)
@@ -36,18 +29,11 @@ struct EmailAccountStoreTests {
     }
 
     @Test func updateReplacesFields() throws {
-        let fixture = try makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = EmailAccountStore(userDefaults: fixture.defaults)
-        let original = StoredEmailAccount(
-            displayName: "Work",
-            imapHost: "imap.work.com",
-            imapUsername: "me@work.com",
-            smtpHost: "smtp.work.com",
-            smtpUsername: "me@work.com",
-            fromAddress: "me@work.com"
-        )
+        let original = Self.completeAccount()
         store.add(original)
 
         var edited = original
@@ -60,18 +46,11 @@ struct EmailAccountStoreTests {
     }
 
     @Test func removeDeletesAccountAndKeychainPasswords() throws {
-        let fixture = try makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = EmailAccountStore(userDefaults: fixture.defaults)
-        let account = StoredEmailAccount(
-            displayName: "Work",
-            imapHost: "imap.work.com",
-            imapUsername: "me@work.com",
-            smtpHost: "smtp.work.com",
-            smtpUsername: "me@work.com",
-            fromAddress: "me@work.com"
-        )
+        let account = Self.completeAccount()
         store.add(account)
         store.setPassword("secret-imap", kind: .imap, for: account)
         store.setPassword("secret-smtp", kind: .smtp, for: account)
@@ -88,7 +67,7 @@ struct EmailAccountStoreTests {
     }
 
     @Test func migrateLegacyCreatesAccountFromFlatKeys() throws {
-        let fixture = try makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         // Seed the legacy flat keys.
@@ -137,7 +116,7 @@ struct EmailAccountStoreTests {
     }
 
     @Test func migrateLegacyIsNoOpWhenAccountsAlreadyExist() throws {
-        let fixture = try makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         fixture.defaults.set("imap.legacy.com", forKey: SettingsKeys.emailImapHost)
@@ -176,7 +155,7 @@ struct EmailAccountStoreTests {
     }
 
     @Test func accountsProviderSnapshotsCurrentList() async throws {
-        let fixture = try makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = EmailAccountStore(userDefaults: fixture.defaults)
@@ -191,7 +170,7 @@ struct EmailAccountStoreTests {
     }
 
     @Test func folderCatalogFieldsRoundTripAndLegacyDecodeLeavesThemNil() throws {
-        let fixture = try makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = EmailAccountStore(userDefaults: fixture.defaults)
@@ -235,7 +214,7 @@ struct EmailAccountStoreTests {
           "fromAddress": "legacy@example.com"
         }]
         """
-        let legacyDefaults = try makeFixture()
+        let legacyDefaults = try UserDefaultsFixture()
         defer { legacyDefaults.cleanup() }
         legacyDefaults.defaults.set(legacyJSON.data(using: .utf8), forKey: SettingsKeys.emailAccounts)
         let legacyStore = EmailAccountStore(userDefaults: legacyDefaults.defaults)
@@ -246,9 +225,14 @@ struct EmailAccountStoreTests {
         #expect(legacy.reviewIncludedMailboxes == nil)
     }
 
-    // MARK: - Helpers
-
-    private func makeFixture() throws -> UserDefaultsFixture {
-        try UserDefaultsFixture()
+    private static func completeAccount() -> StoredEmailAccount {
+        StoredEmailAccount(
+            displayName: "Work",
+            imapHost: "imap.work.com",
+            imapUsername: "me@work.com",
+            smtpHost: "smtp.work.com",
+            smtpUsername: "me@work.com",
+            fromAddress: "me@work.com"
+        )
     }
 }

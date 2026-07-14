@@ -3,34 +3,16 @@ import SwiftData
 import Testing
 @testable import SwiftClaw
 
-@Suite
 struct ChatReasoningEffortPersistenceTests {
-    @Test func defaultsToOffWhenUnset() {
+    @Test func reasoningEffortMapsToAndFromItsStoredValue() {
         let chat = Chat(title: "New chat", modelSelection: "any-model")
-
         #expect(chat.reasoningEffort == .off)
-    }
-
-    @Test func initPersistsReasoningEffortRawValue() {
-        let chat = Chat(title: "New chat", modelSelection: "any-model", reasoningEffort: .medium)
-
-        #expect(chat.reasoningEffortRaw == "medium")
-        #expect(chat.reasoningEffort == .medium)
-    }
-
-    @Test func computedSetterWritesRawValue() {
-        let chat = Chat(title: "New chat", modelSelection: "any-model")
 
         chat.reasoningEffort = .high
-
         #expect(chat.reasoningEffortRaw == "high")
         #expect(chat.reasoningEffort == .high)
-    }
 
-    @Test func recoversFromInvalidRawValueAsOff() {
-        let chat = Chat(title: "New chat", modelSelection: "any-model")
         chat.reasoningEffortRaw = "bogus"
-
         #expect(chat.reasoningEffort == .off)
     }
 

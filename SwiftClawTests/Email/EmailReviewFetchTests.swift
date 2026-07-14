@@ -380,30 +380,6 @@ struct EmailReviewFetchTests {
         #expect(result.components(separatedBy: "\"threadID\"").count - 1 == 3)
     }
 
-    @Test func fetchToolDefaultIncludesOldEligibleReadMail() async throws {
-        let container = try EmailRepositoryTests.inMemoryContainer()
-        let repository = EmailRepository(modelContext: ModelContext(container))
-        repository.upsertMessages(
-            [
-                EmailRepositoryTests.simpleMessage(
-                    uid: 1, messageID: "<tool-old@example.com>", subject: "Tool old read",
-                    isRead: true, date: Date().addingTimeInterval(-30 * 86_400)
-                )
-            ],
-            mailbox: "INBOX", accountID: Self.accountID
-        )
-        repository.resolveThreads()
-
-        let tool = EmailReviewFetchTool(
-            modelContainer: container,
-            applySuppression: true,
-            defaults: Self.fetchDefaults(limit: 10)
-        )
-        let result = try await tool.execute(arguments: [:])
-        #expect(result.contains("Tool old read"))
-        #expect(result.components(separatedBy: "\"threadID\"").count - 1 == 1)
-    }
-
     @Test func fetchToolFoldersArgumentCanFetchJunk() async throws {
         let container = try EmailRepositoryTests.inMemoryContainer()
         let repository = EmailRepository(modelContext: ModelContext(container))

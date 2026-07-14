@@ -8,21 +8,14 @@ import Testing
 /// subsequent polls.
 @MainActor
 struct MailboxSyncStateStoreTests {
-    @Test func startsEmptyWithFreshUserDefaults() throws {
-        let fixture = try Self.makeFixture()
+    @Test func updatePersistsAcrossInstances() throws {
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = MailboxSyncStateStore(userDefaults: fixture.defaults)
         let accountID = UUID()
         #expect(store.state(for: accountID, mailbox: "INBOX") == nil)
-    }
 
-    @Test func updatePersistsAcrossInstances() throws {
-        let fixture = try Self.makeFixture()
-        defer { fixture.cleanup() }
-
-        let store = MailboxSyncStateStore(userDefaults: fixture.defaults)
-        let accountID = UUID()
         store.update(
             MailboxSyncState(uidValidity: 17, lastSeenUID: 999),
             for: accountID,
@@ -36,7 +29,7 @@ struct MailboxSyncStateStoreTests {
     }
 
     @Test func resetRemovesSingleMailboxEntry() throws {
-        let fixture = try Self.makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = MailboxSyncStateStore(userDefaults: fixture.defaults)
@@ -59,7 +52,7 @@ struct MailboxSyncStateStoreTests {
     }
 
     @Test func resetAllDropsEveryMailboxForAccount() throws {
-        let fixture = try Self.makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = MailboxSyncStateStore(userDefaults: fixture.defaults)
@@ -76,8 +69,8 @@ struct MailboxSyncStateStoreTests {
         #expect(store.state(for: other, mailbox: "INBOX") != nil)
     }
 
-    @Test func keyIsScopedByAccountAndMailbox() throws {
-        let fixture = try Self.makeFixture()
+    @Test func stateIsScopedByAccountAndMailbox() throws {
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = MailboxSyncStateStore(userDefaults: fixture.defaults)
@@ -88,11 +81,10 @@ struct MailboxSyncStateStoreTests {
 
         #expect(store.state(for: a, mailbox: "INBOX")?.lastSeenUID == 1)
         #expect(store.state(for: b, mailbox: "INBOX")?.lastSeenUID == 100)
-        #expect(MailboxSyncStateStore.key(for: a, mailbox: "INBOX").contains(a.uuidString))
     }
 
     @Test func closuresProviderAndUpdaterRoundTrip() async throws {
-        let fixture = try Self.makeFixture()
+        let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         let store = MailboxSyncStateStore(userDefaults: fixture.defaults)
@@ -113,9 +105,4 @@ struct MailboxSyncStateStoreTests {
         #expect(recovered.lastSeenUID == 42)
     }
 
-    // MARK: - Helpers
-
-    private static func makeFixture() throws -> UserDefaultsFixture {
-        try UserDefaultsFixture()
-    }
 }

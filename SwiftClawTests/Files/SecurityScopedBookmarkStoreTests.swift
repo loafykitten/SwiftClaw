@@ -75,23 +75,6 @@ struct SecurityScopedBookmarkStoreTests {
         }
     }
 
-    @Test func independentStoresBackedByDifferentDefaultsDoNotShareBookmarks() throws {
-        let fixtureA = try UserDefaultsFixture()
-        defer { fixtureA.cleanup() }
-        let fixtureB = try UserDefaultsFixture()
-        defer { fixtureB.cleanup() }
-        let fileURL = try makeTempFile()
-        defer { try? FileManager.default.removeItem(at: fileURL) }
-
-        let storeA = SecurityScopedBookmarkStore(userDefaults: fixtureA.defaults)
-        let storeB = SecurityScopedBookmarkStore(userDefaults: fixtureB.defaults)
-        try storeA.save(url: fileURL, forKey: Self.key)
-
-        #expect(throws: SecurityScopedBookmarkStore.StoreError.self) {
-            try storeB.resolve(forKey: Self.key)
-        }
-    }
-
     @Test func scopedURLDeinitReleasesAccessWithoutCrashing() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }

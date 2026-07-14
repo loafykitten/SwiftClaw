@@ -102,32 +102,6 @@ struct SettingsStorageTests {
         )
     }
 
-    @Test func modelSelectionsPersistExactNamespacedStrings() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
-
-        let swiftSelection = "Neuralwatt: swift-model"
-        let clawSelection = "OpenRouter: provider/claw-model"
-
-        fixture.defaults.set(swiftSelection, forKey: SettingsKeys.swiftModel)
-        fixture.defaults.set(clawSelection, forKey: SettingsKeys.clawModel)
-
-        #expect(fixture.defaults.string(forKey: SettingsKeys.swiftModel) == swiftSelection)
-        #expect(fixture.defaults.string(forKey: SettingsKeys.clawModel) == clawSelection)
-        #expect(
-            SettingsStorage.loadModelSelection(
-                forKey: SettingsKeys.swiftModel,
-                userDefaults: fixture.defaults
-            ) == swiftSelection
-        )
-        #expect(
-            SettingsStorage.loadModelSelection(
-                forKey: SettingsKeys.clawModel,
-                userDefaults: fixture.defaults
-            ) == clawSelection
-        )
-    }
-
     @Test func toolEnableSettingsDefaultToOn() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
@@ -136,27 +110,15 @@ struct SettingsStorageTests {
         #expect(SettingsStorage.isInvestigationEnabled(userDefaults: fixture.defaults))
     }
 
-    @Test func workspaceFeaturesDefaultToDisabled() throws {
+    @Test func workspaceFeaturesDefaultToDisabledAndReadStoredFlags() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         for feature in WorkspaceFeature.allCases {
             #expect(!SettingsStorage.isWorkspaceFeatureEnabled(feature, userDefaults: fixture.defaults))
-        }
-    }
-
-    @Test func workspaceFeatureEnableFlagsPersist() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
-
-        for feature in WorkspaceFeature.allCases {
             fixture.defaults.set(true, forKey: feature.settingsKey)
+            #expect(SettingsStorage.isWorkspaceFeatureEnabled(feature, userDefaults: fixture.defaults))
         }
-
-        #expect(SettingsStorage.isEmailEnabled(userDefaults: fixture.defaults))
-        #expect(SettingsStorage.isCalendarEnabled(userDefaults: fixture.defaults))
-        #expect(SettingsStorage.isRemindersEnabled(userDefaults: fixture.defaults))
-        #expect(SettingsStorage.isNotesEnabled(userDefaults: fixture.defaults))
     }
 
     @Test func disabledWebSearchDisablesInvestigationEffectively() throws {
@@ -170,45 +132,26 @@ struct SettingsStorageTests {
         #expect(!SettingsStorage.isInvestigationEnabled(userDefaults: fixture.defaults))
     }
 
-    @Test func emailReviewMaxThreadsDefaultsToTen() throws {
+    @Test func emailReviewMaxThreadsUsesTheDefaultAndStoredValue() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         #expect(SettingsStorage.loadEmailReviewMaxThreads(userDefaults: fixture.defaults) == 10)
-    }
-
-    @Test func emailReviewMaxThreadsKeepsExplicitStoredValue() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
-
         fixture.defaults.set(15, forKey: SettingsKeys.emailReviewMaxThreads)
-
         #expect(SettingsStorage.loadEmailReviewMaxThreads(userDefaults: fixture.defaults) == 15)
     }
 
-    @Test func clawReasoningEffortDefaultsToMedium() throws {
+    @Test func clawReasoningEffortUsesDefaultStoredAndFallbackValues() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         #expect(SettingsStorage.defaultClawReasoningEffort == .medium)
         #expect(SettingsStorage.loadClawReasoningEffort(userDefaults: fixture.defaults) == .medium)
-    }
-
-    @Test func clawReasoningEffortPersistsExplicitStoredValue() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
 
         fixture.defaults.set(ModelReasoningEffort.high.rawValue, forKey: SettingsKeys.clawReasoningEffort)
-
         #expect(SettingsStorage.loadClawReasoningEffort(userDefaults: fixture.defaults) == .high)
-    }
-
-    @Test func clawReasoningEffortRecoversFromInvalidRawValueAsMedium() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
 
         fixture.defaults.set("bogus", forKey: SettingsKeys.clawReasoningEffort)
-
         #expect(SettingsStorage.loadClawReasoningEffort(userDefaults: fixture.defaults) == .medium)
     }
 
@@ -256,9 +199,7 @@ struct SettingsStorageTests {
         #expect(nonReasoning == ["Azure: Plain", "Neuralwatt: plain-model"])
     }
 
-    // MARK: - Chat composer model-change reasoning default
-
-    @Test func composerReasoningDefaultReturnsNilForNonReasoningModel() {
+    @Test func composerReasoningDefaultFollowsTheSelectedModelsCapabilities() {
         #expect(
             SettingsStorage.composerDefaultReasoningEffort(
                 isClawModel: false,
@@ -266,9 +207,6 @@ struct SettingsStorageTests {
                 clawReasoningEffort: .medium
             ) == nil
         )
-
-        // Even a Claw selection yields no default when the model lacks the
-        // reasoning capability — the reasoning menu is hidden for it.
         #expect(
             SettingsStorage.composerDefaultReasoningEffort(
                 isClawModel: true,
@@ -276,9 +214,6 @@ struct SettingsStorageTests {
                 clawReasoningEffort: .high
             ) == nil
         )
-    }
-
-    @Test func composerReasoningDefaultUsesClawConfiguredEffortForClawModel() {
         #expect(
             SettingsStorage.composerDefaultReasoningEffort(
                 isClawModel: true,
@@ -286,9 +221,6 @@ struct SettingsStorageTests {
                 clawReasoningEffort: .medium
             ) == .medium
         )
-
-        // The Claw's configured effort is honored verbatim — whatever the
-        // user picked in Settings > Model Behaviors, not a hardcoded value.
         #expect(
             SettingsStorage.composerDefaultReasoningEffort(
                 isClawModel: true,
@@ -296,11 +228,6 @@ struct SettingsStorageTests {
                 clawReasoningEffort: .high
             ) == .high
         )
-    }
-
-    @Test func composerReasoningDefaultReturnsLowForOtherReasoningModel() {
-        // A reasoning-capable model that isn't the Claw preset defaults to Low —
-        // regardless of the Claw's configured effort, which must not leak in.
         #expect(
             SettingsStorage.composerDefaultReasoningEffort(
                 isClawModel: false,

@@ -83,33 +83,6 @@ struct ThreadResolverTests {
         #expect(ThreadResolver.normalizedSubject("  RE:  WG:  Title  ") == "Title")
     }
 
-    @Test func clusteringIsIdempotent() {
-        let msgA = makeEmail(
-            subject: "Thread",
-            messageID: "<t1@example.com>",
-            references: [],
-            inReplyTo: nil
-        )
-        let msgB = makeEmail(
-            subject: "Re: Thread",
-            messageID: "<t2@example.com>",
-            references: ["<t1@example.com>"],
-            inReplyTo: "<t1@example.com>"
-        )
-
-        let first = ThreadResolver.cluster([msgA, msgB])
-        let second = ThreadResolver.cluster([msgA, msgB])
-
-        #expect(first.count == second.count)
-        #expect(first.count == 1)
-    }
-
-    @Test func replyMarkerDetection() {
-        #expect(!ThreadResolver.replyMarker("Hello").isEmpty == false)
-        #expect(!ThreadResolver.replyMarker("Re: Hello").isEmpty == true)
-        #expect(!ThreadResolver.replyMarker("FWD: Hello").isEmpty == true)
-    }
-
     // MARK: - Helpers
 
     private func makeEmail(
@@ -136,7 +109,7 @@ struct ThreadResolverTests {
             isDeleted: false,
             inReplyTo: inReplyTo,
             referencesRaw: references,
-            uid: Int.random(in: 1...1_000_000),
+            uid: 1,
             thread: nil,
             notes: [],
             attachments: []

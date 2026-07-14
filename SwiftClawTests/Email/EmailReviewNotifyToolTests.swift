@@ -3,19 +3,8 @@ import Testing
 import SwiftData
 @testable import SwiftClaw
 
-/// Phase 11 / Phase 14 — asserts `notify_user_about_emails` parses the
-/// model's `email_actions` JSON, creates a `Chat` + two ordered `ChatMessage`s
-/// (card first, summary second), encodes a decodable `reviewCardData`, and
-/// populates each review-card row's `subject` + `sender` from the referenced
-/// `Email`. Idempotency: two calls within the same tool instance produce only
-/// one review chat — the second call is a no-op (Phase 14 / M1 regression).
-///
-/// Note: triage suppression used to be done by writing an AI note on every
-/// reviewed email here in the tool. As of H3 it's tracked separately via
-/// `EmailThread.lastReviewedAt`, stamped by `EmailReviewService.runOnce()`
-/// (NOT the tool). So this test no longer asserts an AI note — see
-/// `EmailReviewTriageTrackingTests` / `EmailRepositoryTests.reviewSuppressionViaLastReviewedAt`
-/// for the new suppression behavior.
+/// Covers review-card creation, updates, callback summaries, idempotency, and
+/// the alternate argument form emitted by some model providers.
 @MainActor
 @Suite(.serialized)
 struct EmailReviewNotifyToolTests {
@@ -25,13 +14,10 @@ struct EmailReviewNotifyToolTests {
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
 
-        // An email the model will surface for review.
-        let email = Email(
+        let email = Self.email(
             messageID: "<triage@example.com>",
             subject: "Needs a reply",
             fromAddress: "\"Boss Person\" <boss@example.com>",
-            toAddresses: ["me@example.com"],
-            date: .now,
             bodyText: "Please reply by Friday."
         )
         setupContext.insert(email)
@@ -42,16 +28,12 @@ struct EmailReviewNotifyToolTests {
             accountLabelProvider: { _ in "Work" }
         )
 
-        let arguments: [String: JSONValue] = [
-            "message": .string("Two items need attention."),
-            "email_actions": .array([
-                .object([
-                    "email_guid": .string(email.id.uuidString),
-                    "action": .string("flag"),
-                    "summary": .string("Awaiting reply")
-                ])
-            ])
-        ]
+        let arguments = Self.arguments(
+            message: "Two items need attention.",
+            emailID: email.id,
+            action: .flag,
+            summary: "Awaiting reply"
+        )
 
         let result = try await tool.execute(arguments: arguments)
 
@@ -103,13 +85,10 @@ struct EmailReviewNotifyToolTests {
         defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
-        let email = Email(
+        let email = Self.email(
             messageID: "<single@example.com>",
             subject: "Only account",
-            fromAddress: "boss@example.com",
-            toAddresses: ["me@example.com"],
-            date: .now,
-            bodyText: "Body"
+            fromAddress: "boss@example.com"
         )
         setupContext.insert(email)
         try setupContext.save()
@@ -119,16 +98,7 @@ struct EmailReviewNotifyToolTests {
             accountLabelProvider: { _ in nil }
         )
 
-        _ = try await tool.execute(arguments: [
-            "message": .string("One item."),
-            "email_actions": .array([
-                .object([
-                    "email_guid": .string(email.id.uuidString),
-                    "action": .string("review"),
-                    "summary": .string("x")
-                ])
-            ])
-        ])
+        _ = try await tool.execute(arguments: Self.arguments(message: "One item.", emailID: email.id))
 
         let readContext = ModelContext(container)
         let chat = try #require(try readContext.fetch(FetchDescriptor<Chat>()).first)
@@ -144,28 +114,15 @@ struct EmailReviewNotifyToolTests {
         defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
-        let email = Email(
+        let email = Self.email(
             messageID: "<dup@example.com>",
-            subject: "Two calls",
-            fromAddress: "boss@example.com",
-            toAddresses: ["me@example.com"],
-            date: .now,
-            bodyText: "Trigger"
+            subject: "Two calls"
         )
         setupContext.insert(email)
         try setupContext.save()
 
         let tool = EmailReviewNotifyTool(modelContainer: container)
-        let arguments: [String: JSONValue] = [
-            "message": .string("Once."),
-            "email_actions": .array([
-                .object([
-                    "email_guid": .string(email.id.uuidString),
-                    "action": .string("flag"),
-                    "summary": .string("x")
-                ])
-            ])
-        ]
+        let arguments = Self.arguments(message: "Once.", emailID: email.id, action: .flag)
 
         _ = try await tool.execute(arguments: arguments)
         let secondResult = try await tool.execute(arguments: arguments)
@@ -183,13 +140,9 @@ struct EmailReviewNotifyToolTests {
         defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
-        let email = Email(
+        let email = Self.email(
             messageID: "<update@example.com>",
-            subject: "Updated analysis",
-            fromAddress: "sender@example.com",
-            toAddresses: ["me@example.com"],
-            date: .now,
-            bodyText: "Needs a fresh look."
+            subject: "Updated analysis"
         )
         let chat = Chat(title: "Inbox review — existing", modelSelection: "test")
         let existing = ChatMessage(role: .assistant, content: "Earlier analysis", sortIndex: 0)
@@ -200,16 +153,11 @@ struct EmailReviewNotifyToolTests {
         try setupContext.save()
 
         let tool = EmailReviewNotifyTool(modelContainer: container, targetChatID: chat.id)
-        let arguments: [String: JSONValue] = [
-            "message": .string("Updated analysis found one item."),
-            "email_actions": .array([
-                .object([
-                    "email_guid": .string(email.id.uuidString),
-                    "action": .string("review"),
-                    "summary": .string("Fresh review")
-                ])
-            ])
-        ]
+        let arguments = Self.arguments(
+            message: "Updated analysis found one item.",
+            emailID: email.id,
+            summary: "Fresh review"
+        )
 
         let result = try await tool.execute(arguments: arguments)
         #expect(result.contains("Updated review chat"))
@@ -232,13 +180,9 @@ struct EmailReviewNotifyToolTests {
         defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
-        let email = Email(
+        let email = Self.email(
             messageID: "<update@example.com>",
-            subject: "Updated analysis",
-            fromAddress: "sender@example.com",
-            toAddresses: ["me@example.com"],
-            date: .now,
-            bodyText: "Needs a fresh look."
+            subject: "Updated analysis"
         )
         let chat = Chat(title: "Inbox review — existing", modelSelection: "test")
         let priorCard = ChatMessage(
@@ -257,16 +201,11 @@ struct EmailReviewNotifyToolTests {
         try setupContext.save()
 
         let tool = EmailReviewNotifyTool(modelContainer: container, targetChatID: chat.id)
-        _ = try await tool.execute(arguments: [
-            "message": .string("Updated analysis found one item."),
-            "email_actions": .array([
-                .object([
-                    "email_guid": .string(email.id.uuidString),
-                    "action": .string("review"),
-                    "summary": .string("Fresh review")
-                ])
-            ])
-        ])
+        _ = try await tool.execute(arguments: Self.arguments(
+            message: "Updated analysis found one item.",
+            emailID: email.id,
+            summary: "Fresh review"
+        ))
 
         let readContext = ModelContext(container)
         let refreshed = try #require(try readContext.fetch(FetchDescriptor<Chat>()).first)
@@ -289,13 +228,9 @@ struct EmailReviewNotifyToolTests {
         defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
-        let email = Email(
+        let email = Self.email(
             messageID: "<suppress@example.com>",
-            subject: "Conversational refresh",
-            fromAddress: "sender@example.com",
-            toAddresses: ["me@example.com"],
-            date: .now,
-            bodyText: "Needs a fresh look."
+            subject: "Conversational refresh"
         )
         let chat = Chat(title: "Inbox review — existing", modelSelection: "test")
         let priorCard = ChatMessage(
@@ -318,16 +253,11 @@ struct EmailReviewNotifyToolTests {
             targetChatID: chat.id,
             suppressInlineSummary: true
         )
-        _ = try await tool.execute(arguments: [
-            "message": .string("Updated analysis found one item."),
-            "email_actions": .array([
-                .object([
-                    "email_guid": .string(email.id.uuidString),
-                    "action": .string("review"),
-                    "summary": .string("Fresh review")
-                ])
-            ])
-        ])
+        _ = try await tool.execute(arguments: Self.arguments(
+            message: "Updated analysis found one item.",
+            emailID: email.id,
+            summary: "Fresh review"
+        ))
 
         let readContext = ModelContext(container)
         let refreshed = try #require(try readContext.fetch(FetchDescriptor<Chat>()).first)
@@ -359,13 +289,9 @@ struct EmailReviewNotifyToolTests {
         defer { Self.restoreRouter(routerFixture) }
         let container = try Self.inMemoryContainer()
         let setupContext = ModelContext(container)
-        let email = Email(
+        let email = Self.email(
             messageID: "<stringified@example.com>",
-            subject: "String-form arg",
-            fromAddress: "sender@example.com",
-            toAddresses: ["me@example.com"],
-            date: .now,
-            bodyText: "Body"
+            subject: "String-form arg"
         )
         setupContext.insert(email)
         try setupContext.save()
@@ -396,67 +322,44 @@ struct EmailReviewNotifyToolTests {
         #expect(card.items[0].itemID == email.id)
     }
 
+    @Test(arguments: [
+        (
+            "A long, friendly multi-sentence walkthrough of the whole inbox.",
+            "2 threads need your eyes.",
+            "2 threads need your eyes."
+        ),
+        ("Full summary message.", "   ", "Full summary message."),
+    ])
+    func reviewCallbackPrefersANonemptyNotificationSummary(
+        _ message: String,
+        _ notificationSummary: String,
+        _ expected: String
+    ) async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
+        let container = try Self.inMemoryContainer()
+
+        var receivedSummaries: [String] = []
+        let tool = EmailReviewNotifyTool(
+            modelContainer: container,
+            onReviewCreated: { _, summary in receivedSummaries.append(summary) },
+            accountLabelProvider: { _ in nil }
+        )
+
+        var arguments = Self.arguments(
+            message: message,
+            emailID: UUID(),
+            summary: "Needs attention"
+        )
+        arguments["notification_summary"] = .string(notificationSummary)
+        _ = try await tool.execute(arguments: arguments)
+
+        #expect(receivedSummaries == [expected])
+    }
+
     // MARK: - Helpers
 
-    /// Points `AppRouter.shared` at an isolated store for the duration of a
-    /// test. Creating/appending a review chat marks it unread via the shared
-    /// router, and the app-hosted test process must not persist that into
-    /// the developer's real `.standard` defaults.
-    @Test func notificationSummaryIsPreferredForTheReviewCallback() async throws {
-        let routerFixture = try Self.isolateRouterUnreadStore()
-        defer { Self.restoreRouter(routerFixture) }
-        let container = try Self.inMemoryContainer()
-
-        var receivedSummaries: [String] = []
-        let tool = EmailReviewNotifyTool(
-            modelContainer: container,
-            onReviewCreated: { _, summary in receivedSummaries.append(summary) },
-            accountLabelProvider: { _ in nil }
-        )
-
-        _ = try await tool.execute(arguments: [
-            "message": .string("A long, friendly multi-sentence walkthrough of the whole inbox."),
-            "notification_summary": .string("2 threads need your eyes."),
-            "email_actions": .array([
-                .object([
-                    "email_guid": .string(UUID().uuidString),
-                    "action": .string("review"),
-                    "summary": .string("Needs attention")
-                ])
-            ])
-        ])
-
-        #expect(receivedSummaries == ["2 threads need your eyes."])
-    }
-
-    @Test func reviewCallbackFallsBackToTheMessageWithoutANotificationSummary() async throws {
-        let routerFixture = try Self.isolateRouterUnreadStore()
-        defer { Self.restoreRouter(routerFixture) }
-        let container = try Self.inMemoryContainer()
-
-        var receivedSummaries: [String] = []
-        let tool = EmailReviewNotifyTool(
-            modelContainer: container,
-            onReviewCreated: { _, summary in receivedSummaries.append(summary) },
-            accountLabelProvider: { _ in nil }
-        )
-
-        // A whitespace-only compact summary counts as absent.
-        _ = try await tool.execute(arguments: [
-            "message": .string("Full summary message."),
-            "notification_summary": .string("   "),
-            "email_actions": .array([
-                .object([
-                    "email_guid": .string(UUID().uuidString),
-                    "action": .string("review"),
-                    "summary": .string("Needs attention")
-                ])
-            ])
-        ])
-
-        #expect(receivedSummaries == ["Full summary message."])
-    }
-
+    /// Keeps review-chat unread state out of the developer's real defaults.
     private static func isolateRouterUnreadStore() throws -> UserDefaultsFixture {
         let fixture = try UserDefaultsFixture()
         AppRouter.shared.resetForTesting(unreadStore: fixture.defaults)
@@ -466,6 +369,40 @@ struct EmailReviewNotifyToolTests {
     private static func restoreRouter(_ fixture: UserDefaultsFixture) {
         AppRouter.shared.resetForTesting()
         fixture.cleanup()
+    }
+
+    private static func email(
+        messageID: String,
+        subject: String,
+        fromAddress: String = "sender@example.com",
+        bodyText: String = "Body"
+    ) -> Email {
+        Email(
+            messageID: messageID,
+            subject: subject,
+            fromAddress: fromAddress,
+            toAddresses: ["me@example.com"],
+            date: .now,
+            bodyText: bodyText
+        )
+    }
+
+    private static func arguments(
+        message: String,
+        emailID: UUID,
+        action: ReviewActionToken = .review,
+        summary: String = "x"
+    ) -> [String: JSONValue] {
+        [
+            "message": .string(message),
+            "email_actions": .array([
+                .object([
+                    "email_guid": .string(emailID.uuidString),
+                    "action": .string(action.rawValue),
+                    "summary": .string(summary),
+                ]),
+            ]),
+        ]
     }
 
     static func inMemoryContainer() throws -> ModelContainer {

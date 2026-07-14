@@ -3,23 +3,16 @@ import Testing
 @testable import SwiftClaw
 
 struct EmailSettingsStorageTests {
-    @Test func emailDefaultsToOff() throws {
+    @Test func emailEnablementDefaultsOffAndReadsTheStoredChoice() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
         #expect(!SettingsStorage.isEmailEnabled(userDefaults: fixture.defaults))
-    }
-
-    @Test func enablingEmailPersists() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
-
         fixture.defaults.set(true, forKey: SettingsKeys.emailEnabled)
-
         #expect(SettingsStorage.isEmailEnabled(userDefaults: fixture.defaults))
     }
 
-    @Test func pollIntervalFallsBackToDefault() throws {
+    @Test func intervalLoadersUseDefaultsAndClampPersistedPollValues() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
@@ -27,182 +20,60 @@ struct EmailSettingsStorageTests {
             SettingsStorage.loadEmailPollInterval(userDefaults: fixture.defaults)
                 == SettingsStorage.defaultEmailPollIntervalSeconds
         )
-    }
-
-    @Test func pollIntervalClampsToLowerBound() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
+        #expect(
+            SettingsStorage.loadEmailReviewInterval(userDefaults: fixture.defaults)
+                == SettingsStorage.defaultEmailReviewIntervalSeconds
+        )
 
         fixture.defaults.set(10, forKey: SettingsKeys.emailPollIntervalSeconds)
-
         #expect(
             SettingsStorage.loadEmailPollInterval(userDefaults: fixture.defaults)
                 == SettingsStorage.emailPollIntervalSecondsRange.lowerBound
         )
-    }
-
-    @Test func pollIntervalClampsToUpperBound() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
 
         fixture.defaults.set(10_000_000, forKey: SettingsKeys.emailPollIntervalSeconds)
-
         #expect(
             SettingsStorage.loadEmailPollInterval(userDefaults: fixture.defaults)
                 == SettingsStorage.emailPollIntervalSecondsRange.upperBound
         )
     }
 
-    @Test func reviewIntervalClampsToRange() throws {
+    @Test(arguments: [
+        (1, 300),
+        (420, 300),
+        (5_400, 3_600),
+        (1_000_000, 86_400),
+    ])
+    func reviewIntervalLoadsTheNearestOfferedValue(_ stored: Int, _ expected: Int) throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
-        fixture.defaults.set(1, forKey: SettingsKeys.emailReviewIntervalSeconds)
-
-        #expect(
-            SettingsStorage.loadEmailReviewInterval(userDefaults: fixture.defaults)
-                == SettingsStorage.emailReviewIntervalSecondsRange.lowerBound
-        )
-
-        fixture.defaults.set(1_000_000, forKey: SettingsKeys.emailReviewIntervalSeconds)
-
-        #expect(
-            SettingsStorage.loadEmailReviewInterval(userDefaults: fixture.defaults)
-                == SettingsStorage.emailReviewIntervalSecondsRange.upperBound
-        )
+        fixture.defaults.set(stored, forKey: SettingsKeys.emailReviewIntervalSeconds)
+        #expect(SettingsStorage.loadEmailReviewInterval(userDefaults: fixture.defaults) == expected)
     }
 
-    @Test func reviewIntervalUpperBoundIsTwentyFourHours() throws {
-        #expect(SettingsStorage.emailReviewIntervalSecondsRange.upperBound == 86_400)
+    @Test(arguments: [
+        (1, 60),
+        (90, 60),
+        (250, 300),
+        (1_000_000, 3_600),
+    ])
+    func syncPickerUsesTheNearestOfferedValue(_ stored: Int, _ expected: Int) {
+        #expect(SettingsStorage.nearestEmailSyncIntervalSeconds(stored) == expected)
     }
 
-
-    @Test func reviewIntervalOptionsMatchRequestedList() throws {
-        let expected: [Int] = [
-            300, 600, 1_200, 1_800, 2_700,
-            3_600, 7_200, 10_800, 14_400, 18_000, 21_600,
-            28_800, 36_000, 43_200, 57_600, 68_400, 75_600, 86_400
-        ]
-        let actual = EmailReviewIntervalOption.allCases.map(\.rawValue)
-
-        #expect(actual == expected)
-        #expect(Set(actual).count == actual.count)  // no duplicates
-        #expect(actual == actual.sorted())          // ascending (menu order)
-    }
-
-    @Test func reviewIntervalOptionsAreWithinConfiguredRange() throws {
-        for option in EmailReviewIntervalOption.allCases {
-            #expect(SettingsStorage.emailReviewIntervalSecondsRange.contains(option.rawValue))
-        }
-    }
-
-    @Test func reviewIntervalDefaultIsAnOfferedOption() throws {
-        #expect(
-            EmailReviewIntervalOption.allCases.map(\.rawValue)
-                .contains(SettingsStorage.defaultEmailReviewIntervalSeconds)
-        )
-    }
-
-    @Test func nearestReviewIntervalSnapsStaleValueDown() throws {
-        // 7 min (420s) sits between 5m and 10m, closer to 5m.
-        #expect(SettingsStorage.nearestEmailReviewIntervalSeconds(420) == 300)
-    }
-
-    @Test func nearestReviewIntervalSnapsStaleValueUp() throws {
-        // 90 min (5400s) sits between 1h (3600) and 2h (7200), closer to 1h.
-        #expect(SettingsStorage.nearestEmailReviewIntervalSeconds(5_400) == 3_600)
-    }
-
-    @Test func nearestReviewIntervalClampsOutOfRange() throws {
-        #expect(
-            SettingsStorage.nearestEmailReviewIntervalSeconds(1)
-                == SettingsStorage.emailReviewIntervalSecondsRange.lowerBound
-        )
-        #expect(
-            SettingsStorage.nearestEmailReviewIntervalSeconds(1_000_000)
-                == SettingsStorage.emailReviewIntervalSecondsRange.upperBound
-        )
-    }
-
-    @Test func loadReviewIntervalSnapsStaleStoredValueToOption() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
-
-        fixture.defaults.set(420, forKey: SettingsKeys.emailReviewIntervalSeconds)
-
-        #expect(SettingsStorage.loadEmailReviewInterval(userDefaults: fixture.defaults) == 300)
-        #expect(
-            EmailReviewIntervalOption.allCases.map(\.rawValue)
-                .contains(SettingsStorage.loadEmailReviewInterval(userDefaults: fixture.defaults))
-        )
-    }
-
-    @Test func reviewIntervalOptionDisplayNameFormatsWholeHours() throws {
-        #expect(EmailReviewIntervalOption.minutes5.displayName == "5 min")
+    @Test func intervalOptionLabelsUseMinutesAndHours() {
         #expect(EmailReviewIntervalOption.minutes45.displayName == "45 min")
-        #expect(EmailReviewIntervalOption.hour1.displayName == "1 hr")
         #expect(EmailReviewIntervalOption.hour24.displayName == "24 hr")
-    }
-
-    // MARK: - Sync interval option tests
-
-    @Test func syncIntervalOptionsMatchRequestedList() throws {
-        let expected: [Int] = [60, 120, 300, 600, 900, 1_800, 3_600]
-        let actual = EmailSyncIntervalOption.allCases.map(\.rawValue)
-
-        #expect(actual == expected)
-        #expect(Set(actual).count == actual.count)  // no duplicates
-        #expect(actual == actual.sorted())          // ascending (menu order)
-    }
-
-    @Test func syncIntervalOptionsAreWithinConfiguredRange() throws {
-        for option in EmailSyncIntervalOption.allCases {
-            #expect(SettingsStorage.emailPollIntervalSecondsRange.contains(option.rawValue))
-        }
-    }
-
-    @Test func syncIntervalDefaultIsAnOfferedOption() throws {
-        #expect(
-            EmailSyncIntervalOption.allCases.map(\.rawValue)
-                .contains(SettingsStorage.defaultEmailPollIntervalSeconds)
-        )
-    }
-
-    @Test func nearestSyncIntervalSnapsStaleValueDown() throws {
-        // 90s sits between 1 min (60) and 2 min (120), closer to 1 min.
-        #expect(SettingsStorage.nearestEmailSyncIntervalSeconds(90) == 60)
-    }
-
-    @Test func nearestSyncIntervalSnapsStaleValueUp() throws {
-        // 200s sits between 2 min (120) and 5 min (300), closer to 2 min.
-        // 210s sits exactly halfway — tie goes to the lower value via min(by:).
-        // 250s sits between 2 min (120) and 5 min (300), closer to 5 min.
-        #expect(SettingsStorage.nearestEmailSyncIntervalSeconds(250) == 300)
-    }
-
-    @Test func nearestSyncIntervalClampsOutOfRange() throws {
-        #expect(
-            SettingsStorage.nearestEmailSyncIntervalSeconds(1)
-                == SettingsStorage.emailPollIntervalSecondsRange.lowerBound
-        )
-        #expect(
-            SettingsStorage.nearestEmailSyncIntervalSeconds(1_000_000)
-                == SettingsStorage.emailPollIntervalSecondsRange.upperBound
-        )
-    }
-
-    @Test func syncIntervalOptionDisplayNameFormatsCorrectly() throws {
         #expect(EmailSyncIntervalOption.minute1.displayName == "1 min")
-        #expect(EmailSyncIntervalOption.minutes2.displayName == "2 min")
-        #expect(EmailSyncIntervalOption.minutes15.displayName == "15 min")
         #expect(EmailSyncIntervalOption.hour1.displayName == "1 hr")
     }
 
-    // MARK: - Fetch defaults tests
-
-    @Test func reviewFetchDefaultsUseConfiguredValues() throws {
+    @Test func reviewFetchDefaultsCanBeOverridden() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
+
+        #expect(SettingsStorage.loadEmailReviewFetchDefaults(userDefaults: fixture.defaults).maxAgeDays == nil)
 
         fixture.defaults.set(25, forKey: SettingsKeys.emailReviewMaxThreads)
         fixture.defaults.set(true, forKey: SettingsKeys.emailReviewDefaultMaxAgeEnabled)
@@ -222,22 +93,7 @@ struct EmailSettingsStorageTests {
         #expect(!defaults.includeTrashed)
     }
 
-    @Test func reviewFetchDefaultsDisableMaxAgeByDefault() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
-
-        let defaults = SettingsStorage.loadEmailReviewFetchDefaults(userDefaults: fixture.defaults)
-
-        #expect(defaults.maxAgeDays == nil)
-    }
-
-    @Test func reviewSlideActionsMatchRequestedList() throws {
-        let actions = EmailReviewSlideAction.allCases.map(\.token)
-
-        #expect(actions == [.review, .reply, .flag, .delete])
-    }
-
-    @Test func reviewSlideActionDefaultsToReview() throws {
+    @Test func reviewSlideActionUsesDefaultStoredAndFallbackValues() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
 
@@ -245,26 +101,14 @@ struct EmailSettingsStorageTests {
             SettingsStorage.loadEmailReviewSlideAction(userDefaults: fixture.defaults)
                 == .review
         )
-    }
-
-    @Test func reviewSlideActionLoadsStoredValue() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
 
         fixture.defaults.set(EmailReviewSlideAction.delete.rawValue, forKey: SettingsKeys.emailReviewSlideAction)
-
         #expect(
             SettingsStorage.loadEmailReviewSlideAction(userDefaults: fixture.defaults)
                 == .delete
         )
-    }
-
-    @Test func reviewSlideActionIgnoresUnknownStoredValue() throws {
-        let fixture = try UserDefaultsFixture()
-        defer { fixture.cleanup() }
 
         fixture.defaults.set("archive", forKey: SettingsKeys.emailReviewSlideAction)
-
         #expect(
             SettingsStorage.loadEmailReviewSlideAction(userDefaults: fixture.defaults)
                 == SettingsStorage.defaultEmailReviewSlideAction

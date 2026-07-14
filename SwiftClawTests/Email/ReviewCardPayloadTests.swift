@@ -32,12 +32,6 @@ struct ReviewCardPayloadTests {
         let decoded = try JSONDecoder().decode(ReviewCardPayload.self, from: data)
 
         #expect(decoded == payload)
-        #expect(decoded.reviewType == .email)
-        #expect(decoded.items.count == 2)
-        #expect(decoded.items[0].action == .flag)
-        #expect(decoded.items[0].date == "Jun 24, 2026 at 10:00 PM")
-        #expect(decoded.items[0].accountLabel == "Work")
-        #expect(decoded.items[1].action == .delete)
     }
 
     @Test func preservesUnknownActionToken() throws {
@@ -93,18 +87,5 @@ struct ReviewCardPayloadTests {
 
         let decoded = try JSONDecoder().decode(ReviewCardPayload.self, from: json)
         #expect(decoded.reviewType == .calendar)
-    }
-
-    @Test func actionTokenRoundTripsAllCases() throws {
-        for token in ReviewActionToken.allCases {
-            let item = ReviewItem(
-                itemID: UUID(),
-                actionToken: token,
-                actionLabel: token.rawValue
-            )
-            let data = try JSONEncoder().encode(item)
-            let decoded = try JSONDecoder().decode(ReviewItem.self, from: data)
-            #expect(decoded.action == token)
-        }
     }
 }
