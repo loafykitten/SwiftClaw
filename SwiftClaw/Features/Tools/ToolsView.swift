@@ -58,6 +58,22 @@ struct ToolsView: View {
             }
         }
         .onAppear(perform: refresh)
+        .onChange(of: isNotesEnabled) { _, _ in
+            // Toggling Notes here changes `isAvailableForReadTools`, which
+            // `search_notes`/`read_note`'s `isConfigured` reads — but `tools`
+            // is a snapshot from the last `refresh()`, so without this the
+            // Ready/Needs setup badges go stale until the view reappears.
+            refresh()
+        }
+        .task {
+            // A fresh launch never opens Notes UI, so on first appearance
+            // `search_notes`/`read_note` can still read "Needs setup" even
+            // though Notes is enabled and a vault is already configured.
+            // Bootstrap before the second refresh so the listing settles on
+            // the accurate status.
+            await NotesFeatureModel.shared.prepareReadToolsIfNeeded()
+            refresh()
+        }
         .onDisappear {
             highlightTask?.cancel()
         }

@@ -93,6 +93,12 @@ enum ChatCompletionService {
 
         var tools: [any Tool] = []
         if canUseTools {
+            // A fresh launch never opens Notes UI, so `NotesFeatureModel`
+            // hasn't bootstrapped from persisted settings yet — without this,
+            // `search_notes`/`read_note` would incorrectly filter out of a
+            // cold chat even when Notes is enabled and a vault is already
+            // configured. Idempotent/cheap once bootstrapped.
+            await NotesFeatureModel.shared.prepareReadToolsIfNeeded()
             tools = ToolRegistry.shared.availableTools(includingExplicitlyEnabled: canInvestigate)
             if isEmailReviewChat {
                 tools.append(EmailReviewAddNoteTool(modelContainer: modelContext.container))

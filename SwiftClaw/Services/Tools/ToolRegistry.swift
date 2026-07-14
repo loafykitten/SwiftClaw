@@ -5,6 +5,8 @@ struct ToolRegistry: Sendable {
     static let shared = ToolRegistry(tools: [
         WebSearchTool(),
         InvestigateTool(),
+        SearchNotesTool(),
+        ReadNoteTool(),
     ])
 
     let tools: [any Tool]

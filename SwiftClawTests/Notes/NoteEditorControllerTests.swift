@@ -1355,4 +1355,106 @@ struct NoteEditorControllerTests {
         #expect(!editor.isDirty)
         #expect(editor.selectedPath == nil)
     }
+
+    // MARK: - Wikilink autocomplete
+
+    /// Regression for the reported bug: accepting a wikilink completion left
+    /// the link unclosed (`[[Autocomplete Candidate` with no `]]`) and the
+    /// suggestion popup open, because `applyReplacement`'s resulting
+    /// `textDidChange`/selection-change notification re-triggered
+    /// `updateWikilinkCompletion` against text that still looked like an
+    /// unclosed `[[`. Exercises the full round trip through the controller
+    /// (not just `WikilinkCompletion` in isolation) the way
+    /// `NoteEditorView.Coordinator`/`WikilinkCompletionOverlay` actually
+    /// drive it: type up to the trigger, accept, apply the replacement,
+    /// then re-run the same completion update the view's `textDidChange`
+    /// callback issues after every edit.
+    @Test func acceptingAWikilinkCompletionClosesTheLinkAndStaysDismissed() async throws {
+        let (repository, _, vaultRoot) = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: vaultRoot) }
+
+        let editor = NoteEditorController(repository: repository)
+        editor.candidateNotes = [
+            NoteSummary(relativePath: "Autocomplete Candidate.md", title: "Autocomplete Candidate", sha256: "a", modifiedAt: .now)
+        ]
+
+        let typed = "See [[Auto"
+        editor.updateWikilinkCompletion(text: typed, cursorLocation: (typed as NSString).length)
+        #expect(editor.wikilinkTrigger?.query == "Auto")
+        #expect(!editor.wikilinkCandidates.isEmpty)
+
+        let candidate = try #require(editor.wikilinkCandidates.first)
+        let (range, replacement, _) = try #require(editor.acceptWikilinkCompletion(candidate))
+
+        // Acceptance itself must clear the popup immediately.
+        #expect(editor.wikilinkTrigger == nil)
+        #expect(editor.wikilinkCandidates.isEmpty)
+
+        let finalText = (typed as NSString).replacingCharacters(in: range, with: replacement)
+        #expect(finalText == "See [[Autocomplete Candidate]]")
+
+        // Mirrors what `NoteEditorView.Coordinator.textDidChange`/
+        // `textViewDidChangeSelection` do after `insertText` lands: re-run
+        // completion detection at the cursor position right after the
+        // inserted text. It must not reopen the popup.
+        let cursorAfterInsert = range.location + (replacement as NSString).length
+        editor.updateWikilinkCompletion(text: finalText, cursorLocation: cursorAfterInsert)
+        #expect(editor.wikilinkTrigger == nil)
+        #expect(editor.wikilinkCandidates.isEmpty)
+    }
+
+    /// Regression for completing a partial query immediately before a closing
+    /// pair the user already typed. The controller must pass the trigger's
+    /// `hasTrailingClosingBrackets` flag through to the pure replacement
+    /// helper, so only that existing pair remains after replacement.
+    @Test func acceptingAWikilinkCompletionReusesAnExistingClosingPair() async throws {
+        let (repository, _, vaultRoot) = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: vaultRoot) }
+
+        let editor = NoteEditorController(repository: repository)
+        editor.candidateNotes = [
+            NoteSummary(relativePath: "Autocomplete Candidate.md", title: "Autocomplete Candidate", sha256: "a", modifiedAt: .now)
+        ]
+
+        let typed = "See [[Auto]]"
+        let cursorLocation = ("See [[Auto" as NSString).length
+        editor.updateWikilinkCompletion(text: typed, cursorLocation: cursorLocation)
+        #expect(editor.wikilinkTrigger?.hasTrailingClosingBrackets == true)
+
+        let candidate = try #require(editor.wikilinkCandidates.first)
+        let (range, replacement, reusesTrailingClosingBrackets) = try #require(editor.acceptWikilinkCompletion(candidate))
+        let finalText = (typed as NSString).replacingCharacters(in: range, with: replacement)
+
+        #expect(replacement == "Autocomplete Candidate")
+        #expect(finalText == "See [[Autocomplete Candidate]]")
+        #expect(!finalText.contains("]]]]"))
+        #expect(reusesTrailingClosingBrackets)
+
+        // The view advances the cursor past the reused closing pair. Keeping
+        // it before that pair would make completion detect the same link
+        // again on its next selection update.
+        let cursorAfterInsert = range.location + (replacement as NSString).length + 2
+        #expect(WikilinkCompletion.trigger(in: finalText, cursorLocation: cursorAfterInsert) == nil)
+    }
+
+    /// Escape's `doCommandBy` handler in `NoteEditorView.Coordinator` only
+    /// intercepts `cancelOperation` when `wikilinkTrigger != nil`, then calls
+    /// this directly — so this is the unit covering that "Escape dismisses
+    /// without insertion" outcome without needing a live `NSTextView`.
+    @Test func dismissWikilinkCompletionClearsTheTriggerWithoutModifyingText() async throws {
+        let (repository, _, vaultRoot) = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: vaultRoot) }
+        let editor = NoteEditorController(repository: repository)
+        editor.candidateNotes = [
+            NoteSummary(relativePath: "Page.md", title: "Page", sha256: "a", modifiedAt: .now)
+        ]
+        let typed = "[[Pa"
+        editor.updateWikilinkCompletion(text: typed, cursorLocation: (typed as NSString).length)
+        #expect(editor.wikilinkTrigger != nil)
+
+        editor.dismissWikilinkCompletion()
+
+        #expect(editor.wikilinkTrigger == nil)
+        #expect(editor.wikilinkCandidates.isEmpty)
+    }
 }

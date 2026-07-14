@@ -7,7 +7,7 @@ import Foundation
 /// untouched or replaces/inserts exactly one line, so unknown keys,
 /// comments, and any `---` appearing later in the document body (e.g. a
 /// thematic break) are never touched.
-struct FrontMatterBlock: Equatable {
+nonisolated struct FrontMatterBlock: Equatable {
     /// The range of the entire block in the source, including the opening
     /// and closing `---` lines and the closing line's terminator (if any).
     let range: Range<String.Index>

@@ -215,6 +215,24 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   while a note has unsaved edits, then restore access. The editor must keep the
   text readable and selected, explain the save failure, and save successfully on
   retry without requiring a relaunch.
+- **H-NOTE-004 — Hybrid search quality.** Search exact terms, punctuation-heavy
+  text, headings, and paraphrases across a representative vault. Results must
+  open the right note, show useful heading/snippet context, and remain useful
+  with embeddings disabled or unavailable.
+- **H-NOTE-005 — Link graph and backlinks.** Exercise direct, aliased, heading,
+  unresolved, and code-fenced wikilinks. Backlinks and broken-link reporting must
+  follow Obsidian-style resolution without treating fenced examples as links.
+- **H-NOTE-006 — Quick switcher ranking.** Use Command-O with exact, prefix,
+  subsequence, path, and no-match queries. Ranking and highlighted matches should
+  feel predictable, and choosing a result must select that note.
+- **H-NOTE-007 — Vault health and rebuild.** Create broken links and conflict
+  copies, toggle embeddings, and rebuild the index. Banner and Settings details
+  must agree, explain degraded search clearly, and recover after a rebuild.
+- **H-NOTE-008 — AI read tools end to end.** With a disposable configured vault,
+  ask a real chat what the notes say about a distinctive topic. The answer must
+  use Search Notes and Read Note as needed, cite the correct relative note and
+  heading, preserve verbatim content when requested, and clearly disclose any
+  truncation. Disable Notes and confirm neither tool remains available to chat.
 
 ### Settings
 
@@ -579,6 +597,23 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   fenced code, callouts, wikilinks, and relative images. Two notes that reference
   different same-named images must not reuse stale image content, and returning
   to Edit must restore the complete source.
+- **CU-NOTE-008 — Indexed search.** In a disposable vault, verify initial and
+  incremental indexing, exact and punctuation-heavy queries, heading/snippet
+  presentation, result navigation, no-result state, and FTS-only behavior with
+  embeddings disabled. Inspect screenshots and accessibility state together.
+- **CU-NOTE-009 — Quick switcher and backlinks.** Exercise Command-O ranking,
+  keyboard dismissal and selection, then open the backlinks inspector for linked,
+  unlinked, and multiply-linked notes. Resizing must not clip either surface.
+- **CU-NOTE-010 — Wikilink completion and health.** Type `[[` and narrow, accept,
+  and dismiss suggestions; then create a broken link and conflict copy, inspect
+  the health banner and Settings details, rebuild, and verify the visible state
+  recovers without disturbing the current edit.
+- **CU-NOTE-011 — AI read-tool listing and gating.** With Notes enabled and a
+  disposable indexed vault, Search Notes and Read Note must show Ready in Tools
+  without per-tool switches. While remaining on Tools, disable Notes and confirm
+  both badges immediately become Needs setup; re-enable Notes and confirm both
+  immediately return to Ready. Inspect screenshots and accessibility state on
+  both macOS and iOS for all three states.
 
 ### Settings Window
 
@@ -652,3 +687,11 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
 - **2026-07-13 — Notes Phase 2.** Added styled-source losslessness, reading-mode
   rendering, Edit/Read switching, relative-image identity, explicit external-change
   choices, single-copy Keep Mine behavior, and visible create-failure coverage.
+- **2026-07-13 — Notes Phase 3 implementation.** Added indexed and hybrid search,
+  quick switching, backlinks and wikilink completion, vault health, embedding
+  fallback, and rebuild coverage. Interactive macOS and iOS Computer Use remains
+  host-blocked; the catalog records the required passes rather than claiming them.
+- **2026-07-14 — Notes Phase 4.** Added always-allowed Search Notes and Read Note
+  tools, cited and length-capped output, registry/configuration gating, and live
+  Tools readiness updates. Disposable macOS and iOS Computer Use passes verified
+  the Ready, disabled, and re-enabled states without per-tool switches.

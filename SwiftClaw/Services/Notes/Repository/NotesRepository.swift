@@ -4,7 +4,7 @@ import Foundation
 /// `relativePath` — never `title` — so a rename produces a *new* identity
 /// (matches the vault: renaming is a path change, not a content change) and
 /// two notes may share a display title without colliding.
-struct NoteSummary: Identifiable, Equatable, Sendable {
+nonisolated struct NoteSummary: Identifiable, Equatable, Sendable {
     var id: String { relativePath }
     let relativePath: String
     let title: String

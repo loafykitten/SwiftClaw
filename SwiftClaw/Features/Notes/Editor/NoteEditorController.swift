@@ -102,6 +102,24 @@ final class NoteEditorController {
     /// the view reads it once when it's created.
     var applyText: ((String) -> Void)?
 
+    /// Pushed in by `NotesFeatureModel` whenever its catalog changes — the
+    /// candidate set for wikilink autocomplete. Kept here (not a reference to
+    /// the model itself) so this controller and `NoteEditorView` never import
+    /// or depend on `NotesFeatureModel`.
+    var candidateNotes: [NoteSummary] = []
+
+    private(set) var wikilinkTrigger: WikilinkCompletion.Trigger?
+    private(set) var wikilinkCandidates: [WikilinkCompletion.Candidate] = []
+
+    /// Wired up by the view layer to perform the actual text replacement a
+    /// chosen completion needs — on macOS, `NSTextView.insertText(_:
+    /// replacementRange:)` (routes through the normal editing/undo pipeline,
+    /// so `textDidChange(_:)` fires exactly as it would for typed input); on
+    /// the non-macOS `TextEditor` fallback, a plain string replace followed
+    /// by an explicit `textDidChange(_:)` call, since there's no live text
+    /// view to drive.
+    var applyReplacement: ((NSRange, String, Bool) -> Void)?
+
     private var loadedContent: String = ""
     private var expectedHash: String?
     /// Increments for every selection request so a slow read started for an
@@ -242,6 +260,7 @@ final class NoteEditorController {
             isDirty = false
             loadError = nil
             finishLoad(loadID)
+            dismissWikilinkCompletion()
             applyText?(snapshot.content)
             return true
         } catch {
@@ -522,6 +541,7 @@ final class NoteEditorController {
         externalChangeChoice = nil
         pendingExternalChangeSaveOutcome = nil
         isAutosaveFrozen = false
+        dismissWikilinkCompletion()
         applyText?("")
     }
 
@@ -538,6 +558,46 @@ final class NoteEditorController {
         autosaveTask?.cancel()
         guard isDirty, !isAutosaveFrozen, externalRemovalBanner == nil, externalChangeChoice == nil else { return }
         scheduleAutosave()
+    }
+
+    // MARK: - Wikilink autocomplete
+
+    /// Called by the view layer after every text change (and cursor move, on
+    /// platforms that report one) with the live text and cursor location.
+    /// Pure detection lives in `WikilinkCompletion`; this just recomputes the
+    /// observable state from it, excluding the currently open note from the
+    /// candidate list.
+    func updateWikilinkCompletion(text: String, cursorLocation: Int) {
+        guard let trigger = WikilinkCompletion.trigger(in: text, cursorLocation: cursorLocation) else {
+            dismissWikilinkCompletion()
+            return
+        }
+        wikilinkTrigger = trigger
+        wikilinkCandidates = WikilinkCompletion.rankedCandidates(
+            query: trigger.query, notes: candidateNotes, excluding: selectedPath
+        )
+    }
+
+    func dismissWikilinkCompletion() {
+        wikilinkTrigger = nil
+        wikilinkCandidates = []
+    }
+
+    /// Resolves the pending trigger against a chosen candidate, returning the
+    /// exact replacement and final cursor placement the view should apply to
+    /// the live text view. The replacement closes an unclosed link, but may
+    /// reuse a closing pair already immediately after the cursor; in that
+    /// case the view must move the cursor past the existing pair so completion
+    /// does not immediately reopen. Returns `nil` if there's no longer a
+    /// pending trigger (e.g. the view raced a dismiss).
+    func acceptWikilinkCompletion(_ candidate: WikilinkCompletion.Candidate) -> (range: NSRange, replacement: String, reusesTrailingClosingBrackets: Bool)? {
+        guard let trigger = wikilinkTrigger else { return nil }
+        dismissWikilinkCompletion()
+        let replacement = WikilinkCompletion.completionText(
+            for: candidate.note,
+            closingBracketsAlreadyPresent: trigger.hasTrailingClosingBrackets
+        )
+        return (trigger.queryRange, replacement, trigger.hasTrailingClosingBrackets)
     }
 
     private func scheduleAutosave() {

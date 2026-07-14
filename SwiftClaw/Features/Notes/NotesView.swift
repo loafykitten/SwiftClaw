@@ -1,18 +1,32 @@
 import SwiftUI
 
 struct NotesView: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var model = NotesFeatureModel.shared
     @AppStorage(SettingsKeys.notesHasCompletedOnboarding) private var hasCompletedOnboarding = false
     @State private var isShowingOnboarding = false
     @State private var searchText = ""
     @State private var isReadingMode = false
-
-    private var filteredNotes: [NoteSummary] {
-        guard !searchText.isEmpty else { return model.notes }
-        return model.notes.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
-    }
+    @State private var isShowingQuickSwitcher = false
+    @State private var isShowingInspector = false
+    @State private var isShowingHealthDetail = false
+    @State private var compactActionDestination: CompactActionDestination?
+    /// The detail currently visible in compact navigation. This is deliberately
+    /// lifecycle-owned rather than derived from `model.selectedPath`: a model
+    /// selection can be in flight, rejected while a save is pending, or still
+    /// loading when the navigation stack has already presented a destination.
+    @State private var compactDetailPath: String?
+    /// Unlike `compactDetailPath`, this records only the latest selection
+    /// attempt made by a presented compact detail. It deliberately does not
+    /// drive navigation: `selectedPath` remains model-owned, so a rejected
+    /// save/selection cannot create a destination loop.
+    @State private var compactDetailSelectionAttempt: CompactDetailSelectionAttempt?
 
     var body: some View {
+        notesContent
+    }
+
+    private var notesContent: some View {
         Group {
             switch model.configurationState {
             case .unknown:
@@ -34,7 +48,35 @@ struct NotesView: View {
             }
         }
         .sheet(isPresented: $isShowingOnboarding) {
-            NotesOnboardingSheet(model: model)
+            onboardingSheet
+        }
+        .sheet(isPresented: $isShowingQuickSwitcher) {
+            quickSwitcherSheet
+        }
+        .sheet(isPresented: $isShowingHealthDetail) {
+            healthDetailSheet
+        }
+    }
+
+    private var onboardingSheet: some View {
+        NotesOnboardingSheet(model: model)
+    }
+
+    private var quickSwitcherSheet: some View {
+        NotesQuickSwitcher(
+            model: model,
+            onSelectPath: compactSelectionHandler
+        ) {
+            isShowingQuickSwitcher = false
+        }
+    }
+
+    private var healthDetailSheet: some View {
+        NotesHealthDetailSheet(
+            model: model,
+            onSelectPath: compactSelectionHandler
+        ) {
+            isShowingHealthDetail = false
         }
     }
 
@@ -60,39 +102,157 @@ struct NotesView: View {
         .accessibilityElement(children: .combine)
     }
 
+    @ViewBuilder
     private var configuredSplitView: some View {
-        Group {
-            #if os(macOS)
-            HSplitView {
-                listColumn
-                    .frame(minWidth: 220, idealWidth: 280, maxWidth: 360)
+        #if os(macOS)
+        // A third `HSplitView` pane, not `.inspector(isPresented:)`: that
+        // modifier is designed to pair with `NavigationSplitView` and
+        // computes its trailing-panel geometry against that container's own
+        // layout math. Paired with this custom `HSplitView` instead, it was
+        // rendering the panel outside the window's actual bounds (unusable/
+        // offscreen at normal and larger window sizes) rather than
+        // participating in the same resizable split the list/detail panes
+        // already use.
+        HSplitView {
+            listColumn
+                .frame(minWidth: 220, idealWidth: 280, maxWidth: 360)
 
-                detailColumn
-                    .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
+            detailColumn
+                .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
+
+            if isShowingInspector {
+                BacklinksPanel(model: model)
+                    .frame(minWidth: 240, idealWidth: 280, maxWidth: 360)
             }
-            #else
+        }
+        .toolbar { splitToolbar }
+        #else
+        if horizontalSizeClass == .compact {
+            // `NotesView` is itself pushed onto Workspace's own
+            // `NavigationStack` (see `WorkspaceView`). Nesting a two-column
+            // `NavigationSplitView` inside that ambient stack left the whole
+            // screen blank on a compact iPhone — its list/detail column
+            // never settled on a visible column — the same class of bug the
+            // macOS split previously hit nesting inside `ContentView`'s
+            // outer `NavigationSplitView`. `EmailView.compactThreadLayout`
+            // already established the fix for this app: on compact, push
+            // plain `List`s onto the ambient stack via
+            // `.navigationDestination(for:)` instead of embedding another
+            // split/stack container.
+            compactListColumn
+        } else {
             NavigationSplitView {
                 listColumn
             } detail: {
                 detailColumn
             }
-            #endif
+            .inspector(isPresented: $isShowingInspector) {
+                BacklinksPanel(model: model)
+            }
+            .toolbar { splitToolbar }
+        }
+        #endif
+    }
+
+    @ToolbarContentBuilder
+    private var splitToolbar: some ToolbarContent {
+        if model.selectedPath != nil {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    isReadingMode.toggle()
+                } label: {
+                    Label(isReadingMode ? "Edit" : "Read", systemImage: isReadingMode ? "pencil" : "book")
+                }
+                .keyboardShortcut("e", modifiers: .command)
+                .accessibilityLabel(isReadingMode ? "Switch to Edit mode" : "Switch to Reading mode")
+            }
+        }
+        ToolbarItem(placement: .automatic) {
+            Button {
+                isShowingQuickSwitcher = true
+            } label: {
+                Label("Quick Switcher", systemImage: "arrow.right.doc.on.clipboard")
+            }
+            .keyboardShortcut("o", modifiers: .command)
+            .accessibilityLabel("Open quick switcher")
+        }
+        ToolbarItem(placement: .automatic) {
+            Button {
+                isShowingInspector.toggle()
+            } label: {
+                Label("Backlinks", systemImage: "sidebar.trailing")
+            }
+            .accessibilityLabel(isShowingInspector ? "Hide backlinks inspector" : "Show backlinks inspector")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                Task { await model.createNote() }
+            } label: {
+                Label("New Note", systemImage: "square.and.pencil")
+            }
+            .accessibilityLabel("New Note")
+        }
+    }
+
+    #if !os(macOS)
+    /// Compact-width iPhone layout: a flat list pushed onto Workspace's
+    /// ambient `NavigationStack`, mirroring `EmailView.compactThreadLayout`.
+    /// Shares the same loading/error/empty/health-banner states as
+    /// `listColumn` — only the row navigation idiom differs (`NavigationLink`
+    /// push vs. `List(selection:)`).
+    @ViewBuilder
+    private var compactListColumn: some View {
+        VStack(spacing: 0) {
+            if let banner = model.healthSummary.flatMap(NotesHealthPresentation.banner) {
+                healthBanner(banner)
+            }
+            if let error = model.lastListError {
+                listErrorBanner(error)
+            }
+            Group {
+                if !searchText.isEmpty {
+                    compactSearchResultsList
+                } else if let repository = model.repository, repository.isLoading, repository.notes.isEmpty {
+                    ProgressView("Loading notes…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let repository = model.repository,
+                           model.notes.isEmpty,
+                          let error = repository.lastError {
+                    errorListState(error)
+                } else if model.notes.isEmpty {
+                    emptyListState
+                } else {
+                    List(model.notes) { note in
+                        NavigationLink(value: note.relativePath) {
+                            noteRow(note)
+                        }
+                    }
+                }
+            }
+        }
+        .searchable(text: $searchText, prompt: "Search notes")
+        .onChange(of: searchText) { _, newValue in
+            model.setSearchQuery(newValue)
+        }
+        .navigationTitle("Notes")
+        .navigationDestination(for: String.self) { path in
+            compactDetail(path: path)
+        }
+        .navigationDestination(item: $compactActionDestination) { destination in
+            compactDetail(path: destination.path)
         }
         .toolbar {
-            if model.selectedPath != nil {
-                ToolbarItem(placement: .automatic) {
-                    Button {
-                        isReadingMode.toggle()
-                    } label: {
-                        Label(isReadingMode ? "Edit" : "Read", systemImage: isReadingMode ? "pencil" : "book")
-                    }
-                    .keyboardShortcut("e", modifiers: .command)
-                    .accessibilityLabel(isReadingMode ? "Switch to Edit mode" : "Switch to Reading mode")
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    isShowingQuickSwitcher = true
+                } label: {
+                    Label("Quick Switcher", systemImage: "arrow.right.doc.on.clipboard")
                 }
+                .accessibilityLabel("Open quick switcher")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    Task { await model.createNote() }
+                    createNoteFromCurrentLayout()
                 } label: {
                     Label("New Note", systemImage: "square.and.pencil")
                 }
@@ -102,45 +262,271 @@ struct NotesView: View {
     }
 
     @ViewBuilder
+    private var compactSearchResultsList: some View {
+        if model.isSearching, model.searchResults.isEmpty {
+            ProgressView("Searching…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = model.searchError {
+            FeaturePlaceholderView(
+                systemImage: "exclamationmark.triangle",
+                title: "Search Failed",
+                message: error.errorDescription ?? "An unknown error occurred."
+            )
+            .accessibilityLabel("Search failed: \(error.errorDescription ?? "An unknown error occurred.")")
+        } else if model.searchResults.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.secondary)
+                Text("No matches")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(model.searchResults, id: \.chunk.id) { hit in
+                NavigationLink(value: hit.document.sourceID) {
+                    searchHitRow(hit)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func compactDetail(path: String) -> some View {
+        Group {
+            // A navigation push can appear before `select(path:)` has saved
+            // the prior note and loaded this one. Do not give the shared
+            // editor a new label until both layers agree on its path; doing
+            // so could otherwise show note A's buffer as note B.
+            if model.selectedPath == path,
+               let editor = model.editor,
+               editor.selectedPath == path {
+                NoteEditorDetailView(editor: editor, notePath: path, model: model, isReadingMode: isReadingMode)
+            } else if compactDetailSelectionAttempt?.path != path
+                        || compactDetailSelectionAttempt?.state == .pending {
+                ProgressView("Loading note…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                compactDetailSelectionFailure(path: path)
+            }
+        }
+        .onAppear {
+            compactDetailPath = path
+            beginCompactDetailSelection(path: path)
+        }
+        .onDisappear {
+            if compactDetailPath == path {
+                compactDetailPath = nil
+            }
+        }
+        .inspector(isPresented: $isShowingInspector) {
+            BacklinksPanel(model: model, onSelectPath: selectAndNavigateCompact)
+        }
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    isReadingMode.toggle()
+                } label: {
+                    Label(isReadingMode ? "Edit" : "Read", systemImage: isReadingMode ? "pencil" : "book")
+                }
+                .accessibilityLabel(isReadingMode ? "Switch to Edit mode" : "Switch to Reading mode")
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    isShowingQuickSwitcher = true
+                } label: {
+                    Label("Quick Switcher", systemImage: "arrow.right.doc.on.clipboard")
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                .accessibilityLabel("Open quick switcher")
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    isShowingInspector.toggle()
+                } label: {
+                    Label("Backlinks", systemImage: "sidebar.trailing")
+                }
+                .accessibilityLabel(isShowingInspector ? "Hide backlinks inspector" : "Show backlinks inspector")
+            }
+        }
+    }
+
+    private func compactDetailSelectionFailure(path: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text("Couldn't Open Note")
+                .font(.title2)
+                .fontWeight(.semibold)
+            Text("SwiftClaw couldn't switch to this note. Any unsaved changes are still available.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Try Again") {
+                beginCompactDetailSelection(path: path)
+            }
+            .accessibilityLabel("Try opening note again")
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func beginCompactDetailSelection(path: String) {
+        let attemptID = UUID()
+        compactDetailSelectionAttempt = CompactDetailSelectionAttempt(path: path, id: attemptID, state: .pending)
+
+        Task { await finishCompactDetailSelection(path: path, attemptID: attemptID) }
+    }
+
+    private func finishCompactDetailSelection(path: String, attemptID: UUID) async {
+        await model.select(path: path)
+
+        guard compactDetailSelectionAttempt?.id == attemptID else { return }
+        compactDetailSelectionAttempt = CompactDetailSelectionAttempt(
+            path: path,
+            id: attemptID,
+            state: NotesCompactDetailSelectionState.afterSelection(
+                requestedPath: path,
+                selectedPath: model.selectedPath,
+                editorSelectedPath: model.editor?.selectedPath
+            )
+        )
+    }
+    #endif
+
+    @ViewBuilder
     private var listColumn: some View {
         VStack(spacing: 0) {
+            if let banner = model.healthSummary.flatMap(NotesHealthPresentation.banner) {
+                healthBanner(banner)
+            }
             if let error = model.lastListError {
                 listErrorBanner(error)
             }
             Group {
-                if let repository = model.repository, repository.isLoading, repository.notes.isEmpty {
+                if !searchText.isEmpty {
+                    searchResultsList
+                } else if let repository = model.repository, repository.isLoading, repository.notes.isEmpty {
                     ProgressView("Loading notes…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let repository = model.repository,
                            model.notes.isEmpty,
                           let error = repository.lastError {
                     errorListState(error)
-                } else if filteredNotes.isEmpty {
+                } else if model.notes.isEmpty {
                     emptyListState
                 } else {
                     List(
-                        filteredNotes,
+                        model.notes,
                         selection: Binding(
                             get: { model.selectedPath },
                             set: { newValue in Task { await model.select(path: newValue) } }
                         )
                     ) { note in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(note.title)
-                                .font(.body)
-                            Text(note.relativePath)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        .tag(note.relativePath)
+                        noteRow(note)
+                            .tag(note.relativePath)
                     }
                     .listStyle(.sidebar)
                 }
             }
         }
         .searchable(text: $searchText, prompt: "Search notes")
+        .onChange(of: searchText) { _, newValue in
+            model.setSearchQuery(newValue)
+        }
         .navigationTitle("Notes")
+    }
+
+    @ViewBuilder
+    private var searchResultsList: some View {
+        if model.isSearching, model.searchResults.isEmpty {
+            ProgressView("Searching…")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = model.searchError {
+            FeaturePlaceholderView(
+                systemImage: "exclamationmark.triangle",
+                title: "Search Failed",
+                message: error.errorDescription ?? "An unknown error occurred."
+            )
+            .accessibilityLabel("Search failed: \(error.errorDescription ?? "An unknown error occurred.")")
+        } else if model.searchResults.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.secondary)
+                Text("No matches")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(
+                model.searchResults, id: \.chunk.id,
+                selection: Binding(
+                    get: { model.selectedPath },
+                    set: { newValue in Task { await model.select(path: newValue) } }
+                )
+            ) { hit in
+                searchHitRow(hit)
+                    .tag(hit.document.sourceID)
+            }
+            .listStyle(.sidebar)
+        }
+    }
+
+    private func noteRow(_ note: NoteSummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(note.title)
+                .font(.body)
+            Text(note.relativePath)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+    }
+
+    private func searchHitRow(_ hit: SearchHit) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(hit.document.title.isEmpty ? hit.document.sourceID : hit.document.title)
+                .font(.body)
+            if !hit.headingPath.isEmpty {
+                Text(hit.headingPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Text(hit.snippet)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func healthBanner(_ banner: NotesHealthPresentation.Banner) -> some View {
+        Button {
+            Task { await model.refreshBrokenLinks() }
+            isShowingHealthDetail = true
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(banner.message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(10)
+        .background(Color.orange.opacity(0.18), in: .rect(cornerRadius: 8))
+        .padding(8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Vault health issues: \(banner.message). Tap for details.")
     }
 
     private func listErrorBanner(_ error: NotesError) -> some View {
@@ -174,7 +560,7 @@ struct NotesView: View {
                 .foregroundStyle(.secondary)
             if searchText.isEmpty {
                 Button("New Note") {
-                    Task { await model.createNote() }
+                    createNoteFromCurrentLayout()
                 }
             }
         }
@@ -201,6 +587,158 @@ struct NotesView: View {
                 message: "Select a note from the list, or create a new one."
             )
         }
+    }
+
+    private var usesCompactNavigation: Bool {
+        #if os(macOS)
+        false
+        #else
+        horizontalSizeClass == .compact
+        #endif
+    }
+
+    private var compactSelectionHandler: ((String) -> Void)? {
+        guard usesCompactNavigation else { return nil }
+        return { path in
+            selectAndNavigateCompact(to: path)
+        }
+    }
+
+    /// Action-driven selections do not originate from a compact list row, so
+    /// they need their own navigation binding. This stays separate from
+    /// `model.selectedPath`; `compactDetailPath` is updated only from the
+    /// destination view's lifecycle, preventing a model-selection feedback
+    /// loop while still avoiding a second push for the visible note.
+    private func selectAndNavigateCompact(to path: String) {
+        // On compact layouts the inspector is a sheet. Close it as routing
+        // starts so a chosen backlink is immediately visible underneath.
+        isShowingInspector = false
+        Task {
+            await model.select(path: path)
+            guard let destination = NotesCompactNavigation.destination(
+                for: path,
+                selectedPath: model.selectedPath,
+                currentDetailPath: compactDetailPath
+            ) else { return }
+            compactActionDestination = CompactActionDestination(path: destination)
+        }
+    }
+
+    private func createNoteFromCurrentLayout() {
+        Task {
+            let createdPath = await model.createNote()
+            guard usesCompactNavigation, let createdPath else { return }
+            compactActionDestination = CompactActionDestination(path: createdPath)
+        }
+    }
+}
+
+/// A compact action may navigate only after the model confirms it selected the
+/// requested note. Keeping this decision pure makes failed or stale selections
+/// harmless and lets the view avoid observing `selectedPath` for navigation.
+enum NotesCompactNavigation {
+    static func destination(
+        for requestedPath: String,
+        selectedPath: String?,
+        currentDetailPath: String?
+    ) -> String? {
+        selectedPath == requestedPath && currentDetailPath != requestedPath ? requestedPath : nil
+    }
+}
+
+/// The compact detail remains visibly pending only while its selection task is
+/// running. Once that task returns, both the model and editor must agree on
+/// the requested note before the destination may render its editor.
+enum NotesCompactDetailSelectionState: Equatable {
+    case pending
+    case selected
+    case failed
+
+    static func afterSelection(
+        requestedPath: String,
+        selectedPath: String?,
+        editorSelectedPath: String?
+    ) -> Self {
+        selectedPath == requestedPath && editorSelectedPath == requestedPath ? .selected : .failed
+    }
+}
+
+private struct CompactDetailSelectionAttempt: Equatable {
+    let path: String
+    let id: UUID
+    let state: NotesCompactDetailSelectionState
+}
+
+/// Keeps action-driven compact navigation distinct from row links, which use a
+/// raw `String` path. That prevents the two `navigationDestination` overloads
+/// from competing during SwiftUI view-builder type checking.
+private struct CompactActionDestination: Hashable {
+    let path: String
+}
+
+/// Vault-health detail sheet, opened from the health banner. Focuses on
+/// broken links (source + unresolved target) since that's the actionable
+/// detail the banner can't fit inline; other health facts (conflict copies,
+/// FTS/embedding availability, index errors) live in `NotesSettingsView`'s
+/// fuller health section.
+private struct NotesHealthDetailSheet: View {
+    let model: NotesFeatureModel
+    let onSelectPath: ((String) -> Void)?
+    let onDismiss: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if model.isLoadingBrokenLinks, model.brokenLinks.isEmpty {
+                    ProgressView("Checking links…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let error = model.brokenLinksError {
+                    FeaturePlaceholderView(
+                        systemImage: "exclamationmark.triangle",
+                        title: "Couldn't Check Links",
+                        message: error.errorDescription ?? "An unknown error occurred."
+                    )
+                } else if model.brokenLinks.isEmpty {
+                    FeaturePlaceholderView(
+                        systemImage: "checkmark.circle",
+                        title: "No Broken Links",
+                        message: "Every wikilink in this vault currently resolves."
+                    )
+                } else {
+                    List(Array(model.brokenLinks.enumerated()), id: \.offset) { _, link in
+                        Button {
+                            if let onSelectPath {
+                                onSelectPath(link.sourcePath)
+                                onDismiss()
+                            } else {
+                                Task {
+                                    await model.select(path: link.sourcePath)
+                                    onDismiss()
+                                }
+                            }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(NoteSummary.title(forRelativePath: link.sourcePath))
+                                    .font(.body)
+                                Text("Links to unresolved \"\(link.pagePath)\"")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(NoteSummary.title(forRelativePath: link.sourcePath)) links to unresolved \(link.pagePath)")
+                    }
+                }
+            }
+            .navigationTitle("Broken Links")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Done", action: onDismiss)
+                }
+            }
+        }
+        .frame(minWidth: 360, minHeight: 320)
+        .task { await model.refreshBrokenLinks() }
     }
 }
 
@@ -248,6 +786,9 @@ private struct NoteEditorDetailView: View {
             } else {
                 NoteEditorView(controller: editor)
                     .accessibilityLabel("Note content, edit mode")
+                    .overlay(alignment: .topLeading) {
+                        WikilinkCompletionOverlay(controller: editor)
+                    }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

@@ -6,7 +6,7 @@ import Markdown
 /// and indented code blocks, inline code spans, and leading front matter —
 /// so scanners (wikilink/tag extraction, chunking) can skip over content
 /// that only looks like markup syntax without duplicating a parser.
-struct MarkdownDocument {
+nonisolated struct MarkdownDocument {
     struct HeadingEntry: Equatable {
         let level: Int
         let text: String
@@ -68,7 +68,7 @@ struct MarkdownDocument {
     /// offset. This converts a `SourceRange` from the parsed tree back into
     /// a `Range<String.Index>` over `source`, so downstream code (styling,
     /// chunking) never has to reason about line/column pairs.
-    private struct OffsetConverter {
+    nonisolated private struct OffsetConverter {
         /// The full original source — `SourceLocation`s from parsing
         /// `bodyText` are shifted by `bodyByteOffset` before indexing here,
         /// so returned indices are always valid for the full document.
@@ -109,7 +109,7 @@ struct MarkdownDocument {
         }
     }
 
-    private struct Collector: MarkupWalker {
+    nonisolated private struct Collector: MarkupWalker {
         let converter: OffsetConverter
         var headings: [HeadingEntry] = []
         var excludedRanges: [Range<String.Index>] = []

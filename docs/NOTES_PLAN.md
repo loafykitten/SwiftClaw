@@ -156,6 +156,14 @@ change only typed chars), `MarkdownDocumentTests` (outline, excluded ranges).
 
 ## Phase 3 — Index & search, backlinks, quick switcher, vault health
 
+**Status: Complete (2026-07-14).**
+
+The full test suite and unsigned macOS/iPhone builds pass. Separate final
+Computer Use passes are green on both platforms, including index-rebuild
+responsiveness and editor preservation on macOS, plus compact navigation,
+full-height Quick Switcher layout, same-note route deduplication, backlinks,
+health navigation, real-caret wikilink completion, and editing on iPhone.
+
 **Generic engine** (`SwiftClaw/Services/Search/` — source-agnostic,
 cross-feature #2):
 
@@ -198,6 +206,8 @@ RRF with stubs), `NotesIndexerTests` (code-fenced wikilink not extracted),
 NLEmbedding unavailable.
 
 ## Phase 4 — AI read tools (always allowed)
+
+**Status: Complete (2026-07-14).**
 
 - `Services/Notes/Tools/SearchNotesTool.swift` — `search_notes(query,
   limit=8)` → compact cited digest: `[[note: relative/path.md § Heading]]` +
