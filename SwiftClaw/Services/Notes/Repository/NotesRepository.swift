@@ -114,6 +114,18 @@ final class NotesRepository {
         }
     }
 
+    /// Reads a relative asset's raw bytes (e.g. an image a note embeds) —
+    /// the only sanctioned way for reading-mode rendering to load one, so
+    /// renderers never reach past this repository to touch `NotesVault` or
+    /// `FileManager` directly.
+    func readData(relativePath: String) async throws -> Data {
+        do {
+            return try await vault.readData(relativePath: relativePath)
+        } catch {
+            throw NotesError.from(error)
+        }
+    }
+
     // MARK: - Bootstrap / reload
 
     /// Rebuilds the catalog from scratch by enumerating and reading every

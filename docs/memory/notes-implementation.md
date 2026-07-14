@@ -374,11 +374,167 @@ and Search notes controls remain visible without clipping or overlap. Evidence:
 
 ## Next steps
 
-Phase 1 is complete. Start `## Phase 2 — Markdown engine, styled-source editor,
-reading mode` in `docs/NOTES_PLAN.md`: add the shared markdown engine and the
-styled-source editor/reading-mode package. Phases 3–7 remain after that.
+Phases 1 and 2 are complete. Resume with Phase 3 (`## Phase 3 — Index &
+search, backlinks, quick switcher, vault health`). Phases 4–7 remain after
+Phase 3.
 
-Low-confidence decisions worth a second look before Phase 2:
+Phase 2 summary: `Package.swift` + the Xcode project's package references
+(both `Package.resolved` lock files updated) now pull in
+`apple/swift-markdown` (`branch: main`, matching the `OpenAI` dependency's
+convention — swift-markdown has no semver tags, only dated snapshot tags).
+`SwiftClaw/Services/Markdown/` (shared, no Notes types): `MarkdownDocument.swift`
+parses only the *body* past any front matter (handing YAML-ish front-matter
+lines to cmark itself risks misparses — a `key: value` line immediately
+followed by the closing `---` reads as a Setext heading underline — so
+front matter is sliced off before parsing and never handed to `Document
+(parsing:)`), exposes `headings`/`excludedRanges` (front matter + fenced/
+indented code blocks + inline code spans) via a `SourceLocation`→
+`String.Index` `OffsetConverter` that accounts for the front-matter byte
+offset; `FrontMatterBlock.swift` is a byte-preserving, line-based `---`
+block parser (no YAML lib) — `settingValue(_:for:)` replaces/appends only
+one key's line, `tags` reads both inline (bracketed/comma, quote-stripped)
+and YAML dash-list forms; `MarkdownRenderedView.swift` +
+`MarkdownInlineFlowView.swift` + `NoteAsyncImageView.swift` render reading
+mode via `swift-markdown`'s tree (headings/paragraphs/emphasis/strong/
+strikethrough/lists incl. checkboxes/tables/fenced+inline code/thematic
+breaks/`> [!kind]` Obsidian callouts approximated by sniffing the quote's
+first line) — since `swift-markdown`/SwiftUI both export `Text`/`Link`/
+`Image`/`Table`, those cases are qualified `Markdown.X`; Obsidian wikilinks/
+embeds aren't real CommonMark so a small regex scanner
+(`WikilinkTextScanner`) finds `[[page|alias]]`/`![[embed]]` inside plain
+`Text` runs, and per-substring tap targets work by building an
+`AttributedString` with a same-app-only `swiftclaw-wikilink://` URL scheme
+as the `.link` carrier (SwiftUI's `Text` makes `AttributedString` links
+tappable natively — this avoids the "one `onTapGesture` per whole merged
+Text" limitation). Images (including embeds) load only through a caller-
+supplied `loadImage` closure, never `FileManager` directly — backed by a new
+narrow `NotesVault.readData(relativePath:)` / `NotesRepository.readData
+(relativePath:)` (raw `Data`, no UTF-8 decode, reusing the same
+`resolveExistingURL` path-safety checks as `read`).
+
+`SwiftClaw/Features/Notes/Editor/`: `NoteEditorController.swift` is the
+Phase 2 replacement for `NoteEditorModel` (deleted, along with
+`NoteEditorModelTests.swift` — replaced by `NoteEditorControllerTests.swift`,
+`NoteEditorModel` is fully gone, no two competing editor owners). Same
+hash/dirty/autosave invariants as Phase 1, plus: `currentText` is the
+controller's own authoritative copy, updated one-way from the live editor's
+`textDidChange(_:)` callback and pushed the other direction only through an
+`applyText: ((String) -> Void)?` closure the view layer wires up in
+`makeNSView` — SwiftUI itself never holds the document in `@State`/
+`Binding`. Reconcile handling is upgraded: clean → reload (unchanged); dirty
+→ `externalChangeChoice` (a non-modal bar), freezing autosave until resolved.
+`keepMine()` saves the buffer anyway (expected to lose the hash race,
+landing at a conflict copy while the external file stays untouched) and then
+explicitly reloads the fresh external content so the editor ends up
+coherent instead of sitting on a stale buffer that would mint another
+conflict copy on the next autosave — this reuses the exact same
+`ConflictBanner` UI as an ordinary autosave conflict. `takeTheirs()` discards
+the buffer and reloads, never saving. `NoteEditorView.swift` is
+`NSViewRepresentable` on macOS: `makeNSView` builds the `NSTextView`/
+`NSScrollView`, attaches `MarkdownSourceHighlighter` as the text storage's
+delegate *before* the first content assignment (so even the initial load is
+styled through the same path as every later edit), and wires
+`controller.applyText` to `textView.string = text`; `updateNSView` is
+deliberately empty. The non-macOS fallback is a plain `TextEditor` +
+`Binding` (an intentional, documented exception — no NSTextView-equivalent
+exists there yet; real iOS work is future, out of this package's scope).
+`MarkdownSourceHighlighter.swift` is an `NSTextStorageDelegate`
+(`nonisolated` conformance + `MainActor.assumeIsolated`, since `NSTextStorage`
+only calls this on the thread already driving the text view, and Swift 6
+requires `nonisolated` on ObjC-protocol conformances regardless — same
+pattern as `EmailQuickActionSwipe`'s gesture delegate): paragraph-scoped
+restyling normally, widened to end-of-document when the edited paragraph is
+a fence delimiter line (```` ``` ````/`~~~`), via a `FenceStateMachine` that
+recomputes per-line fence state from scratch on every edit (cheap at
+personal-note scale, always correct even when a fence toggled earlier in the
+doc). Attributes-only — a `DEBUG` `assert` checks `textStorage.string` is
+byte-identical before/after every restyle. `isStyling` guards against
+re-entrant `didProcessEditing` calls from the attribute writes themselves.
+`MarkdownEditorTheme.swift` holds colors/fonts; `.current` picks a fully
+opaque high-contrast palette over the normally-translucent one whenever
+`NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast` is on (user
+instruction: UX/accessibility over strict HIG/Liquid Glass when they
+conflict) — `nonisolated` throughout since the highlighter reads it from its
+delegate callback.
+
+`SwiftClaw/Features/Notes/Reading/NoteReadingView.swift`: renders
+`editor.currentText` (not strictly "last saved" — the live buffer, so
+switching to Read mode never requires saving first) via
+`MarkdownRenderedView`; wikilink taps resolve against `model.notes` by exact
+path or title match (approximate — Phase 3's link graph replaces this);
+images try vault-root-relative then note-folder-relative paths through
+`NotesRepository.readData`. `NotesView.swift` modified: Edit/Read toggle +
+`Cmd-E` in the toolbar (shown only when a note is selected), detail column
+routes through `NoteEditorController`/`NoteEditorView`/`NoteReadingView`
+instead of the interim `TextEditor`, a new non-modal Keep Mine/Take Theirs
+bar for `externalChangeChoice`, and the macOS `HSplitView` layout is
+untouched. `NotesFeatureModel.swift` modified: `NoteEditorModel` →
+`NoteEditorController` throughout (routing/reconcile-delta wiring
+unchanged).
+
+Tests: `SwiftClawTests/Markdown/` (new) — `FrontMatterBlockTests` (byte-for-
+byte corpus: unknown keys/comments preserved, a body thematic break never
+mistaken for the closing fence, single-key replace, missing-key append,
+CRLF preserved end-to-end, inline bracketed/comma tags, dash-list tags);
+`MarkdownDocumentTests` (heading outline + source ranges incl. Unicode
+content before a heading, excluded ranges for fenced/indented/inline code,
+front matter excluded without producing bogus headings, inline code nested
+in a heading both outlined and excluded); `MarkdownLosslessnessTests`
+(`@MainActor`, macOS-only — an Obsidian-style corpus with callouts,
+`[[page|alias]]`, `![[embed]]`, nested tags, front matter, and fenced code
+through a live `NSTextStorage` + the highlighter, asserting `.string` is
+byte-identical after the initial styling pass and after simulated typing/
+deletion/fence-toggle edits — the highlighter is kept alive across each
+edit since `NSTextStorage.delegate` is `weak`).
+`SwiftClawTests/Notes/NoteEditorControllerTests.swift` replaces
+`NoteEditorModelTests.swift`: same Phase 1 coverage (load/selection,
+autosave, blur-flush-on-selection-change, ordinary conflict, save-failure
+non-loss) renamed to the controller, plus new coverage for the external-
+change choice bar (dirty → choice presented, not a silent no-op; idle
+autosave stays frozen while pending), `keepMine()` (conflict copy created,
+original untouched, editor ends up on the fresh external content, no repeat
+conflict copies), and `takeTheirs()` (buffer discarded, external content
+reloaded, nothing ever saved). `NotesFeatureModelTests.swift` updated
+(`editedText` → `currentText`) — its existing delta-handling tests don't
+happen to cover a dirty note hitting `handleExternalChange()`, so no
+behavior assertions needed changing there.
+
+Verification: `-only-testing:SwiftClawTests/Notes` (as given in the task
+prompt) matches zero tests — Notes tests are individual Swift Testing
+structs under that folder, not a class/suite literally named `Notes`, and
+`PBXFileSystemSynchronizedRootGroup` doesn't create a group-level test
+target filter `xcodebuild` can match on. Ran every Notes+Markdown suite by
+name instead (`NotesVaultTests`, `NoteRevisionStoreTests`,
+`VaultReconcilerTests`, `NotesRepositoryTests`, `NotesSettingsStorageTests`,
+`NotesFeatureModelTests`, `NoteEditorControllerTests`,
+`FrontMatterBlockTests`, `MarkdownDocumentTests`,
+`MarkdownLosslessnessTests`) — all pass. Full unfiltered `xcodebuild test`
+(the whole app, every suite) also passes with no regressions, and a full
+`xcodebuild build` succeeds. `git diff --check` is clean.
+
+Low-confidence decisions worth a second look before Phase 3:
+- `NoteReadingView` renders `editor.currentText` (the live, possibly-dirty
+  buffer) rather than strictly the last-saved content — chosen so Read mode
+  never forces a save first, matching Obsidian's live-preview feel, but it's
+  a judgment call the plan didn't spell out.
+- Obsidian `[!kind]` callout detection and wikilink/embed resolution in the
+  renderer are both string-sniffing heuristics scoped to Phase 2's rendering
+  needs, not the real parser Phase 3's `WikilinkScanner`/`NoteLinkGraph` will
+  need (source-range-aware, excluded-range-aware). Don't assume this
+  renderer-local logic is reusable there without revisiting it.
+- `MarkdownSourceHighlighter`'s inline styling (bold/italic/code/links) is
+  independent regex passes over each line with no mutual-exclusion
+  awareness (e.g. a `**bold `code`**` span could double-style) — acceptable
+  per the plan's explicit "approximate styling" allowance, but worth a
+  second look if it looks visually off in manual testing.
+- `keepMine()`'s "reload the fresh external content afterward" behavior is
+  this package's interpretation of "transition to a coherent state without
+  repeated conflict copies" — the plan didn't fully spell out whether Keep
+  Mine should leave the local buffer in place (frozen, like an ordinary
+  autosave conflict) instead of reloading. Worth confirming against the
+  intended UX during manual testing.
+
+Older low-confidence decisions from Phase 1, still open:
 - Post-conflict autosave freezing (idle-debounce paused, explicit
   save-on-selection-change/disappear still fires) is not explicitly
   plan-mandated — an alternative would be to keep autosaving unconditionally
@@ -392,6 +548,381 @@ Low-confidence decisions worth a second look before Phase 2:
   `EmailManualSyncCoordinator.shared` precedent, but means tests must
   construct fresh instances via the internal (non-`shared`) initializer,
   which they do.
+
+## Phase 2 external review fixes (2026-07-13)
+
+Resolved all four findings from the external gpt-5.6-terra high review without
+broadening into Phase 3:
+
+- **P1 data-loss race on clean external reload** (`NoteEditorController`):
+  `handleExternalChange()`'s clean-note branch called `load`, whose
+  `repository.read` await could suspend while the buffer was still clean; a
+  keystroke landing during that suspension was previously clobbered
+  unconditionally by the returned external snapshot, since only
+  `selectionGeneration` was checked, not any per-edit state. Added
+  `editGeneration` (incremented in every `textDidChange(_:)`); `load` now
+  takes an optional `requireEditGeneration`, captured by
+  `handleExternalChange()` immediately before the `await`. On return, if
+  `editGeneration` no longer matches, the snapshot is discarded and
+  `externalChangeChoice` is surfaced instead (via new shared helper
+  `presentExternalChangeChoiceIfNeeded()`) — same outcome as if the edit had
+  arrived a moment earlier. Ordinary loads (selection, Keep Mine, Take
+  Theirs) pass `nil` and are unaffected — those are user-initiated buffer
+  replacements, not a race with the buffer.
+- **P1 data-loss on Keep Mine non-conflict failure** (`keepMine()`): the
+  `catch let error as NotesError` branch previously called `await load(...)`
+  (discarding/reloading the buffer) for *any* `NotesError`, not just a
+  confirmed `.externalConflict` — so a revoked security scope or disk I/O
+  error during the attempted save would silently reload external content
+  over the user's buffer even though nothing was actually written anywhere.
+  Now only the `.externalConflict` case clears `externalChangeChoice` and
+  reloads; every other `NotesError` and the generic `catch` leave
+  `currentText`/`isDirty`/`externalChangeChoice` untouched and just set
+  `saveError`, so the choice bar stays up and retryable (Keep Mine again, or
+  Take Theirs).
+- **P2 reading mode rendered front matter** (`MarkdownRenderedView`): `body`
+  was calling `Document(parsing: source, options: [])` on the raw source,
+  including any leading `---` front-matter block, so its keys/delimiters
+  rendered as text/headings. Added `MarkdownRenderedView.body(of:)` (slices
+  past `FrontMatterBlock.range.upperBound`, matching the pattern
+  `MarkdownDocument` already used for parsing) and switched `body` to parse
+  that instead of `source` directly.
+- **P2 fixed-width fence tracking** (`FenceStateMachine`): `recompute`
+  previously tracked only the fence *character*, matching any line with
+  `hasPrefix(String(repeating: marker, count: 3))` — so a 4-backtick opener
+  incorrectly closed on any 3-backtick line inside its own content.
+  `fenceOpener(of:)` now returns `(marker, runLength)`; a closer must match
+  the same marker and have a run length at least as long as the opener's.
+  `isFenceDelimiter` (used for widening the highlighter's restyle range) is
+  unchanged in spirit — still permissive about trailing content — since that
+  call site only needs "is this a fence-toggle line", not exact closer
+  validation.
+
+New regression coverage: `NoteEditorControllerTests.externalReloadRaceKeepsTypedEditsAndPresentsAChoiceInsteadOfClobberingThem`
+(uses the existing `ScopeGate` test double to suspend the reconcile reload's
+read mid-flight, types during the suspension, then unblocks — fails under the
+old code since the snapshot used to win unconditionally),
+`.keepMineNonConflictSaveErrorKeepsTheBufferAndLeavesTheChoiceRetryable` (uses
+the existing `FailOnceScope` double to fail Keep Mine's save with a
+non-conflict I/O error; asserts buffer/dirty/choice survive, `saveError` is
+set, and no conflict copy exists on disk); new
+`SwiftClawTests/Markdown/MarkdownRenderedViewTests.swift` (front matter never
+appears in `body(of:)`'s output or in the parsed block tree; a body thematic
+break that never opened front matter is left untouched); new
+`SwiftClawTests/Markdown/FenceStateMachineTests.swift` (4-backtick opener
+stays open across an inner 3-backtick line and both backtick/tilde variants
+only close on a same-marker run at least as long as the opener's — these
+construct `FenceStateMachine` directly and fail under the old
+character-only-match implementation).
+
+Verification: the four requested suites
+(`-only-testing:SwiftClawTests/NoteEditorControllerTests`,
+`.../MarkdownLosslessnessTests`, `.../MarkdownDocumentTests`, plus the new
+`.../MarkdownRenderedViewTests` and `.../FenceStateMachineTests`, since the
+new regression coverage for findings 3 and 4 lives in those new suites) all
+pass. A full unfiltered `xcodebuild test` (every suite in the app) passes
+with no regressions. A full unsigned `xcodebuild build` succeeds. `git diff
+--check` is clean.
+
+Files touched by this fix pass:
+`SwiftClaw/Features/Notes/Editor/NoteEditorController.swift`,
+`SwiftClaw/Services/Markdown/MarkdownRenderedView.swift`,
+`SwiftClaw/Features/Notes/Editor/MarkdownSourceHighlighter.swift`,
+`SwiftClawTests/Notes/NoteEditorControllerTests.swift` (2 new tests),
+`SwiftClawTests/Markdown/MarkdownRenderedViewTests.swift` (new),
+`SwiftClawTests/Markdown/FenceStateMachineTests.swift` (new).
+
+Phase 2 is still **not** marked complete in `docs/NOTES_PLAN.md` — pending
+follow-up review and Computer Use testing by the orchestrator, per the
+existing "Next steps" below.
+
+## Phase 2 keepMine race follow-up fixes (2026-07-13)
+
+Resolved the two `NoteEditorController.keepMine()` races from the final
+gpt-5.6-terra high follow-up review (the fence-state fix from the prior pass
+was confirmed clean by that review, no change needed there):
+
+- **P1 post-conflict reload race**: in the `.externalConflict` branch, when no
+  edit happened *during the save itself* (`editGeneration == editGenerationAtSave`),
+  the old code cleared `externalChangeChoice`/`isAutosaveFrozen` *before*
+  `await load(...)`'s `repository.read` — so typing during that suspended read
+  had nothing left guarding it, and the unconditional-apply `load` call
+  clobbered the newer buffer with the external snapshot. Fixed by keeping the
+  choice/freeze active across the read: `load` now returns a `Bool` (applied
+  or not, `@discardableResult` for the other call sites that don't need it),
+  and the reload passes `requireEditGeneration: editGeneration` (captured
+  immediately before the call, same pattern `handleExternalChange()` already
+  used). The choice/freeze are only cleared when `load` reports `true`; if a
+  race discarded the snapshot, `load`'s existing `presentExternalChangeChoiceIfNeeded()`
+  call is a no-op (choice/freeze were already active) so the newest buffer
+  stays dirty and actionable. The pre-existing "edit happened during the save
+  itself" branch (`editGeneration != editGenerationAtSave`, which already
+  skipped the reload and kept everything frozen) was untouched — it wasn't
+  part of this bug.
+- **P2 unexpected Keep Mine success with in-flight typing**: the success path
+  correctly left `currentText` newer than `loadedContent` (so `isDirty` stays
+  true) when the user typed during the save, but it never restarted autosave
+  after clearing `isAutosaveFrozen` — the newer buffer would sit dirty
+  forever with nothing scheduled to save it. Added a `scheduleAutosaveIfNeeded()`
+  call right after unfreezing, matching `performSave`'s existing success path.
+
+New regression coverage in `NoteEditorControllerTests.swift`:
+`keepMinePostConflictReloadRaceKeepsTheNewestTypingAndLeavesTheChoiceActionable`
+(uses `ScopeGate(blockedCall: 4)` — call 1 is the initial select; Keep Mine
+uses call 2 to snapshot the revision and call 3 for its guarded write, both
+allowed through to hit the conflict; call 4 is the post-conflict reload's
+read, suspended while a newer buffer is typed; asserts
+the newest buffer survives byte-identically, stays dirty, the choice/banner
+remain active naming the created copy, the external file is untouched, and
+the conflict copy holds only the earlier pre-reload buffer) and
+`keepMineUnexpectedSuccessWithInFlightTypingRestartsAutosaveForTheNewerBuffer`
+(manufactures a pending `externalChangeChoice` via `handleExternalChange()`'s
+dirty branch — which presents the choice with no repository call at all — so
+the on-disk hash is never actually changed and Keep Mine's suspended save
+subsequently succeeds; types newer content while that save is in flight;
+asserts the newer text stays dirty immediately after, the choice clears with
+no conflict banner, and the restarted idle autosave later flushes the newer
+text to disk with no conflict copy).
+
+Verification: `-only-testing:SwiftClawTests/NoteEditorControllerTests` passes
+(both new tests plus all pre-existing ones in that suite). A full unfiltered
+`xcodebuild test` (every suite in the app) passes with no regressions. A full
+unsigned `xcodebuild build` succeeds. `git diff --check` is clean.
+
+Files touched by this fix pass:
+`SwiftClaw/Features/Notes/Editor/NoteEditorController.swift` (`load` now
+returns `Bool`; `keepMine()`'s conflict branch and success branch updated),
+`SwiftClawTests/Notes/NoteEditorControllerTests.swift` (2 new tests).
+
+Phase 2 is still **not** marked complete in `docs/NOTES_PLAN.md` — pending
+follow-up review and Computer Use testing by the orchestrator.
+
+## Phase 2 concurrency resolution follow-up (2026-07-13)
+
+Sonnet 5 began resolving the validated controller-concurrency findings but
+exhausted its session mid-pass. The Sonnet-to-Terra fallback was completed by
+inspecting those uncommitted edits rather than restarting Phase 2 or widening
+scope into Phase 3.
+
+- `NoteEditorController` now has observable private-set
+  `isResolvingExternalChange`, set for the full Keep Mine or Take Theirs
+  operation and cleared by `defer`, including conflict, ordinary error, and
+  stale-selection exits. Both choices refuse a second resolution while it is
+  true. Every `load` owns a fresh UUID request token; only the request that
+  still owns `activeLoadID` may clear `isLoading`, including stale path/
+  selection and edit-generation branches.
+- Keep Mine leaves a non-conflict save failure retryable: the current buffer,
+  dirty state, and external-change choice stay intact, while `saveError`
+  explains the failure. Take Theirs now keeps that choice visible and frozen
+  until its replacement read applies; a failed or stale read therefore
+  remains retryable instead of removing the choice and its busy indication.
+- `NotesView` disables both choice buttons during resolution and visibly says
+  “Resolving…” with an accessibility label. The UI remains present for both
+  resolution paths while their work is in flight.
+- `NoteEditorControllerTests` now deterministically cover: a blocked Keep
+  Mine with duplicate Keep Mine and Take Theirs attempts (exactly one
+  conflict copy and coherent final state); non-conflict Keep Mine failure
+  followed by a successful retry; retargeting during a suspended guarded
+  post-conflict read (spinner clears, dirty text and choice remain); two
+  overlapping selections (the older completion cannot clear the newer
+  spinner); and a blocked Take Theirs (choice stays visibly busy/retryable
+  until the guarded read settles).
+
+Verification performed in this environment:
+
+- `swiftc -parse` over the changed controller, Notes view, and controller
+  tests: passed.
+- `git diff --check`: passed.
+- The requested focused controller test, full test, and unsigned build were
+  all launched in the foreground with `DEVELOPER_DIR` and
+  `CODE_SIGNING_ALLOWED=NO`, but each exited 1 before workspace resolution,
+  compilation, or test discovery. Xcode failed while initializing host
+  simulator services: `CoreSimulatorService connection became invalid`,
+  `simdiskimaged` could not start, and `Connection refused`. This is an
+  environment block, not an in-scope Notes failure; rerun the same three
+  commands once CoreSimulator is available.
+
+Files touched by this follow-up:
+`SwiftClaw/Features/Notes/Editor/NoteEditorController.swift`,
+`SwiftClaw/Features/Notes/NotesView.swift`,
+`SwiftClawTests/Notes/NoteEditorControllerTests.swift`, and this memory file.
+
+Phase 2 remains **not** marked complete in `docs/NOTES_PLAN.md`.
+
+## Phase 2 save/choice serialization follow-up (2026-07-13)
+
+Resolved the validated Phase 2 save/choice serialization findings without
+starting Phase 3 or changing `docs/NOTES_PLAN.md`:
+
+- `NoteEditorController.select(path:)` now rejects immediately while Keep
+  Mine or Take Theirs owns a resolution. It leaves `selectedPath` unchanged
+  and performs no flush, so `NotesFeatureModel.select` also leaves its
+  `selectedPath` unchanged; the list binding reads that model value and
+  naturally reverts. `flushPendingSave()` rejects for the same period, which
+  also protects the editor view's blur/`onDisappear` save path from starting
+  another write.
+- Normal saves now have one tracked internal `SaveOutcome` task
+  (`succeeded`, `externalConflict(copyPath:)`, or `failed`) carrying the
+  captured content. Keep Mine and Take Theirs first join any save that was
+  already suspended when the external-change choice appeared. No choice path
+  directly calls `repository.save` outside this serialization boundary.
+  Take Theirs never adds a write after that join; it guarded-reloads the
+  external version. Keep Mine treats a joined success or a conflict copy for
+  its exact captured buffer as already satisfied (reusing the success/banner
+  state), and only starts one later serialized attempt when the earlier save
+  was failed or held an older buffer. Newer typing remains dirty/actionable
+  rather than being reloaded over.
+- `performSave` no longer unfreezes an active external-change choice merely
+  because a previously started normal save succeeded. The resolution itself
+  clears the choice/freeze and restarts autosave when appropriate.
+- Added deterministic `NoteEditorControllerTests` for blocked Keep Mine plus
+  rejected selection/flush (then normal selection after release), blocked
+  normal-save + Take Theirs (one possible original conflict copy, no second
+  save/copy, external text loaded), and blocked normal-save + Keep Mine
+  (joins the copy and keeps newer typing actionable). The `ScopeGate` now
+  exposes its call count; comments/assertions account for
+  `NotesRepository.save`'s snapshot read followed by guarded write.
+
+Verification in this Codex workspace:
+
+- `swiftc -parse SwiftClaw/Features/Notes/Editor/NoteEditorController.swift SwiftClawTests/Notes/NoteEditorControllerTests.swift`: passed.
+- `git diff --check`: passed.
+- Attempted the focused `xcodebuild ... -only-testing:SwiftClawTests/NoteEditorControllerTests` command with `DEVELOPER_DIR`, an unsigned build, and `xcbeautify`. It stopped before workspace resolution, compilation, or test discovery because this sandbox cannot connect to CoreSimulator: `CoreSimulatorService connection became invalid`, `simdiskimaged` was unavailable, and the service returned `Connection refused`. That is an environment block, not a test failure; rerun the focused suite (then host-context full/build verification) outside this sandbox.
+
+Phase 2 remains **not** marked complete in `docs/NOTES_PLAN.md`.
+
+## Phase 2 explicit-flush current-buffer preservation fix (2026-07-13)
+
+Resolved the validated selection/flush data-loss race without starting Phase 3
+or changing `docs/NOTES_PLAN.md`:
+
+- `NoteEditorController.flushPendingSave()` now captures the current text and
+  expected hash before every serialized save/join. When a joined outcome was
+  for an older buffer — including when a concurrent flush captures B and only
+  joins an in-flight save of A — it verifies the outcome preserved the exact
+  captured buffer before treating it as final. Otherwise it loops to save the
+  newer dirty buffer using the controller's then-current expected hash. An
+  ordinary failure remains final only when it is for that exact capture. The
+  loop only retries after awaiting a save/join; it exits on a selection/path
+  change, external removal, or active external-choice resolution.
+- Conflict banners now retain their captured buffer privately and are cleared
+  when that buffer is no longer current, so an older copy cannot authorize
+  selection after a later ordinary save failure. `flush` returns success only
+  for a write of the exact current buffer; it returns false with a conflict
+  banner only when that exact buffer reached a conflict copy. `select(path:)`
+  also rechecks removal/resolution state after its suspended flush before
+  accepting the banner-based navigation path.
+- Added deterministic controller tests for a blocked save of buffer A followed
+  by buffer B and a selection change: one where A succeeds and one where an
+  external edit makes A conflict. Both hold B's subsequent save at a second
+  gate to prove selection stays on A until B is written or copied. The conflict
+  case confirms the external original remains intact and a conflict copy
+  contains B (two distinct conflict copies are expected for A and B). A
+  companion regression verifies an ordinary B save failure after an A copy
+  retains the A selection instead of navigating through the stale banner.
+
+Verification in this Codex workspace:
+
+- `swiftc -parse SwiftClaw/Features/Notes/Editor/NoteEditorController.swift SwiftClawTests/Notes/NoteEditorControllerTests.swift`: passed.
+- `git diff --check`: passed.
+- The focused `xcodebuild ... -only-testing:SwiftClawTests/NoteEditorControllerTests`
+  attempt stopped before workspace resolution, compilation, or test discovery:
+  this sandbox cannot connect to `CoreSimulatorService`, `simdiskimaged` is
+  unavailable, and Xcode reports `Connection refused` (exit 143). This is the
+  known sandbox CoreSimulator block, not a controller-test failure; rerun the
+  focused suite from the host context.
+
+Phase 2 remains **not** marked complete in `docs/NOTES_PLAN.md`.
+
+## Phase 2 Keep Mine joined-save completion ordering fix (2026-07-13)
+
+Resolved the remaining blocked-normal-save + Keep Mine controller race:
+
+- **Cause:** the normal flush checked only the transient
+  `isResolvingExternalChange` flag after its awaited save. When the blocked A
+  save completed, both the normal flush and Keep Mine were eligible to resume.
+  If Keep Mine ran first, it correctly consumed A's conflict outcome, observed
+  newer B typing, and returned (clearing that flag). The older normal flush
+  then resumed, saw B no longer matched its captured A buffer, and looped into
+  a second stale-hash save of B. That overwrote the banner with B's copy and
+  added the unexpected vault calls/copy.
+- **Fix:** Keep Mine and Take Theirs now capture the exact in-flight save task
+  before exposing their resolving state, so their join remains owned even if a
+  waiter cleans up the shared slot. Each resolution also advances a private
+  generation. `flushPendingSave()` captures that generation before it starts
+  and validates it both before and after every awaited save. A flush that
+  predates a resolver therefore stops instead of retrying a newer buffer after
+  the resolver has returned. The existing blocked test remains genuinely
+  overlapping: A is held at its repository snapshot read, Keep Mine joins it,
+  B is typed while both wait, and only then is A released.
+
+Verification: `swiftc -parse` over the controller and controller tests, plus
+`git diff --check`, pass. The focused Xcode suite still cannot start in this
+sandbox because CoreSimulator/simdiskimaged is unavailable before test
+discovery; host rerun is required.
+
+## Phase 2 final review-finding resolution (2026-07-13)
+
+Resolved the final controller-test deadlock and rechecked all four Sonnet
+review fixes without changing Phase 3 scope or `docs/NOTES_PLAN.md`:
+
+- **In-flight local-save reconcile guard:** `handleExternalChange()` now
+  treats a successfully completed save it was already waiting for as this
+  app's own notification and returns without an external-change choice. This
+  stays true if newer local typing keeps the buffer dirty: that typing is not
+  evidence of an external edit. If the observed save instead found a real
+  external conflict, its completed `SaveOutcome` is retained only until the
+  user chooses an action. Keep Mine reuses that exact conflict copy when it
+  preserved the current buffer, avoiding a duplicate stale-hash write; Take
+  Theirs still only reloads the external file.
+- **Deterministic controller tests:** the two existing blocked-normal-save
+  tests were the hanging cases. Each called `await handleExternalChange()`
+  while deliberately holding the normal save at `ScopeGate` call #2, but the
+  new guard correctly waits for that save. They now start reconciliation in a
+  task, assert that no false choice appears while blocked, release the save,
+  then assert the true external-conflict choice and exercise Take Theirs or
+  Keep Mine. The Keep Mine test proves it reloads from the already-created
+  copy with exactly four vault operations and no duplicate copy.
+- **Ambient inline fonts:** `MarkdownInlineFlowView` continues to give only
+  inline code an explicit monospaced font. Plain text, emphasis, strong,
+  strikethrough, Markdown links, and wikilinks all inherit their heading or
+  table-header font; styles use `inlinePresentationIntent`. Added link and
+  wikilink inheritance assertions alongside the existing plain/bold/italic
+  and code checks.
+- **Reading image paths:** `NoteReadingView` correctly tries a note-folder
+  candidate before its normalized vault-root fallback, collapses safe `.` /
+  `..` segments lexically, deduplicates candidates, and rejects traversal
+  above the vault root. Its focused tests cover folder priority, normalization,
+  safe parent traversal, absolute paths, and vault escapes.
+- **Async image state:** `NoteAsyncImageView` resets both the loaded image and
+  failure state before every `.task(id: relativePath)` load. The small
+  `NoteAsyncImageLoadState` helper keeps that state transition testable
+  without a view-inspection dependency; a new test covers clearing an old
+  image and a prior failure before the next path loads.
+
+Real verification in this workspace:
+
+- Passed: `swiftc -parse` over the controller, controller tests, inline
+  renderer, async image view, reading view, and their focused tests.
+- Passed: `git diff --check` and `git diff --cached --check`.
+- Blocked before test discovery: foreground `xcodebuild` with
+  `set -o pipefail`, `DEVELOPER_DIR`, `CODE_SIGNING_ALLOWED=NO`, and unique
+  `/tmp` derived-data paths exits 143 immediately after sandbox-restricted
+  Xcode startup (`confstr`/FSEvents; the initial attempt also reported an
+  unavailable CoreSimulator service). Moving HOME and compiler module caches
+  into `/tmp` did not change that result. The SwiftPM fallback is also blocked
+  while compiling the manifest (`sandbox-exec: sandbox_apply: Operation not
+  permitted`). No Xcode test — including the full
+  `NoteEditorControllerTests` suite or the Markdown/NoteReading focused suites
+  — was claimed as run here.
+
+Next host-context verification, using unique derived-data paths and
+`set -o pipefail`: run the complete `NoteEditorControllerTests` suite, then
+the Markdown suites (`MarkdownInlineFlowViewTests`, `NoteAsyncImageViewTests`,
+`MarkdownDocumentTests`, `MarkdownLosslessnessTests`, `MarkdownRenderedViewTests`,
+`FenceStateMachineTests`, `FrontMatterBlockTests`) and
+`NoteReadingViewTests`. Keep Phase 2 unmarked in `docs/NOTES_PLAN.md` until
+that verification and the planned UI review finish.
 
 ## Decisions & constraints
 
@@ -435,3 +966,210 @@ Low-confidence decisions worth a second look before Phase 2:
 - `SwiftClawTests/Notes/` — `NotesVaultTests.swift`,
   `NoteRevisionStoreTests.swift`, `VaultReconcilerTests.swift`,
   `NotesRepositoryTests.swift`, `NotesSettingsStorageTests.swift` (new).
+
+### Phase 2
+
+- `Package.swift` + `SwiftClaw.xcodeproj/project.pbxproj` — added
+  `apple/swift-markdown` (branch `main`) as a package dependency/product on
+  the `SwiftClaw` target; `Package.resolved` (root and
+  `project.xcworkspace/xcshareddata/swiftpm/`) both updated via normal
+  resolution (modified).
+- `SwiftClaw/Services/Markdown/` — `MarkdownDocument.swift`,
+  `FrontMatterBlock.swift`, `MarkdownRenderedView.swift`,
+  `MarkdownInlineFlowView.swift`, `NoteAsyncImageView.swift` (new).
+- `SwiftClaw/Services/Notes/Vault/NotesVault.swift` — added
+  `readData(relativePath:)` (raw bytes, no UTF-8 decode) (modified).
+- `SwiftClaw/Services/Notes/Repository/NotesRepository.swift` — added
+  `readData(relativePath:)` delegating to the vault (modified).
+- `SwiftClaw/Features/Notes/Editor/` — `NoteEditorController.swift`,
+  `NoteEditorView.swift`, `MarkdownSourceHighlighter.swift`,
+  `MarkdownEditorTheme.swift` (new).
+- `SwiftClaw/Features/Notes/NoteEditorModel.swift` — deleted, replaced by
+  `Editor/NoteEditorController.swift`.
+- `SwiftClaw/Features/Notes/Reading/NoteReadingView.swift` (new).
+- `SwiftClaw/Features/Notes/NotesView.swift` — Edit/Read toggle + Cmd-E,
+  detail column routes through the new controller/editor/reading views, new
+  Keep Mine/Take Theirs bar; `HSplitView` layout unchanged (modified).
+- `SwiftClaw/Features/Notes/NotesFeatureModel.swift` — `NoteEditorModel` →
+  `NoteEditorController` (modified).
+- `SwiftClawTests/Markdown/` — `FrontMatterBlockTests.swift`,
+  `MarkdownDocumentTests.swift`, `MarkdownLosslessnessTests.swift`,
+  `MarkdownInlineFlowViewTests.swift`, `MarkdownRenderedViewTests.swift`,
+  `FenceStateMachineTests.swift`, `NoteAsyncImageViewTests.swift` (new).
+- `SwiftClawTests/Notes/NoteEditorModelTests.swift` — deleted, replaced by
+  `NoteEditorControllerTests.swift` (new).
+- `SwiftClawTests/Notes/NoteReadingViewTests.swift` — path-normalization and
+  note-directory-first image-resolution regressions (new).
+- `SwiftClawTests/Notes/NotesFeatureModelTests.swift` — `editedText` →
+  `currentText` (modified).
+
+## Phase 2 reading-mode image identity / ordered-list start / fence-deletion follow-up (2026-07-13)
+
+Resolved three validated final review findings without starting Phase 3 or
+changing `docs/NOTES_PLAN.md`:
+
+- **Image task identity keyed only by `relativePath`** (`NoteAsyncImageView`):
+  `.task(id: relativePath)` meant switching between two different notes that
+  both reference an identically-named relative image (e.g. both use
+  `image.png`) left SwiftUI's task identity unchanged across the note switch,
+  so the second note's load never restarted and briefly (or indefinitely, if
+  the first load already finished) showed the first note's already-loaded
+  image. Added `imageLoadScope: String` threaded from `NoteReadingView`
+  (`notePath`) through `MarkdownRenderedView` → `MarkdownBlockView` →
+  `MarkdownListView`/`MarkdownQuoteView`/`MarkdownTableView`/
+  `MarkdownInlineFlowView` → `NoteAsyncImageView`, which now keys its
+  `.task(id:)` off a `Hashable` `ImageLoadTaskID(scope:relativePath:)` (made
+  non-`private` so it's directly testable). The existing pre-`await`
+  `loadState.reset()` is unchanged — it still runs whenever this new combined
+  identity changes, so stale loaded/failure state still clears correctly.
+- **Ordered lists always started at 1** (`MarkdownRenderedView`): the private
+  `MarkdownListView.marker(for:index:)` numbered every ordered list from 1,
+  ignoring `Markdown.OrderedList.startIndex` (CommonMark's `3. / 4. / 5.`
+  syntax for a list that doesn't start at 1). `MarkdownListView` is now
+  non-`private`, takes a `startIndex: UInt` (threaded from
+  `MarkdownBlockView`'s `OrderedList` case; unordered lists pass a fixed `1`,
+  unused), and its marker logic is a directly-testable `static func
+  marker(checkbox:ordered:startIndex:index:)`.
+- **Fence-delimiter deletion left stale styling** (`MarkdownSourceHighlighter`):
+  `rangeToRestyle` widened the restyle range to end-of-document only when the
+  *post-edit* edited line still read as a fence delimiter via
+  `FenceStateMachine.isFenceDelimiter`. Deleting a marker character from an
+  opening or closing fence (e.g. ` ``` ` → ` `` `) drops that line below the
+  3-marker minimum, so it stops matching `isFenceDelimiter` even though the
+  fence parity for every following line just changed — the narrow
+  paragraph-only restyle then left later lines with stale monospaced/
+  secondary (or stale ordinary) attributes. Fixed by also snapshotting
+  `fenceState.insideFenceAtLineStart` *before* calling `recompute` each edit,
+  then comparing it against the recomputed array from the edited line index
+  onward (and unconditionally widening if the line count itself changed);
+  any divergence conservatively widens to end-of-document. `restyle` and
+  `rangeToRestyle` both gained the `editedLineIndex`/`previousFenceStates`
+  plumbing to support this; the byte-for-byte `DEBUG` assert and
+  `isStyling` re-entrancy guard are unchanged.
+
+New regression coverage:
+- `SwiftClawTests/Markdown/NoteAsyncImageViewTests.swift` — three new tests
+  against `NoteAsyncImageView.ImageLoadTaskID` directly (different scope +
+  same `relativePath` → different identity; same scope + same path → equal
+  identity; same scope + different path → different identity). No view-tree
+  introspection.
+- `SwiftClawTests/Markdown/MarkdownRenderedViewTests.swift` — four new tests
+  against `MarkdownListView.marker(...)` directly (ordinary 1-start
+  numbering; a 3-start list's markers read `3./4./5.`; a parsed
+  `"3. Third\n4. Fourth\n5. Fifth\n"` document's `OrderedList.startIndex ==
+  3`, confirming swift-markdown surfaces it as expected; unordered-list
+  markers ignore `startIndex` and stay bullet/checkbox).
+- `SwiftClawTests/Markdown/MarkdownLosslessnessTests.swift` — three new tests
+  using a new `probeTheme` (unmistakably distinct `textColor`/`secondaryColor`/
+  fonts from ordinary usage) injected via `MarkdownSourceHighlighter`'s
+  existing `themeProvider` init parameter: deleting one backtick from an
+  opening fence line recomputes the previously-fenced content line back to
+  ordinary-text color (not left stale as fenced); deleting one backtick from
+  a closing fence line (so the fence never actually closes) recomputes every
+  following line to fenced/secondary color (not left stale as ordinary); a
+  tilde-fence counterpart of the opening-fence case. All three also assert
+  the surrounding text stayed byte-for-byte identical apart from the single
+  deleted character. The pre-existing
+  `togglingAFenceDelimiterRestylesWithoutChangingCharacters` same-length-
+  replace test already covered the insertion/toggle direction and needed no
+  changes.
+
+Verification:
+- `swiftc -parse` implicitly covered by the full build below.
+- `git diff --check`: clean.
+- Focused suites via `-only-testing:`: `MarkdownRenderedViewTests`,
+  `MarkdownInlineFlowViewTests`, `NoteAsyncImageViewTests`,
+  `NoteReadingViewTests`, `FenceStateMachineTests`,
+  `MarkdownLosslessnessTests`, `MarkdownDocumentTests`,
+  `FrontMatterBlockTests`, `NoteEditorControllerTests` — all pass (unsigned
+  macOS build/test, `CODE_SIGNING_ALLOWED=NO`, `set -o pipefail` +
+  `xcbeautify --quiet`).
+- Full unsigned macOS `xcodebuild build`: succeeds.
+- Full unsigned iPhone 17 Simulator `xcodebuild build` (`platform=iOS
+  Simulator,name=iPhone 17`, `CODE_SIGNING_ALLOWED=NO`): succeeds — checked
+  because `MarkdownSourceHighlighter`/`MarkdownEditorTheme` are
+  `#if os(macOS)`-only but `NoteAsyncImageView`/`MarkdownRenderedView`/
+  `MarkdownInlineFlowView` are cross-platform (`PlatformImage`) and now carry
+  the new `imageLoadScope`/`startIndex` parameters on both platforms.
+- Two pre-existing, unrelated Swift 6 concurrency errors surfaced during the
+  focused test run (`ReminderReviewServiceTests.swift`,
+  `CalendarReviewServiceTests.swift` — `mutation of captured var ... in
+  concurrently-executing code`); confirmed via `git status --porcelain` that
+  neither file is touched by this change, so these are pre-existing and out
+  of scope here, not a regression from this fix pass.
+
+Files touched by this fix pass:
+`SwiftClaw/Services/Markdown/NoteAsyncImageView.swift`,
+`SwiftClaw/Services/Markdown/MarkdownInlineFlowView.swift`,
+`SwiftClaw/Services/Markdown/MarkdownRenderedView.swift`,
+`SwiftClaw/Features/Notes/Reading/NoteReadingView.swift`,
+`SwiftClaw/Features/Notes/Editor/MarkdownSourceHighlighter.swift`,
+`SwiftClawTests/Markdown/NoteAsyncImageViewTests.swift`,
+`SwiftClawTests/Markdown/MarkdownRenderedViewTests.swift`,
+`SwiftClawTests/Markdown/MarkdownLosslessnessTests.swift`.
+
+At this checkpoint Phase 2 was still awaiting Computer Use/manual UI testing;
+the later completion entry below supersedes that state.
+
+## Phase 2 Computer Use blocker (2026-07-13)
+
+Implementation review is clean (`gpt-5.6-terra` high: **No findings**), the
+full macOS test suite passes, and unsigned macOS plus iPhone 17 Simulator
+builds succeed. Computer Use was attempted three times through the required
+`gpt-5.6-sol` low agent and once through the host Computer Use runtime.
+
+Both runtimes can list `com.caffeineplz.SwiftClaw`, but capture fails with
+`cgWindowNotFound`. Host inspection showed the desktop is at `loginwindow`
+(locked/non-interactive session) and on-screen app windows expose no shareable
+capture surface. The iOS 27 runtime is installed and a disposable iPhone 17
+simulator successfully booted, installed, and launched SwiftClaw; a static
+1206x2622 screenshot proved the app rendered its Home screen. This Xcode
+installation has no interactive `Simulator.app`, so the Notes flows could not
+be driven or visually verified on iOS either. The disposable simulator, test
+process, and isolated HOME were removed afterward.
+
+This blocker was later cleared for macOS; see the completion entry below. The
+iOS host still lacks a Computer Use-accessible live simulator surface.
+
+## Phase 2 complete (2026-07-13)
+
+Phase 2 is marked complete in `docs/NOTES_PLAN.md`, and the phase-boundary
+coverage in `docs/testing/USER_FACING_TESTS.md` is updated.
+
+Final fixes driven by live macOS Computer Use:
+
+- `NotesFeatureModel.createNote()` now exposes configured-vault creation
+  failures through a dismissible list error instead of the onboarding-only
+  configuration error channel.
+- `NoteEditorController.keepMine()` reuses an already-completed autosave's
+  conflict copy when it contains the same buffer, preventing a second
+  identical copy.
+- `NotesVault` builds mutation URLs from its already-standardized root path,
+  fixing valid new-note creation when an external folder arrives as
+  `/private/tmp/...` while Foundation standardizes the root to `/tmp/...`.
+
+Regression coverage was added to `NotesFeatureModelTests`,
+`NoteEditorControllerTests`, and `NotesVaultTests`. The focused suites and the
+full macOS test suite pass. Unsigned macOS and iPhone 17 Simulator builds pass;
+the ad hoc signed macOS artifact also builds and launches.
+
+The final `gpt-5.6-terra` high review found two small follow-ups, both resolved:
+`lastListError` is now cleared by the vault teardown/switch/reset lifecycle,
+and the alternate-lexical-root regression coverage now exercises the conflict
+copy path as well as new-file creation. Their focused suites, the full macOS
+suite, and both platform builds pass after the fixes. Targeted Terra re-review:
+**No findings.**
+
+The final macOS Computer Use pass used a disposable external vault and passed:
+New Note created and selected exactly one file, raw Markdown persisted, Read
+and Edit switched in both directions with coherent rendering, and Keep Mine
+created exactly one local-buffer conflict copy while the original retained the
+external version. No actionable macOS UI findings remain.
+
+The separate iOS pass booted a disposable iPhone 17 simulator, installed and
+launched SwiftClaw, and captured a fresh 1206x2622 screenshot. Visual inspection
+showed a coherent, legible phone layout with no obvious clipping or overlap.
+Interactive iOS coverage remains host-blocked rather than failed: Xcode denied
+Computer Use access, this Xcode installation has no standalone `Simulator.app`,
+and Preview also denied Computer Use access. Navigation and Notes interaction
+were therefore not claimed. The iOS simulator build and launch both succeeded.

@@ -5,6 +5,7 @@ struct NotesView: View {
     @AppStorage(SettingsKeys.notesHasCompletedOnboarding) private var hasCompletedOnboarding = false
     @State private var isShowingOnboarding = false
     @State private var searchText = ""
+    @State private var isReadingMode = false
 
     private var filteredNotes: [NoteSummary] {
         guard !searchText.isEmpty else { return model.notes }
@@ -78,6 +79,17 @@ struct NotesView: View {
             #endif
         }
         .toolbar {
+            if model.selectedPath != nil {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        isReadingMode.toggle()
+                    } label: {
+                        Label(isReadingMode ? "Edit" : "Read", systemImage: isReadingMode ? "pencil" : "book")
+                    }
+                    .keyboardShortcut("e", modifiers: .command)
+                    .accessibilityLabel(isReadingMode ? "Switch to Edit mode" : "Switch to Reading mode")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     Task { await model.createNote() }
@@ -91,39 +103,65 @@ struct NotesView: View {
 
     @ViewBuilder
     private var listColumn: some View {
-        Group {
-            if let repository = model.repository, repository.isLoading, repository.notes.isEmpty {
-                ProgressView("Loading notes…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let repository = model.repository,
-                       model.notes.isEmpty,
-                      let error = repository.lastError {
-                errorListState(error)
-            } else if filteredNotes.isEmpty {
-                emptyListState
-            } else {
-                List(
-                    filteredNotes,
-                    selection: Binding(
-                        get: { model.selectedPath },
-                        set: { newValue in Task { await model.select(path: newValue) } }
-                    )
-                ) { note in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(note.title)
-                            .font(.body)
-                        Text(note.relativePath)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+        VStack(spacing: 0) {
+            if let error = model.lastListError {
+                listErrorBanner(error)
+            }
+            Group {
+                if let repository = model.repository, repository.isLoading, repository.notes.isEmpty {
+                    ProgressView("Loading notes…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let repository = model.repository,
+                           model.notes.isEmpty,
+                          let error = repository.lastError {
+                    errorListState(error)
+                } else if filteredNotes.isEmpty {
+                    emptyListState
+                } else {
+                    List(
+                        filteredNotes,
+                        selection: Binding(
+                            get: { model.selectedPath },
+                            set: { newValue in Task { await model.select(path: newValue) } }
+                        )
+                    ) { note in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(note.title)
+                                .font(.body)
+                            Text(note.relativePath)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .tag(note.relativePath)
                     }
-                    .tag(note.relativePath)
+                    .listStyle(.sidebar)
                 }
-                .listStyle(.sidebar)
             }
         }
         .searchable(text: $searchText, prompt: "Search notes")
         .navigationTitle("Notes")
+    }
+
+    private func listErrorBanner(_ error: NotesError) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(error.errorDescription ?? "Couldn't create the note.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Button("Dismiss") {
+                model.dismissListError()
+            }
+            .buttonStyle(.plain)
+            .font(.caption)
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.18), in: .rect(cornerRadius: 8))
+        .padding(8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Couldn't create the note: \(error.errorDescription ?? "An unknown error occurred.")")
     }
 
     private var emptyListState: some View {
@@ -154,8 +192,8 @@ struct NotesView: View {
 
     @ViewBuilder
     private var detailColumn: some View {
-        if let editor = model.editor, model.selectedPath != nil {
-            NoteEditorDetailView(editor: editor)
+        if let editor = model.editor, let selectedPath = model.selectedPath {
+            NoteEditorDetailView(editor: editor, notePath: selectedPath, model: model, isReadingMode: isReadingMode)
         } else {
             FeaturePlaceholderView(
                 systemImage: "note.text",
@@ -166,15 +204,24 @@ struct NotesView: View {
     }
 }
 
-/// Interim plain-text detail editor for Phase 1 — a `TextEditor` bound
-/// straight to `NoteEditorModel`'s text. Phase 2 replaces this with an
-/// NSTextView-backed styled-source editor that owns its own text storage
-/// instead of round-tripping through a SwiftUI `Binding`.
+/// Detail column: the Phase 2 styled-source `NoteEditorView` (an
+/// `NSTextView`-backed editor that owns its own text storage) or, when
+/// `isReadingMode` is on, `NoteReadingView`'s rendered markdown. Selection
+/// switching flushes any pending edit through `NoteEditorController`
+/// regardless of which mode is showing, since the toggle is purely a view-
+/// level concern layered on top of the same controller.
 private struct NoteEditorDetailView: View {
-    let editor: NoteEditorModel
+    let editor: NoteEditorController
+    let notePath: String
+    let model: NotesFeatureModel
+    let isReadingMode: Bool
 
     var body: some View {
         VStack(spacing: 0) {
+            if let choice = editor.externalChangeChoice {
+                externalChangeChoiceBar(choice)
+            }
+
             if let banner = editor.conflictBanner {
                 conflictBanner(banner)
             }
@@ -196,16 +243,11 @@ private struct NoteEditorDetailView: View {
                     title: "Couldn't Load Note",
                     message: loadError.errorDescription ?? "An unknown error occurred."
                 )
+            } else if isReadingMode {
+                NoteReadingView(content: editor.currentText, notePath: notePath, model: model)
             } else {
-                TextEditor(text: Binding(
-                    get: { editor.editedText },
-                    set: { editor.textDidChange($0) }
-                ))
-                .font(.system(.body, design: .monospaced))
-                .scrollContentBackground(.hidden)
-                .padding(8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .accessibilityLabel("Note content")
+                NoteEditorView(controller: editor)
+                    .accessibilityLabel("Note content, edit mode")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -214,7 +256,45 @@ private struct NoteEditorDetailView: View {
         .onDisappear { Task { await editor.flushPendingSave() } }
     }
 
-    private func conflictBanner(_ banner: NoteEditorModel.ConflictBanner) -> some View {
+    private func externalChangeChoiceBar(_ choice: NoteEditorController.ExternalChangeChoice) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("This note changed outside SwiftClaw")
+                    .font(.subheadline.weight(.semibold))
+                Text("You have unsaved edits here. Keep yours (saved as a separate copy) or take the version on disk.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if editor.isResolvingExternalChange {
+                ProgressView("Resolving…")
+                    .controlSize(.small)
+                    .font(.caption)
+                    .accessibilityLabel("Resolving external change")
+            }
+            Button("Keep Mine") {
+                Task { await editor.keepMine() }
+            }
+            .buttonStyle(.bordered)
+            .font(.caption)
+            .disabled(editor.isResolvingExternalChange)
+            Button("Take Theirs") {
+                Task { await editor.takeTheirs() }
+            }
+            .buttonStyle(.bordered)
+            .font(.caption)
+            .disabled(editor.isResolvingExternalChange)
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.18), in: .rect(cornerRadius: 8))
+        .padding(8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("This note changed outside SwiftClaw. Choose Keep Mine to save your edits as a separate copy, or Take Theirs to discard them and reload the version on disk.\(editor.isResolvingExternalChange ? " Resolving." : "")")
+    }
+
+    private func conflictBanner(_ banner: NoteEditorController.ConflictBanner) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
@@ -239,7 +319,7 @@ private struct NoteEditorDetailView: View {
         .accessibilityLabel("Conflict: this note changed outside SwiftClaw. Your edits were saved separately as \(banner.copyPath).")
     }
 
-    private func externalRemovalBanner(_ banner: NoteEditorModel.ExternalRemovalBanner) -> some View {
+    private func externalRemovalBanner(_ banner: NoteEditorController.ExternalRemovalBanner) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: "trash")
                 .foregroundStyle(.orange)

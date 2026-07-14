@@ -17,6 +17,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/MacPaw/OpenAI.git", branch: "main"),
         .package(url: "https://github.com/Cocoanetics/SwiftMail", revision: "3bfb4a3a2a9677c6090221f622c537870ee78960"),
+        .package(url: "https://github.com/apple/swift-markdown.git", branch: "main"),
     ],
     targets: [
         .executableTarget(
@@ -24,6 +25,7 @@ let package = Package(
             dependencies: [
                 .product(name: "OpenAI", package: "OpenAI"),
                 .product(name: "SwiftMail", package: "SwiftMail"),
+                .product(name: "Markdown", package: "swift-markdown"),
             ],
             path: "SwiftClaw",
             resources: [

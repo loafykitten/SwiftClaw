@@ -212,6 +212,72 @@ struct NotesVaultTests {
         }
     }
 
+    @Test func createSucceedsWhenRootIsGivenInAnAlternateLexicalForm() async throws {
+        // `/tmp` is itself a symlink to `/private/tmp` on macOS, and
+        // Foundation's `standardizedFileURL` only strips the "/private"
+        // prefix consistently when applied to the root path alone — not when
+        // re-applied after appending a not-yet-existing filename. This
+        // reproduces an externally-selected vault root arriving in the
+        // "/private/tmp/..." lexical form (e.g. via NSOpenPanel) rather than
+        // the shortened "/tmp/..." form.
+        let uuid = UUID().uuidString
+        let canonicalRoot = URL(fileURLWithPath: "/tmp/SwiftClawVaultTests-\(uuid)")
+        try FileManager.default.createDirectory(at: canonicalRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: canonicalRoot) }
+
+        let alternateRoot = URL(fileURLWithPath: "/private/tmp/SwiftClawVaultTests-\(uuid)")
+        let vault = NotesVault(root: alternateRoot)
+
+        let outcome = try await vault.write(relativePath: "Untitled.md", content: "new note", expectedHash: nil)
+        guard case .wrote(let snapshot) = outcome else {
+            Issue.record("expected a successful create through an alternate-lexical-form root")
+            return
+        }
+        #expect(snapshot.relativePath == "Untitled.md")
+        #expect(FileManager.default.fileExists(atPath: canonicalRoot.appendingPathComponent("Untitled.md").path))
+    }
+
+    @Test func hashMismatchThroughAnAlternateLexicalFormRootWritesAConflictCopyWithACorrectRelativePath() async throws {
+        // Same "/private/tmp" vs "/tmp" lexical-form root as
+        // `createSucceedsWhenRootIsGivenInAnAlternateLexicalForm`, but forcing
+        // the conflict branch: `computeRelativePath` is only exercised for a
+        // `.wrote` outcome there, never for the `makeConflictURL` path this
+        // covers.
+        let uuid = UUID().uuidString
+        let canonicalRoot = URL(fileURLWithPath: "/tmp/SwiftClawVaultTests-\(uuid)")
+        try FileManager.default.createDirectory(at: canonicalRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: canonicalRoot) }
+
+        let alternateRoot = URL(fileURLWithPath: "/private/tmp/SwiftClawVaultTests-\(uuid)")
+        let vault = NotesVault(root: alternateRoot)
+
+        let original = try await vault.write(relativePath: "note.md", content: "original", expectedHash: nil)
+        guard case .wrote(let originalSnapshot) = original else {
+            Issue.record("expected a successful create through an alternate-lexical-form root")
+            return
+        }
+
+        // Simulate an external editor changing the file after our last read.
+        try Data("changed externally".utf8).write(to: canonicalRoot.appendingPathComponent("note.md"))
+
+        let outcome = try await vault.write(
+            relativePath: "note.md",
+            content: "our stale edit",
+            expectedHash: originalSnapshot.sha256
+        )
+        guard case .conflict(let conflictSnapshot) = outcome else {
+            Issue.record("expected a conflict through an alternate-lexical-form root")
+            return
+        }
+        #expect(conflictSnapshot.relativePath.contains("conflict"))
+        #expect(conflictSnapshot.relativePath != "note.md")
+        #expect(FileManager.default.fileExists(atPath: canonicalRoot.appendingPathComponent(conflictSnapshot.relativePath).path))
+        #expect(conflictSnapshot.content == "our stale edit")
+
+        let originalOnDisk = try String(contentsOf: canonicalRoot.appendingPathComponent("note.md"), encoding: .utf8)
+        #expect(originalOnDisk == "changed externally")
+    }
+
     @Test func deleteMovesTheFileOutOfTheVault() async throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

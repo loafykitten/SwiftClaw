@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		3731CD0D2FDBE3D90052AE22 /* OpenAI in Frameworks */ = {isa = PBXBuildFile; productRef = 3731CD0C2FDBE3D90052AE22 /* OpenAI */; };
 		3731CD0E2FDBE3D90052AE22 /* SwiftMail in Frameworks */ = {isa = PBXBuildFile; productRef = 3731CD0F2FDBE3D90052AE22 /* SwiftMail */; };
+		3731CD122FDBE3D90052AE22 /* Markdown in Frameworks */ = {isa = PBXBuildFile; productRef = 3731CD112FDBE3D90052AE22 /* Markdown */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -46,6 +47,7 @@
 			files = (
 				3731CD0D2FDBE3D90052AE22 /* OpenAI in Frameworks */,
 				3731CD0E2FDBE3D90052AE22 /* SwiftMail in Frameworks */,
+				3731CD122FDBE3D90052AE22 /* Markdown in Frameworks */,
 			);
 		};
 		D0000000000000000000A004 /* Frameworks */ = {
@@ -95,6 +97,7 @@
 			packageProductDependencies = (
 				3731CD0C2FDBE3D90052AE22 /* OpenAI */,
 				3731CD0F2FDBE3D90052AE22 /* SwiftMail */,
+				3731CD112FDBE3D90052AE22 /* Markdown */,
 			);
 			productName = SwiftClaw;
 			productReference = 3731CCFA2FDBDB110052AE22 /* SwiftClaw.app */;
@@ -152,6 +155,7 @@
 			packageReferences = (
 				3731CD0B2FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "OpenAI" */,
 				3731CD102FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "SwiftMail" */,
+				3731CD132FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "swift-markdown" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3731CCFB2FDBDB110052AE22 /* Products */;
@@ -499,6 +503,14 @@
 				revision = 3bfb4a3a2a9677c6090221f622c537870ee78960;
 			};
 		};
+		3731CD132FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "swift-markdown" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-markdown.git";
+			requirement = {
+				branch = main;
+				kind = branch;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -511,6 +523,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 3731CD102FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "SwiftMail" */;
 			productName = SwiftMail;
+		};
+		3731CD112FDBE3D90052AE22 /* Markdown */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 3731CD132FDBE3D90052AE22 /* XCRemoteSwiftPackageReference "swift-markdown" */;
+			productName = Markdown;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

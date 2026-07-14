@@ -7,7 +7,7 @@ import AppKit
 /// The Notes feature coordinator: owns vault configuration/onboarding state,
 /// wires `NotesVault`/`NotesRepository`/`VaultReconciler`/
 /// `FSEventStreamMonitor` together for whichever `VaultLocation` is
-/// configured, and exposes the single `NoteEditorModel` for the current
+/// configured, and exposes the single `NoteEditorController` for the current
 /// selection. `NotesView` and `NotesSettingsView` both consume the shared
 /// `NotesFeatureModel.shared` instance (per `MailSyncMonitor.shared` /
 /// `EmailManualSyncCoordinator.shared`) so there is exactly one vault
@@ -39,13 +39,20 @@ final class NotesFeatureModel {
 
     private(set) var configurationState: ConfigurationState = .unknown
     private(set) var repository: NotesRepository?
-    private(set) var editor: NoteEditorModel?
+    private(set) var editor: NoteEditorController?
     private(set) var selectedPath: String?
     /// The observation-safe catalog consumed by Notes UI. `NotesRepository`
     /// is intentionally not observable, so external reconcile changes must be
     /// copied here to refresh the list and settings stats.
     private(set) var notes: [NoteSummary] = []
     private(set) var lastConfigurationError: NotesError?
+    /// Distinct from `lastConfigurationError` (vault setup/onboarding
+    /// failures, surfaced only outside `.configured` — see
+    /// `NotesSettingsView`/`needsOnboardingView`): this covers catalog
+    /// mutations like `createNote()` that can fail once a vault is already
+    /// configured, so the `.configured` UI has somewhere to actually show
+    /// them instead of failing silently.
+    private(set) var lastListError: NotesError?
 
     let configurationStore: VaultConfigurationStore
     private let bookmarkStore: SecurityScopedBookmarkStore
@@ -264,7 +271,7 @@ final class NotesFeatureModel {
         self.vault = vault
         self.repository = repository
         self.notes = repository.notes
-        self.editor = NoteEditorModel(repository: repository)
+        self.editor = NoteEditorController(repository: repository)
         self.reconciler = reconciler
         self.currentLocation = location
         self.currentRootURL = root
@@ -355,6 +362,9 @@ final class NotesFeatureModel {
         currentLocation = nil
         currentRootURL = nil
         selectedPath = nil
+        // A stale create-note failure from the previous vault must not leak
+        // into whatever vault (or onboarding state) comes next.
+        lastListError = nil
     }
 
     // MARK: - Reconciliation
@@ -403,14 +413,20 @@ final class NotesFeatureModel {
 
     func createNote() async {
         guard let repository else { return }
+        lastListError = nil
         do {
             let folder = SettingsStorage.loadNotesDefaultNewNoteFolder(userDefaults: userDefaults)
             let summary = try await repository.create(title: "Untitled", folder: folder)
             notes = repository.notes
             await select(path: summary.relativePath)
         } catch {
-            lastConfigurationError = NotesError.from(error)
+            lastListError = NotesError.from(error)
         }
+    }
+
+    /// Dismisses a create-note (or other catalog-mutation) failure banner.
+    func dismissListError() {
+        lastListError = nil
     }
 
     // MARK: - Settings actions

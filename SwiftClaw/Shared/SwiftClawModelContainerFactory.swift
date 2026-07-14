@@ -100,13 +100,22 @@ enum SwiftClawModelContainerFactory {
     /// False on personal development teams (they can't carry iCloud
     /// entitlements at all — see SwiftClaw.entitlements for the re-enable
     /// recipe on a paid team).
+    ///
+    /// `SecTaskCreateFromSelf`/`SecTaskCopyValueForEntitlement` aren't in the
+    /// iOS SDK, so iOS can't prove the entitlement here; it conservatively
+    /// reports false and falls through to the local-only store, same as an
+    /// unprovisioned macOS process.
     private static var hasCloudKitEntitlement: Bool {
+        #if os(macOS)
         guard let task = SecTaskCreateFromSelf(nil) else { return false }
         return SecTaskCopyValueForEntitlement(
             task,
             "com.apple.developer.icloud-services" as CFString,
             nil
         ) != nil
+        #else
+        return false
+        #endif
     }
 
     private static func seedIfRequested(into container: ModelContainer) {

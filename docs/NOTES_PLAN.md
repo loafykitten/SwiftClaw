@@ -123,6 +123,8 @@ real-FSEvents integration test (eventual delta, tolerant of coalescing).
 
 ## Phase 2 — Markdown engine, styled-source editor, reading mode
 
+**Status: Complete (2026-07-13).**
+
 - `Package.swift` + `apple/swift-markdown`.
 - `SwiftClaw/Services/Markdown/` (shared, not Notes-internal — cross-feature
   #3): `MarkdownDocument.swift` (parse + SourceRanges + heading outline +

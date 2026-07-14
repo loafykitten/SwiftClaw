@@ -104,6 +104,23 @@ actor NotesVault {
         }
     }
 
+    /// Reads the raw bytes at `relativePath`, with no UTF-8 decoding — for
+    /// binary assets referenced by a note (e.g. an embedded image), which
+    /// `read(relativePath:)` can't return since it requires valid UTF-8 text.
+    /// Uses the same path-safety resolution as every other vault access, so
+    /// this is never a route around `resolveExistingURL`'s traversal/symlink
+    /// checks.
+    func readData(relativePath: String) async throws -> Data {
+        try await withScope {
+            let url = try resolveExistingURL(for: relativePath)
+            do {
+                return try Data(contentsOf: url)
+            } catch {
+                throw VaultError.ioFailure(relativePath)
+            }
+        }
+    }
+
     /// Whether a file already exists at `relativePath`, without reading it.
     /// Lets callers (e.g. `NotesRepository.create`) probe for filename
     /// collisions before attempting a write, so a foreseeable collision never
@@ -216,7 +233,16 @@ actor NotesVault {
             throw VaultError.invalidRelativePath(relativePath)
         }
 
-        let candidate = root.appendingPathComponent(relativePath, isDirectory: false).standardizedFileURL
+        // Built by concatenating onto `standardizedRootPath` directly rather than
+        // re-running `.standardizedFileURL` on the joined path: Foundation's
+        // /private<->/tmp (and /var, /etc) symlink shortcut is only applied
+        // consistently to the root by itself — re-standardizing the full
+        // appended path can silently produce a different lexical form (e.g.
+        // reintroducing the "/private" prefix `standardizedRootPath` already
+        // had stripped), which then fails the prefix check below for a
+        // perfectly valid new path. Components are already validated above to
+        // exclude "", ".", and "..", so plain concatenation can't escape root.
+        let candidate = URL(fileURLWithPath: standardizedRootPath + components.joined(separator: "/"))
         guard candidate.path.hasPrefix(standardizedRootPath) else {
             throw VaultError.invalidRelativePath(relativePath)
         }
@@ -277,11 +303,16 @@ actor NotesVault {
     }
 
     private func computeRelativePath(for url: URL) throws -> String {
-        let standardized = url.standardizedFileURL.path
-        guard standardized.hasPrefix(standardizedRootPath) else {
+        // `url` here is always already built off `standardizedRootPath` (via
+        // `resolveURL`/`resolveMutationURL` or a plain `appendingPathComponent`
+        // on such a URL in `makeConflictURL`), so re-running
+        // `.standardizedFileURL` would risk the same /private<->/tmp lexical
+        // drift that `resolveURL` avoids by concatenating directly.
+        let path = url.path
+        guard path.hasPrefix(standardizedRootPath) else {
             throw VaultError.invalidRelativePath(url.path)
         }
-        return String(standardized.dropFirst(standardizedRootPath.count))
+        return String(path.dropFirst(standardizedRootPath.count))
     }
 
     // MARK: - Enumeration

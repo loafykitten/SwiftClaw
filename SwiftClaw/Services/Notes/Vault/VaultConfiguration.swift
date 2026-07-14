@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Where the Notes vault lives on disk. `appManaged` is a folder this app
 /// owns (App Support, or the iCloud ubiquity container when entitled — see
@@ -106,12 +107,19 @@ final class VaultConfigurationStore {
         return base.appendingPathComponent("SwiftClaw", isDirectory: true)
     }
 
+    /// `SecTaskCreateFromSelf`/`SecTaskCopyValueForEntitlement` aren't in the
+    /// iOS SDK, so iOS can't prove the entitlement here; it conservatively
+    /// reports false, same as an unprovisioned macOS process.
     nonisolated static func defaultHasUbiquityEntitlement() -> Bool {
+        #if os(macOS)
         guard let task = SecTaskCreateFromSelf(nil) else { return false }
         return SecTaskCopyValueForEntitlement(
             task,
             "com.apple.developer.icloud-services" as CFString,
             nil
         ) != nil
+        #else
+        return false
+        #endif
     }
 }

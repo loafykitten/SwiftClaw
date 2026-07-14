@@ -205,10 +205,12 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   notes from another editor. SwiftClaw must reconcile the visible catalog while
   leaving dotfiles, `.obsidian/`, non-Markdown files, and symlinks untouched.
 - **H-NOTE-002 — Concurrent-edit safety.** Edit the same note in SwiftClaw and an
-  external editor. Saving must preserve the external version and create a clearly
-  surfaced conflict copy containing the SwiftClaw edits. If the file is deleted
-  externally while SwiftClaw has unsaved text, that text must remain visible and
-  the deleted path must not be silently recreated.
+  external editor. The non-modal choice must explain Keep Mine and Take Theirs.
+  Keep Mine must preserve the external version and create exactly one clearly
+  surfaced conflict copy containing the SwiftClaw edits; Take Theirs must discard
+  the local buffer without creating a copy. If the file is deleted externally
+  while SwiftClaw has unsaved text, that text must remain visible and the deleted
+  path must not be silently recreated.
 - **H-NOTE-003 — External-vault permission recovery.** Disconnect or revoke access
   while a note has unsaved edits, then restore access. The editor must keep the
   text readable and selected, explain the save failure, and save successfully on
@@ -547,7 +549,9 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
 - **CU-NOTE-002 — Create, edit, autosave, and search.** Create several notes,
   type distinctive content, wait for idle autosave, switch selections, relaunch,
   and confirm content persists. New filenames must be safe and unique; title
-  search and empty states must track the visible list.
+  search and empty states must track the visible list. Creation through equivalent
+  `/tmp` and `/private/tmp` external-vault paths must work; a real creation failure
+  must show a dismissible error instead of silently doing nothing.
 - **CU-NOTE-003 — External catalog refresh.** With a prepared disposable vault,
   add, rename, modify, and remove selected and non-selected Markdown files outside
   SwiftClaw. The list and Settings note count must refresh; clean selected files
@@ -556,12 +560,25 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   and a recoverable write failure with safe fixtures. Conflict-copy and save-error
   banners must be readable and accessible, failed selection changes must keep the
   original dirty note open, and editable text must never be replaced by an error
-  placeholder.
+  placeholder. Exercise both Keep Mine and Take Theirs; Keep Mine must create
+  exactly one copy of the current local buffer even when autosave completes before
+  reconciliation notices the external change.
 - **CU-NOTE-005 — Editor layout and resizing.** At minimum and common window
   sizes, resize the Notes list/detail split and inspect screenshots as well as
   accessibility state. The selected note text must keep normal leading padding;
   the list, editor, New Note, and Search notes must remain visible without
   clipping or overlap.
+- **CU-NOTE-006 — Styled-source losslessness.** Type and edit headings, emphasis,
+  lists with a non-1 start, links, wikilinks, fenced code, callouts, tables, front
+  matter, and image syntax. Source styling must never alter characters; switching
+  notes, relaunching, and returning from Read must preserve the exact Markdown.
+  Removing an opening or closing fence marker must immediately clear stale code
+  styling from every affected line.
+- **CU-NOTE-007 — Reading mode.** Use Edit/Read and Command-E. Reading mode must
+  hide front matter and coherently render headings, emphasis, lists, tables,
+  fenced code, callouts, wikilinks, and relative images. Two notes that reference
+  different same-named images must not reuse stale image content, and returning
+  to Edit must restore the complete source.
 
 ### Settings Window
 
@@ -632,3 +649,6 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
 - **2026-07-13 — Notes Phase 1.** Replaced placeholder coverage with the vault
   onboarding, plain-editor autosave, external reconciliation, conflict safety,
   permission recovery, and Settings behavior delivered by the vault foundation.
+- **2026-07-13 — Notes Phase 2.** Added styled-source losslessness, reading-mode
+  rendering, Edit/Read switching, relative-image identity, explicit external-change
+  choices, single-copy Keep Mine behavior, and visible create-failure coverage.

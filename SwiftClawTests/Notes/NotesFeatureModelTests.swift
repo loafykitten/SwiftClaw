@@ -154,6 +154,68 @@ struct NotesFeatureModelTests {
         #expect(entries.contains { $0.hasSuffix(".md") })
     }
 
+    @Test func createNoteFailureSurfacesAsAListErrorRatherThanSilently() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let model = try makeModel(defaults: fixture.defaults)
+
+        await model.chooseAppManagedVault()
+        let resolvedPath = try #require(model.stats.resolvedPath)
+        // Make the vault root unwritable so every create attempt fails —
+        // `lastConfigurationError` (vault setup) must stay untouched, and the
+        // failure must land somewhere the `.configured` UI actually shows it.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: resolvedPath)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: resolvedPath) }
+
+        await model.createNote()
+
+        #expect(model.notes.isEmpty)
+        #expect(model.lastListError != nil)
+        #expect(model.lastConfigurationError == nil)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: resolvedPath)
+        await model.createNote()
+
+        #expect(model.notes.count == 1)
+        #expect(model.lastListError == nil)
+    }
+
+    @Test func switchingVaultsClearsAStaleListErrorFromThePreviousVault() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let model = try makeModel(defaults: fixture.defaults)
+        let externalFolder = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: externalFolder) }
+
+        await model.chooseAppManagedVault()
+        let resolvedPath = try #require(model.stats.resolvedPath)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: resolvedPath)
+        await model.createNote()
+        #expect(model.lastListError != nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: resolvedPath)
+
+        await model.chooseExternalVault(url: externalFolder)
+
+        #expect(model.lastListError == nil)
+    }
+
+    @Test func resettingVaultConfigurationClearsAStaleListError() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let model = try makeModel(defaults: fixture.defaults)
+
+        await model.chooseAppManagedVault()
+        let resolvedPath = try #require(model.stats.resolvedPath)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: resolvedPath)
+        await model.createNote()
+        #expect(model.lastListError != nil)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: resolvedPath)
+
+        await model.resetVaultConfiguration()
+
+        #expect(model.lastListError == nil)
+    }
+
     @Test func staleReconcilerDeltaCannotMutateANewVaultRepository() async throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }
@@ -202,7 +264,7 @@ struct NotesFeatureModelTests {
         let path = try #require(model.selectedPath)
 
         #expect(model.editor?.selectedPath == path)
-        #expect(model.editor?.editedText == "")
+        #expect(model.editor?.currentText == "")
     }
 
     @Test func externallyRemovedSelectedNoteRetainsDirtyEditsWithoutRecreatingIt() async throws {
@@ -221,7 +283,7 @@ struct NotesFeatureModelTests {
 
         #expect(model.selectedPath == selectedPath)
         #expect(model.editor?.selectedPath == selectedPath)
-        #expect(model.editor?.editedText == "unsaved edit")
+        #expect(model.editor?.currentText == "unsaved edit")
         #expect(model.editor?.isDirty == true)
         #expect(model.editor?.externalRemovalBanner?.formerPath == selectedPath)
         #expect(!(await model.editor?.flushPendingSave() ?? true))
@@ -245,7 +307,7 @@ struct NotesFeatureModelTests {
 
         #expect(model.selectedPath == nil)
         #expect(model.editor?.selectedPath == nil)
-        #expect(model.editor?.editedText == "")
+        #expect(model.editor?.currentText == "")
         #expect(model.repository?.summary(forRelativePath: selectedPath) == nil)
         #expect(!FileManager.default.fileExists(atPath: vaultRoot.appendingPathComponent(selectedPath).path))
     }
