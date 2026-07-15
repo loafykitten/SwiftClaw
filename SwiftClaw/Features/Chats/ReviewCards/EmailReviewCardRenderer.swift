@@ -342,7 +342,11 @@ private struct EmailReviewCardRow: View {
             viewEmail()
         }
         .contextMenu {
-            ForEach(ReviewActionToken.allCases.filter { $0 != .reply }) { action in
+            // Explicit allow-list (not `allCases.filter`) so a future
+            // ReviewActionToken case — like `.approve`/`.reject`, which are
+            // note-proposal-only — doesn't silently show up in the email
+            // context menu.
+            ForEach(ReviewActionToken.allCases.filter { [.review, .flag, .archive, .delete].contains($0) }) { action in
                 Button(action.displayName) {
                     selectAction(action)
                 }

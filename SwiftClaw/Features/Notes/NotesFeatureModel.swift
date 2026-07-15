@@ -83,6 +83,10 @@ final class NotesFeatureModel {
     private var indexer: NotesIndexer?
     private var reconciler: VaultReconciler?
     private var searchTask: Task<Void, Never>?
+    /// Gates `NoteProposalDispatcher` approvals against a vault teardown/
+    /// switch beginning mid-approval — see `acquireVaultOperationLease` and
+    /// `teardownCurrentVault`.
+    private let vaultOperationLeases: VaultOperationLeaseCoordinator
     #if os(macOS)
     private var monitor: FSEventStreamMonitor?
     #endif
@@ -131,12 +135,14 @@ final class NotesFeatureModel {
         configurationStore: VaultConfigurationStore? = nil,
         bookmarkStore: SecurityScopedBookmarkStore? = nil,
         userDefaults: UserDefaults = .standard,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        vaultOperationLeases: VaultOperationLeaseCoordinator? = nil
     ) {
         self.configurationStore = configurationStore ?? VaultConfigurationStore()
         self.bookmarkStore = bookmarkStore ?? SecurityScopedBookmarkStore()
         self.userDefaults = userDefaults
         self.fileManager = fileManager
+        self.vaultOperationLeases = vaultOperationLeases ?? VaultOperationLeaseCoordinator()
     }
 
     deinit {
@@ -291,10 +297,15 @@ final class NotesFeatureModel {
     /// next onboarding pass (or picking the same folder again) starts clean.
     func resetVaultConfiguration() async {
         let persistedLocation = SettingsStorage.loadNotesVaultLocation(userDefaults: userDefaults)
-        if let key = bookmarkKey(for: currentLocation ?? persistedLocation) {
-            bookmarkStore.remove(forKey: key)
-        }
+        let bookmarkToRemove = bookmarkKey(for: currentLocation ?? persistedLocation)
         await teardownCurrentVault()
+        // An approval that acquired a lease can resolve this bookmark for each
+        // vault operation. Keep it available until teardown has drained that
+        // approval and cleared the old vault; removing it earlier can revoke
+        // security-scoped access while the approval is still mid-operation.
+        if let bookmarkToRemove {
+            bookmarkStore.remove(forKey: bookmarkToRemove)
+        }
         // Reset is a logical vault switch even though it leaves the note
         // files alone. Do not let a later setup reuse revisions or index
         // state belonging to the disconnected vault.
@@ -561,7 +572,33 @@ final class NotesFeatureModel {
         #endif
     }
 
+    /// Acquires a lease for one in-flight `NoteProposalDispatcher` approval
+    /// file operation against the vault identified by `expectedVaultID`.
+    /// `nil` when that vault isn't the currently configured one, no vault is
+    /// configured at all, or a teardown/switch is already underway — the
+    /// caller must treat that exactly like "this vault is unavailable" (mark
+    /// the proposal `.expired`), never retry-until-success. A held lease
+    /// blocks `teardownCurrentVault()` from clearing/switching state until
+    /// the caller releases it — see `VaultOperationLeaseCoordinator`.
+    func acquireVaultOperationLease(expectedVaultID: String) -> VaultOperationLeaseCoordinator.Lease? {
+        guard SettingsStorage.isNotesEnabled(userDefaults: userDefaults),
+              configurationState == .configured,
+              repository != nil,
+              configurationStore.vaultID == expectedVaultID
+        else { return nil }
+        return vaultOperationLeases.acquireLease()
+    }
+
     private func teardownCurrentVault() async {
+        // Marks teardown as beginning (blocking new
+        // `acquireVaultOperationLease` calls) and waits for any in-flight
+        // approval that already holds a lease to finish, *before* any of the
+        // state below is cleared — otherwise a settings switch could begin
+        // tearing down `vault`/`repository` while a suspended approval file
+        // operation is still using them.
+        let teardown = await vaultOperationLeases.beginTeardownAndWaitForDrain()
+        defer { vaultOperationLeases.endTeardown(teardown) }
+
         configurationGeneration &+= 1
         // Cancel (rather than merely orphan) any in-flight settings bootstrap
         // — without this, a bootstrap that's already past the

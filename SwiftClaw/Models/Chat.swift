@@ -77,14 +77,16 @@ final class Chat {
     func appendMessage(
         role: ChatMessageRole,
         content: String,
-        imageAttachments: [ImageAttachmentRecord] = []
+        imageAttachments: [ImageAttachmentRecord] = [],
+        reviewCard: ReviewCardPayload? = nil
     ) {
         let nextIndex = (messages.map(\.sortIndex).max() ?? -1) + 1
         let message = ChatMessage(
             role: role,
             content: content,
             sortIndex: nextIndex,
-            imageAttachments: imageAttachments
+            imageAttachments: imageAttachments,
+            reviewCard: reviewCard
         )
         message.chat = self
         messages.append(message)

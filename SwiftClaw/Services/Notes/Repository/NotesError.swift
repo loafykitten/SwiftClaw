@@ -15,6 +15,13 @@ enum NotesError: LocalizedError, Equatable {
     /// `create` exhausted its deterministic suffix search without landing on
     /// a filename nothing else claimed.
     case createFailed(title: String)
+    /// `createExactPath` lost the exact-path collision race: something
+    /// already exists at that path. Nothing was written — no overwrite, no
+    /// conflict-copy sibling — see `NotesVault.createExclusive`.
+    case pathAlreadyExists(String)
+    /// An exact-path create was asked to target a path the vault would not
+    /// expose as a Markdown note (for example a hidden or non-Markdown path).
+    case invalidNotePath(String)
     /// Wraps an error from `NotesVault`/`NoteRevisionStore` (or anything
     /// else) that doesn't need its own case — its message is reused as-is.
     case underlying(String)
@@ -29,6 +36,10 @@ enum NotesError: LocalizedError, Equatable {
                 : "\(count) notes couldn't be read and were skipped."
         case .createFailed(let title):
             "Couldn't create a new note for \"\(title)\" — no available filename was found."
+        case .pathAlreadyExists(let path):
+            "\"\(path)\" already exists."
+        case .invalidNotePath(let path):
+            "\"\(path)\" isn't a visible Markdown note path."
         case .underlying(let message):
             message
         }

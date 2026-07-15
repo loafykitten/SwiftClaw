@@ -233,6 +233,12 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   use Search Notes and Read Note as needed, cite the correct relative note and
   heading, preserve verbatim content when requested, and clearly disclose any
   truncation. Disable Notes and confirm neither tool remains available to chat.
+- **H-NOTE-009 — AI note proposal quality and safety.** With a disposable vault
+  and configured model, ask for a note edit and a new note. The assistant should
+  summarize the intended change clearly and produce a focused proposal instead
+  of changing files immediately. Approve one proposal, reject another, and alter
+  a target externally before approval; only the approved unchanged target may be
+  written, while the stale proposal must explain that it was not applied.
 
 ### Settings
 
@@ -614,6 +620,17 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   both badges immediately become Needs setup; re-enable Notes and confirm both
   immediately return to Ready. Inspect screenshots and accessibility state on
   both macOS and iOS for all three states.
+- **CU-NOTE-012 — Note proposal diff cards.** In a disposable vault and chat,
+  create edit and create proposals without changing either target first. Each
+  card must show its kind, path, summary, accessible added/removed lines, and a
+  working Show/Hide changes control without clipping. Reject one and approve the
+  other; terminal status must replace the action buttons, rejection must leave
+  files untouched, and approval must apply exactly once. Change an edit target
+  before approval and confirm the card becomes conflicted without overwriting it.
+  Repeat after switching or disconnecting the vault and confirm the old proposal
+  cannot write into the new or unavailable vault. On Xcode 27+, iOS testers must
+  use Device Hub (`com.apple.dt.Devices`/`DeviceHub.app`); a missing standalone
+  `Simulator.app` is expected and is not a blocker.
 
 ### Settings Window
 
@@ -695,3 +712,9 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   tools, cited and length-capped output, registry/configuration gating, and live
   Tools readiness updates. Disposable macOS and iOS Computer Use passes verified
   the Ready, disabled, and re-enabled states without per-tool switches.
+- **2026-07-14 — Notes Phase 5 implementation.** Added persistent create/edit
+  proposals, accessible diff cards, explicit approval/rejection, approve-time
+  hash and vault-identity guards, exact-path create safety, and terminal outcome
+  coverage. Isolated macOS and iPhone 17 / iOS 27.0 Device Hub passes verified
+  Show/Hide changes plus applied, rejected, conflicted, created, and expired
+  outcomes without touching a real vault.

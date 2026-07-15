@@ -4,6 +4,12 @@ nonisolated enum ReviewType: String, Codable, Sendable {
     case email
     case calendar
     case reminders
+    /// A single AI-proposed note create/edit/append/rename, gated behind
+    /// explicit approval. See `NoteEditProposal`/`NoteProposalDispatcher`.
+    case noteProposal
+    /// Reserved for a future Notes vault-hygiene digest card (broken links,
+    /// conflict copies, freshness) — not produced anywhere yet.
+    case notes
     /// Forward-compat bucket for review types this build doesn't know about.
     /// An unknown `reviewType` decodes to `.unknown` instead of throwing —
     /// that way the whole payload isn't silently dropped (`try?` returns nil)
@@ -27,6 +33,11 @@ nonisolated enum ReviewActionToken: String, Codable, Sendable, CaseIterable, Ide
     case reply
     case delete
     case archive
+    /// Generic approve/reject, shared by every proposal-style review card
+    /// (note proposals today; email drafts a documented follow-up) rather
+    /// than a domain-specific token per card type.
+    case approve
+    case reject
 
     var id: String { rawValue }
 
@@ -38,6 +49,8 @@ nonisolated enum ReviewActionToken: String, Codable, Sendable, CaseIterable, Ide
         case .reply: "Reply"
         case .delete: "Delete"
         case .archive: "Archive"
+        case .approve: "Approve"
+        case .reject: "Reject"
         }
     }
 

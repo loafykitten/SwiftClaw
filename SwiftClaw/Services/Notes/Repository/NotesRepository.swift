@@ -265,6 +265,40 @@ final class NotesRepository {
         return "\(folder)/\(name)"
     }
 
+    // MARK: - Exact-path create
+
+    /// Creates a note at exactly `relativePath` — no title-based
+    /// suffix-collision resolution (see `create(title:folder:)`) and no
+    /// silent uniquifying. Backed by `NotesVault.createExclusive`'s atomic
+    /// exclusive-create, so a path already taken throws `.pathAlreadyExists`
+    /// with **zero vault writes**: no overwrite, no "(conflict …)" sibling.
+    /// Used by `NoteProposalDispatcher`'s create-proposal approval, which
+    /// must void the proposal rather than land the content somewhere else
+    /// when the exact path collides.
+    @discardableResult
+    func createExactPath(relativePath: String, content: String) async throws -> NoteSummary {
+        guard VaultIgnoreRules.isVisibleMarkdownNotePath(relativePath) else {
+            throw NotesError.invalidNotePath(relativePath)
+        }
+
+        let outcome: NoteCreateOutcome
+        do {
+            outcome = try await vault.createExclusive(relativePath: relativePath, content: content)
+        } catch {
+            throw NotesError.from(error)
+        }
+
+        switch outcome {
+        case .created(let snapshot):
+            let summary = NoteSummary(snapshot: snapshot)
+            upsert(summary)
+            NotificationCenter.default.post(name: .notesStoreDidChange, object: nil)
+            return summary
+        case .collision:
+            throw NotesError.pathAlreadyExists(relativePath)
+        }
+    }
+
     // MARK: - Save
 
     /// Snapshots the current on-disk content (if any) before every attempted

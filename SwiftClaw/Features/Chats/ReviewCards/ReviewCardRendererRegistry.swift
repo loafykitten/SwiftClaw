@@ -46,11 +46,25 @@ struct ReviewCardRendererRegistry {
                 onItemView: onItemView,
                 onRefreshAnalysis: onRefreshAnalysis
             )
+        case .noteProposal:
+            NoteProposalCardRenderer(
+                payload: payload,
+                dispatcher: dispatcherProvider(.noteProposal) ?? AnyHashableReviewActionDispatcher(NoOpReviewActionDispatcher())
+            )
+        case .notes:
+            // Reserved for a future Notes vault-hygiene digest card — no
+            // producer exists yet, so this only ever renders for a payload a
+            // future build wrote and this build doesn't know how to show.
+            unsupportedCardMessage
         case .unknown:
-            Text("This review card is from a newer version and can't be displayed.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            unsupportedCardMessage
         }
+    }
+
+    private var unsupportedCardMessage: some View {
+        Text("This review card is from a newer version and can't be displayed.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
     }
 }
 

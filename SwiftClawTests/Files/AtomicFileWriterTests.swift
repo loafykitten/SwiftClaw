@@ -90,4 +90,36 @@ struct AtomicFileWriterTests {
         let entries = try FileManager.default.contentsOfDirectory(atPath: directory.path)
         #expect(entries == ["note.md"])
     }
+
+    // MARK: - createExclusive
+
+    @Test func createExclusivePublishesTheCompleteContentAndLeavesNoTempResidue() throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("note.md")
+
+        try AtomicFileWriter.createExclusive(Data("hello world".utf8), at: fileURL)
+
+        #expect(try Data(contentsOf: fileURL) == Data("hello world".utf8))
+        let entries = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(entries == ["note.md"])
+    }
+
+    @Test func createExclusiveCollisionWritesNothingAndLeavesNoTempResidue() throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("note.md")
+        try Data("original".utf8).write(to: fileURL)
+
+        do {
+            try AtomicFileWriter.createExclusive(Data("attempted".utf8), at: fileURL)
+            Issue.record("expected .alreadyExists")
+        } catch AtomicFileWriter.WriteError.alreadyExists {
+            // expected
+        }
+
+        #expect(try Data(contentsOf: fileURL) == Data("original".utf8))
+        let entries = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(entries == ["note.md"])
+    }
 }

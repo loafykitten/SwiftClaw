@@ -68,6 +68,9 @@ struct ContentView: View {
     /// `destination(for: .chats)` allocated a fresh `SwiftMailClient` + dispatcher
     /// on every body evaluation).
     @State private var emailDispatcherState: EmailDispatcherCache? = EmailDispatcherCache()
+    /// Lazily-constructed note-proposal dispatcher, cached the same way as
+    /// `emailDispatcherState` — see `noteProposalDispatcher(for:)`.
+    @State private var noteProposalDispatcherState: NoteProposalDispatcherCache? = NoteProposalDispatcherCache()
 
     private var visibleNavigationItems: [NavigationItem] {
         NavigationItem.allCases.filter { item in
@@ -216,7 +219,8 @@ struct ContentView: View {
                     get: { router.selectedChatID },
                     set: { router.selectedChatID = $0 }
                 ),
-                emailDispatcher: emailDispatcher(for: modelContext.container)
+                emailDispatcher: emailDispatcher(for: modelContext.container),
+                noteProposalDispatcher: noteProposalDispatcher(for: modelContext.container)
             )
         case .workspace:
             WorkspaceView(
@@ -320,6 +324,22 @@ struct ContentView: View {
         return dispatcher
     }
 
+    /// Returns a cached `NoteProposalDispatcher` — same rationale as
+    /// `emailDispatcher(for:)`, and deliberately a distinct instance so
+    /// note-proposal actions never share a dispatcher with email review
+    /// actions.
+    @MainActor
+    private func noteProposalDispatcher(for container: ModelContainer) -> AnyHashableReviewActionDispatcher {
+        if let existing = noteProposalDispatcherState?.dispatcher {
+            return existing
+        }
+        let dispatcher = AnyHashableReviewActionDispatcher(
+            NoteProposalDispatcher(modelContainer: container)
+        )
+        noteProposalDispatcherState?.dispatcher = dispatcher
+        return dispatcher
+    }
+
     private func startNotificationBridge() {
         guard !isNotificationBridgeStarted else { return }
         isNotificationBridgeStarted = true
@@ -386,6 +406,13 @@ extension ContentView {
 /// without rebuilding it on each render.
 @MainActor
 private final class EmailDispatcherCache {
+    var dispatcher: AnyHashableReviewActionDispatcher?
+}
+
+/// Tiny mutable holder so a `@State`-backed view can cache the note-proposal
+/// dispatcher without rebuilding it on each render — see `EmailDispatcherCache`.
+@MainActor
+private final class NoteProposalDispatcherCache {
     var dispatcher: AnyHashableReviewActionDispatcher?
 }
 

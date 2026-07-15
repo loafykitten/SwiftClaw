@@ -9,6 +9,7 @@ struct ChatsView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(AppRouter.self) private var router
     var emailDispatcher: AnyHashableReviewActionDispatcher?
+    var noteProposalDispatcher: AnyHashableReviewActionDispatcher?
 
     @Binding private var selectedChatID: UUID?
     @Query(sort: \Chat.updatedAt, order: .reverse) private var chats: [Chat]
@@ -68,9 +69,26 @@ struct ChatsView: View {
         )
     }
 
-    init(selectedChatID: Binding<UUID?> = .constant(nil), emailDispatcher: AnyHashableReviewActionDispatcher? = nil) {
+    init(
+        selectedChatID: Binding<UUID?> = .constant(nil),
+        emailDispatcher: AnyHashableReviewActionDispatcher? = nil,
+        noteProposalDispatcher: AnyHashableReviewActionDispatcher? = nil
+    ) {
         _selectedChatID = selectedChatID
         self.emailDispatcher = emailDispatcher
+        self.noteProposalDispatcher = noteProposalDispatcher
+    }
+
+    /// Resolves the right dispatcher for a card's `ReviewType` — never falls
+    /// back to the email dispatcher for a type it doesn't own (calendar/
+    /// reminders cards have no dispatcher at all; `.noteProposal` gets its
+    /// own `NoteProposalDispatcher`, never the email one).
+    private func dispatcher(for reviewType: ReviewType) -> AnyHashableReviewActionDispatcher? {
+        switch reviewType {
+        case .email: emailDispatcher
+        case .noteProposal: noteProposalDispatcher
+        case .calendar, .reminders, .notes, .unknown: nil
+        }
     }
 
     var body: some View {
@@ -127,9 +145,7 @@ struct ChatsView: View {
             if let selectedChat {
                 ChatTranscriptView(
                     chat: selectedChat,
-                    emailDispatcherProvider: { [emailDispatcher] in
-                        emailDispatcher
-                    },
+                    dispatcherProvider: dispatcher,
                     archiveChat: archiveChat,
                     unarchiveChat: unarchiveChat
                 )
@@ -208,9 +224,7 @@ struct ChatsView: View {
                 if let chat = displayedChats.first(where: { $0.id == chatID }) {
                     ChatTranscriptView(
                         chat: chat,
-                        emailDispatcherProvider: { [emailDispatcher] in
-                            emailDispatcher
-                        },
+                        dispatcherProvider: dispatcher,
                         archiveChat: archiveChat,
                         unarchiveChat: unarchiveChat
                     )
@@ -680,7 +694,7 @@ private struct ChatTranscriptView: View {
     @Environment(\.modelContext) private var modelContext
 
     let chat: Chat
-    let emailDispatcherProvider: () -> AnyHashableReviewActionDispatcher?
+    let dispatcherProvider: (ReviewType) -> AnyHashableReviewActionDispatcher?
     let archiveChat: (Chat) -> Void
     let unarchiveChat: (Chat) -> Void
     @State private var previewSelection: ImageAttachmentPreviewSelection?
@@ -750,7 +764,7 @@ private struct ChatTranscriptView: View {
                             case .message(let message):
                                 ChatMessageRow(
                                     message: message,
-                                    emailDispatcher: emailDispatcherProvider(),
+                                    dispatcherProvider: dispatcherProvider,
                                     showImagePreview: showImagePreview
                                 )
                                     .id(message.id.uuidString)
@@ -1148,7 +1162,7 @@ private struct CompactChatTranscriptChrome: ViewModifier {
 
 private struct ChatMessageRow: View {
     let message: ChatMessage
-    var emailDispatcher: AnyHashableReviewActionDispatcher?
+    let dispatcherProvider: (ReviewType) -> AnyHashableReviewActionDispatcher?
     let showImagePreview: ([ImageAttachmentRecord], Int) -> Void
 
     @Environment(AppRouter.self) private var router
@@ -1181,7 +1195,7 @@ private struct ChatMessageRow: View {
                 if let reviewCard = message.reviewCard {
                     ReviewCardRendererRegistry.shared.makeView(
                         for: reviewCard,
-                        dispatcherProvider: { [emailDispatcher] _ in emailDispatcher },
+                        dispatcherProvider: dispatcherProvider,
                         onItemActioned: { itemID in
                             guard var updated = message.reviewCard else { return }
                             updated.items.removeAll { $0.id == itemID }
@@ -1194,8 +1208,13 @@ private struct ChatMessageRow: View {
                                 router.showCalendar()
                             case .reminders:
                                 router.showReminders(focusing: itemID)
-                            default:
+                            case .email:
                                 router.showEmail(itemID)
+                            case .noteProposal, .notes, .unknown:
+                                // The card itself is the whole interaction
+                                // (Approve/Reject + inline diff) — there's
+                                // nowhere else to navigate to.
+                                break
                             }
                         },
                         onRefreshAnalysis: {
@@ -1204,8 +1223,11 @@ private struct ChatMessageRow: View {
                                 await CalendarWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
                             case .reminders:
                                 await ReminderWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
-                            default:
+                            case .email:
                                 await EmailWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
+                            case .noteProposal, .notes, .unknown:
+                                // No refresh action on a note-proposal card.
+                                break
                             }
                         }
                     )

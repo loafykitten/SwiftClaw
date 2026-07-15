@@ -269,6 +269,10 @@ private enum DragAxis {
 }
 
 extension ReviewActionToken {
+    /// `.approve`/`.reject` never reach this swipe control (email review
+    /// cards use `.review`/`.flag`/`.reply`/`.delete`/`.archive` only — note
+    /// proposal cards render their own Approve/Reject buttons instead of a
+    /// swipe action), but the switch must stay exhaustive.
     var swipeSystemImage: String {
         switch self {
         case .review: "envelope.open"
@@ -276,6 +280,8 @@ extension ReviewActionToken {
         case .reply: "arrowshape.turn.up.left.fill"
         case .delete: "trash.fill"
         case .archive: "archivebox.fill"
+        case .approve: "checkmark.circle.fill"
+        case .reject: "xmark.circle.fill"
         }
     }
 
@@ -286,6 +292,8 @@ extension ReviewActionToken {
         case .reply: .green
         case .delete: .red
         case .archive: .gray
+        case .approve: .green
+        case .reject: .red
         }
     }
 }

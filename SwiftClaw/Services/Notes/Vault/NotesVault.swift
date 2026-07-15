@@ -17,6 +17,16 @@ enum NoteWriteOutcome: Sendable, Equatable {
     case conflict(conflictSnapshot: NoteFileSnapshot)
 }
 
+/// The outcome of `NotesVault.createExclusive`. Unlike `NoteWriteOutcome`,
+/// `.collision` writes absolutely nothing — no sibling copy, no overwrite —
+/// because an exact-path create-only caller (`NotesRepository
+/// .createExactPath`) wants the path taken to mean "propose again", not
+/// "silently land somewhere else."
+enum NoteCreateOutcome: Sendable, Equatable {
+    case created(NoteFileSnapshot)
+    case collision
+}
+
 /// The only type that touches vault files. An **actor** so every
 /// enumerate/read/write/rename/delete on a given vault instance is
 /// serialized — no torn reads racing a write from a repository call and a
@@ -137,13 +147,16 @@ actor NotesVault {
     }
 
     /// Writes `content` to `relativePath`. `expectedHash` guards against
-    /// clobbering a change this caller hasn't seen: it is re-checked against
-    /// the file's *current on-disk hash* immediately before writing (never
-    /// against a hash captured earlier by the caller). `nil` means
-    /// create-only — the write is expected to be the first content at that
-    /// path. Either way, a mismatch never overwrites: the attempted content
-    /// is saved as a `Name (conflict <timestamp>).md` sibling and the
-    /// existing file is left exactly as it was.
+    /// clobbering a change this caller hasn't seen. The current on-disk hash
+    /// is checked *inside* an `NSFileCoordinator` replacement access, and
+    /// the atomic publish happens before that access ends. That serializes
+    /// the compare-and-replace with cooperating document editors on macOS and
+    /// iOS; the hash is never validated in one access and published in a
+    /// later, uncoordinated filesystem operation. `nil` means create-only —
+    /// the write is expected to be the first content at that path. Either
+    /// way, a mismatch never overwrites: the attempted content is saved as a
+    /// `Name (conflict <timestamp>).md` sibling and the existing file is left
+    /// exactly as it was.
     @discardableResult
     func write(relativePath: String, content: String, expectedHash: String?) async throws -> NoteWriteOutcome {
         try await withScope {
@@ -152,24 +165,61 @@ actor NotesVault {
                 throw VaultError.invalidUTF8(relativePath)
             }
 
-            let exists = fileManager.fileExists(atPath: url.path)
-            let currentHash = exists ? try Self.sha256Hex(contentsOf: url) : nil
-            let matchesCurrentState: Bool
-            if let expectedHash {
-                matchesCurrentState = currentHash == expectedHash
-            } else {
-                matchesCurrentState = !exists
+            return try coordinateReplacement(at: url) { coordinatedURL in
+                let exists = fileManager.fileExists(atPath: coordinatedURL.path)
+                let currentHash = exists ? try Self.sha256Hex(contentsOf: coordinatedURL) : nil
+                let matchesCurrentState: Bool
+                if let expectedHash {
+                    matchesCurrentState = currentHash == expectedHash
+                } else {
+                    matchesCurrentState = !exists
+                }
+
+                guard matchesCurrentState else {
+                    let conflictURLs = makeConflictURLs(for: coordinatedURL, matching: url)
+                    try AtomicFileWriter.write(data, to: conflictURLs.coordinatedURL, fileManager: fileManager)
+                    let conflictRelativePath = try computeRelativePath(for: conflictURLs.logicalURL)
+                    return .conflict(
+                        conflictSnapshot: try snapshot(
+                            at: conflictURLs.coordinatedURL,
+                            relativePath: conflictRelativePath
+                        )
+                    )
+                }
+
+                // Keep the hash comparison and this atomic replacement in the
+                // same coordinated accessor. A document editor coordinating a
+                // save cannot land an edit between them.
+                try AtomicFileWriter.write(data, to: coordinatedURL, fileManager: fileManager)
+                return .wrote(try snapshot(at: coordinatedURL, relativePath: relativePath))
+            }
+        }
+    }
+
+    /// Creates a note at `relativePath` only if nothing exists there yet,
+    /// atomically — no sibling "(conflict …)" copy and no overwrite, ever,
+    /// unlike `write(expectedHash: nil)`. Backed by `AtomicFileWriter
+    /// .createExclusive`'s POSIX `O_EXCL` create, so the existence check and
+    /// the write are a single kernel-atomic operation: no other process can
+    /// race a separate read-then-write sequence into creating the same path
+    /// first. Same path/symlink-escape validation as every other mutation
+    /// (`resolveMutationURL`).
+    @discardableResult
+    func createExclusive(relativePath: String, content: String) async throws -> NoteCreateOutcome {
+        try await withScope {
+            let url = try resolveMutationURL(for: relativePath)
+            guard let data = content.data(using: .utf8) else {
+                throw VaultError.invalidUTF8(relativePath)
             }
 
-            guard matchesCurrentState else {
-                let conflictURL = try makeConflictURL(for: url)
-                try AtomicFileWriter.write(data, to: conflictURL, fileManager: fileManager)
-                let conflictRelativePath = try computeRelativePath(for: conflictURL)
-                return .conflict(conflictSnapshot: try snapshot(at: conflictURL, relativePath: conflictRelativePath))
+            do {
+                try AtomicFileWriter.createExclusive(data, at: url, fileManager: fileManager)
+            } catch AtomicFileWriter.WriteError.alreadyExists {
+                return .collision
+            } catch {
+                throw VaultError.ioFailure("Couldn't create \"\(relativePath)\": \(error.localizedDescription)")
             }
-
-            try AtomicFileWriter.write(data, to: url, fileManager: fileManager)
-            return .wrote(try snapshot(at: url, relativePath: relativePath))
+            return .created(try snapshot(at: url, relativePath: relativePath))
         }
     }
 
@@ -215,6 +265,31 @@ actor NotesVault {
         return try withExtendedLifetime(scope) {
             try body()
         }
+    }
+
+    /// Runs `accessor` under the platform document-coordination protocol used
+    /// by macOS and iOS editors. The accessor URL is the only URL touched for
+    /// the guarded target: file providers are allowed to substitute it while
+    /// they coordinate a replacement.
+    private func coordinateReplacement<T: Sendable>(
+        at url: URL,
+        accessor: (URL) throws -> T
+    ) throws -> T {
+        let coordinator = NSFileCoordinator()
+        var coordinationError: NSError?
+        var result: Result<T, Error>?
+
+        coordinator.coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { coordinatedURL in
+            result = Result { try accessor(coordinatedURL) }
+        }
+
+        if let coordinationError {
+            throw VaultError.ioFailure("Couldn't coordinate a replacement for \"\(url.lastPathComponent)\": \(coordinationError.localizedDescription)")
+        }
+        guard let result else {
+            throw VaultError.ioFailure("Couldn't coordinate a replacement for \"\(url.lastPathComponent)\".")
+        }
+        return try result.get()
     }
 
     // MARK: - Path safety
@@ -369,23 +444,35 @@ actor NotesVault {
         )
     }
 
-    private func makeConflictURL(for url: URL) throws -> URL {
-        let directory = url.deletingLastPathComponent()
-        let baseName = url.deletingPathExtension().lastPathComponent
-        let ext = url.pathExtension
+    /// Builds the conflict-copy's physical URL from the coordinator accessor,
+    /// but its logical URL/name from the already-validated vault URL. A file
+    /// provider may substitute an accessor URL outside the vault root; that is
+    /// the right place to write while coordinated, but never a safe source for
+    /// the catalog's relative path.
+    private func makeConflictURLs(
+        for coordinatedURL: URL,
+        matching logicalURL: URL
+    ) -> (coordinatedURL: URL, logicalURL: URL) {
+        let coordinatedDirectory = coordinatedURL.deletingLastPathComponent()
+        let logicalDirectory = logicalURL.deletingLastPathComponent()
+        let baseName = logicalURL.deletingPathExtension().lastPathComponent
+        let ext = logicalURL.pathExtension
         let timestamp = conflictTimestampFormatter.string(from: Date())
 
-        func candidate(suffix: Int) -> URL {
+        func candidates(suffix: Int) -> (coordinatedURL: URL, logicalURL: URL) {
             let disambiguator = suffix > 1 ? " \(suffix)" : ""
             let name = "\(baseName) (conflict \(timestamp)\(disambiguator)).\(ext)"
-            return directory.appendingPathComponent(name)
+            return (
+                coordinatedDirectory.appendingPathComponent(name),
+                logicalDirectory.appendingPathComponent(name)
+            )
         }
 
         var suffix = 1
-        var result = candidate(suffix: suffix)
-        while fileManager.fileExists(atPath: result.path) {
+        var result = candidates(suffix: suffix)
+        while fileManager.fileExists(atPath: result.coordinatedURL.path) {
             suffix += 1
-            result = candidate(suffix: suffix)
+            result = candidates(suffix: suffix)
         }
         return result
     }

@@ -105,6 +105,15 @@ enum ChatCompletionService {
                 tools.append(EmailReviewSetFlagTool(modelContainer: modelContext.container))
                 tools.append(EmailReviewRefreshTool(chatID: chat.id))
             }
+            // Proposal tools need the current chat id + ModelContainer to
+            // insert a `NoteEditProposal` and queue it on the right chat, so
+            // they're built fresh per completion rather than living on
+            // `ToolRegistry.shared` — the Phase 4 read tools stay there
+            // unchanged since they need no chat-scoped state.
+            if NotesFeatureModel.shared.isAvailableForReadTools {
+                tools.append(ProposeNoteEditTool(modelContainer: modelContext.container, chatID: chat.id))
+                tools.append(ProposeNoteCreateTool(modelContainer: modelContext.container, chatID: chat.id))
+            }
         }
 
         var assistantResponse: String?
@@ -119,6 +128,10 @@ enum ChatCompletionService {
             guard !Task.isCancelled else { return }
             chat.appendMessage(role: .assistant, content: response)
             assistantResponse = response
+            // Must run after the assistant's own message is appended but
+            // before `modelContext.save()` below, so the reply and every
+            // proposal card land in the same save/turn.
+            NotesProposalCoordinator.shared.drain(for: chat, using: modelContext)
             chat.isGenerating = false
             chat.errorMessage = nil
         } catch is CancellationError {

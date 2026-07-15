@@ -17,6 +17,27 @@ enum SwiftClawModelContainerFactory {
     private static let logger = AppLog.make("app.startup")
 
     static func make() -> Result<ModelContainer, AppStartupError> {
+        #if DEBUG
+        let fixtureRoot: NoteProposalFixtureLaunch.FixtureRoot?
+        switch NoteProposalFixtureLaunch.configurationIfRequested(
+            arguments: ProcessInfo.processInfo.arguments,
+            bundleIdentifier: Bundle.main.bundleIdentifier
+        ) {
+        case .success(nil):
+            fixtureRoot = nil
+        case .success(.some(let configuration)):
+            do {
+                // Establish the fixture-owned root before any ModelContainer
+                // can choose a default store or contact CloudKit.
+                fixtureRoot = try configuration.fixtureRoot.establish()
+            } catch {
+                return .failure(.fixtureConfigurationFailed(error.localizedDescription))
+            }
+        case .failure(let error):
+            return .failure(.fixtureConfigurationFailed(error.localizedDescription))
+        }
+        #endif
+
         let mainSchema = Schema([
             Item.self,
             Chat.self,
@@ -25,6 +46,7 @@ enum SwiftClawModelContainerFactory {
             EmailThread.self,
             EmailNote.self,
             EmailAttachment.self,
+            NoteEditProposal.self,
         ])
         let calendarSchema = Schema([
             CalendarEvent.self,
@@ -40,12 +62,33 @@ enum SwiftClawModelContainerFactory {
             EmailThread.self,
             EmailNote.self,
             EmailAttachment.self,
+            NoteEditProposal.self,
             CalendarEvent.self,
             UserCalendar.self,
             Reminder.self,
             ReminderList.self,
         ])
+        #if DEBUG
+        let mainConfiguration: ModelConfiguration
+        if let fixtureRoot {
+            do {
+                try fixtureRoot.revalidate()
+            } catch {
+                return .failure(.fixtureConfigurationFailed(error.localizedDescription))
+            }
+            mainConfiguration = ModelConfiguration(
+                nil,
+                schema: mainSchema,
+                url: fixtureRoot.mainStoreURL
+            )
+        } else {
+            mainConfiguration = ModelConfiguration(schema: mainSchema, isStoredInMemoryOnly: false)
+        }
+        let usesFixtureStores = fixtureRoot != nil
+        #else
         let mainConfiguration = ModelConfiguration(schema: mainSchema, isStoredInMemoryOnly: false)
+        let usesFixtureStores = false
+        #endif
 
         // Preferred: calendar store synced through the private CloudKit
         // database. Only attempted when the process actually carries the
@@ -55,7 +98,8 @@ enum SwiftClawModelContainerFactory {
         // out, unprovisioned container); the local fallback opens the SAME
         // named store without sync, so nothing is lost and CloudKit exports
         // existing rows when it attaches later.
-        if hasCloudKitEntitlement,
+        if !usesFixtureStores,
+           hasCloudKitEntitlement,
            !ProcessInfo.processInfo.arguments.contains("-SwiftClawDisableCloudKitSync") {
             let syncedCalendarConfiguration = ModelConfiguration(
                 "SwiftClawCalendar",
@@ -68,7 +112,11 @@ enum SwiftClawModelContainerFactory {
                     for: fullSchema,
                     configurations: [mainConfiguration, syncedCalendarConfiguration]
                 )
+                #if DEBUG
+                seedIfRequested(into: container, fixtureRoot: fixtureRoot)
+                #else
                 seedIfRequested(into: container)
+                #endif
                 return .success(container)
             } catch {
                 logger.warning("""
@@ -78,17 +126,43 @@ enum SwiftClawModelContainerFactory {
             }
         }
 
+        #if DEBUG
+        let localCalendarConfiguration: ModelConfiguration
+        if let fixtureRoot {
+            do {
+                try fixtureRoot.revalidate()
+            } catch {
+                return .failure(.fixtureConfigurationFailed(error.localizedDescription))
+            }
+            localCalendarConfiguration = ModelConfiguration(
+                "SwiftClawCalendar",
+                schema: calendarSchema,
+                url: fixtureRoot.calendarStoreURL
+            )
+        } else {
+            localCalendarConfiguration = ModelConfiguration(
+                "SwiftClawCalendar",
+                schema: calendarSchema,
+                isStoredInMemoryOnly: false
+            )
+        }
+        #else
         let localCalendarConfiguration = ModelConfiguration(
             "SwiftClawCalendar",
             schema: calendarSchema,
             isStoredInMemoryOnly: false
         )
+        #endif
         do {
             let container = try ModelContainer(
                 for: fullSchema,
                 configurations: [mainConfiguration, localCalendarConfiguration]
             )
+            #if DEBUG
+            seedIfRequested(into: container, fixtureRoot: fixtureRoot)
+            #else
             seedIfRequested(into: container)
+            #endif
             return .success(container)
         } catch {
             logger.error("Could not create ModelContainer: \(String(describing: error), privacy: .public)")
@@ -118,18 +192,28 @@ enum SwiftClawModelContainerFactory {
         #endif
     }
 
-    private static func seedIfRequested(into container: ModelContainer) {
-        #if DEBUG
+    #if DEBUG
+    private static func seedIfRequested(
+        into container: ModelContainer,
+        fixtureRoot: NoteProposalFixtureLaunch.FixtureRoot?
+    ) {
         MainActor.assumeIsolated {
             SampleChatSeeder.seedIfRequested(into: container)
             SampleEmailSeeder.seedIfRequested(into: container)
+            NoteProposalFixtureSeeder.seedIfRequested(into: container, fixtureRoot: fixtureRoot)
         }
-        #endif
     }
+    #else
+    private static func seedIfRequested(into container: ModelContainer) {
+    }
+    #endif
 }
 
 enum AppStartupError: LocalizedError, Identifiable {
     case modelContainerCreationFailed(String)
+    #if DEBUG
+    case fixtureConfigurationFailed(String)
+    #endif
 
     var id: String {
         errorDescription ?? "startup-error"
@@ -139,6 +223,10 @@ enum AppStartupError: LocalizedError, Identifiable {
         switch self {
         case .modelContainerCreationFailed:
             "SwiftClaw couldn't open its local data store."
+        #if DEBUG
+        case .fixtureConfigurationFailed:
+            "SwiftClaw refused to start the DEBUG note proposal fixture."
+        #endif
         }
     }
 
@@ -146,6 +234,10 @@ enum AppStartupError: LocalizedError, Identifiable {
         switch self {
         case .modelContainerCreationFailed(let details):
             "Quit and reopen SwiftClaw. If the problem continues, preserve this error for diagnosis: \(details)"
+        #if DEBUG
+        case .fixtureConfigurationFailed(let details):
+            "Use the documented fixture-only bundle identifier and temporary-root launch argument. Details: \(details)"
+        #endif
         }
     }
 }

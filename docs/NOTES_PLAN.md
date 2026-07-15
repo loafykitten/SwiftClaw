@@ -225,10 +225,20 @@ NLEmbedding unavailable.
 
 ## Phase 5 — Proposal diff cards (the approval gate; first in the app — designed for reuse)
 
+**Status: Complete (2026-07-14).**
+
+Unsigned macOS and iOS Simulator builds, focused Phase 5 suites, and the full
+non-parallel macOS test suite pass. Separate isolated Computer Use passes are
+green on macOS and iPhone 17 / iOS 27.0 through Device Hub: Show/Hide changes,
+clean edit approval, rejection, stale-edit conflict, clean create, and
+wrong-vault expiry all produced the expected card state and on-disk result.
+Both passes used fixture-only bundle/data identities with no model credentials
+or real vault, and removed their disposable app data after evidence capture.
+
 - `Models/NoteEditProposal.swift` — @Model, main store: id (.unique), kind
   (`create|edit|append|rename`), notePath, newPath?, baseContentHash? (nil =
   create), proposedContent?/appendText?, summary, status
-  (`pending|applied|rejected|conflicted|expired`), createdAt, resolvedAt?,
+  (`pending|applying|applied|rejected|conflicted|expired`), createdAt, resolvedAt?,
   chatID?. Add to `mainSchema`/`fullSchema` in
   `SwiftClawModelContainerFactory.swift` (lightweight migration).
 - `Models/ReviewCardPayload.swift` — +`ReviewType.noteProposal` and `.notes`;
@@ -250,17 +260,20 @@ NLEmbedding unavailable.
   "line added/removed" labels), Approve/Reject, status states incl.
   conflicted-with-explanation.
 - `Features/Chats/ReviewCards/NoteProposalDispatcher.swift` —
-  `ReviewActionDispatcher`; `.approve`: **re-read file and re-check
-  `baseContentHash` at approve time** → mismatch: mark `conflicted`, post
-  "note changed since proposed — not applied; ask me to re-propose"; match:
-  apply via repository (revision snapshot first), mark applied, post outcome.
-  `.reject`: mark + brief outcome. Register in `ReviewCardRendererRegistry` +
-  chat dispatcher provider.
+  `ReviewActionDispatcher`; `.approve`: bind to the originating vault, hold a
+  vault-operation lease, and **re-read/re-check `baseContentHash` at approve
+  time**. `NotesVault` holds `NSFileCoordinator(.forReplacing)` across the
+  authoritative hash check and atomic publish. Mismatch marks `conflicted` and
+  leaves the external edit intact; infrastructure failures restore a durable,
+  retryable `pending` state without claiming a content conflict. `.reject`:
+  mark + brief outcome. Register in `ReviewCardRendererRegistry` + chat
+  dispatcher provider.
 - Tests: `NoteProposalDispatcherTests` (the critical suite:
   approve-after-external-edit → conflicted + file untouched; clean approve →
   applied + revision exists; reject; double-approve idempotent),
   `DiffEngineTests`, `ProposeNoteEditToolTests` (creates record, never
-  writes), payload coding.
+  writes), payload coding, and `NoteProposalFixtureSeederTests` for isolated
+  macOS/iOS launch data, retry cleanup, and path-replacement refusal.
 
 ## Phase 6 — Quick capture, daily note, Workspace tile, scheduled review
 

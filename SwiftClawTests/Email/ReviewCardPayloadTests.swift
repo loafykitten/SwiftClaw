@@ -88,4 +88,48 @@ struct ReviewCardPayloadTests {
         let decoded = try JSONDecoder().decode(ReviewCardPayload.self, from: json)
         #expect(decoded.reviewType == .calendar)
     }
+
+    @Test func roundTripsNoteProposalPayload() throws {
+        let payload = ReviewCardPayload(
+            reviewType: .noteProposal,
+            items: [
+                ReviewItem(
+                    itemID: UUID(),
+                    actionToken: .approve,
+                    actionLabel: "Review",
+                    summary: "Add a section on onboarding",
+                    subject: "Projects/Roadmap.md"
+                ),
+            ]
+        )
+
+        let data = try JSONEncoder().encode(payload)
+        let decoded = try JSONDecoder().decode(ReviewCardPayload.self, from: data)
+
+        #expect(decoded == payload)
+        #expect(decoded.items[0].action == .approve)
+    }
+
+    @Test func decodesApproveAndRejectActionTokens() throws {
+        let json = """
+        {
+          "reviewType": "noteProposal",
+          "items": [
+            {
+              "id": "11111111-1111-1111-1111-111111111111",
+              "itemID": "22222222-2222-2222-2222-222222222222",
+              "actionToken": "reject",
+              "actionLabel": "Reject",
+              "summary": null,
+              "subject": null,
+              "sender": null
+            }
+          ]
+        }
+        """.data(using: .utf8)!
+
+        let decoded = try JSONDecoder().decode(ReviewCardPayload.self, from: json)
+        #expect(decoded.reviewType == .noteProposal)
+        #expect(decoded.items[0].action == .reject)
+    }
 }

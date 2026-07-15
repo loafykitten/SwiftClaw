@@ -36,14 +36,25 @@ struct NotesFeatureModelTests {
         return url
     }
 
-    private func makeModel(defaults: UserDefaults) throws -> NotesFeatureModel {
-        try makeModel(defaults: defaults, appSupportRoot: makeTempDirectory())
+    private func makeModel(
+        defaults: UserDefaults,
+        vaultOperationLeases: VaultOperationLeaseCoordinator? = nil
+    ) throws -> NotesFeatureModel {
+        try makeModel(
+            defaults: defaults,
+            appSupportRoot: makeTempDirectory(),
+            vaultOperationLeases: vaultOperationLeases
+        )
     }
 
     /// Shares `appSupportRoot` across two model instances — simulating a
     /// second `NotesFeatureModel` (a cold-relaunch stand-in) resolving the
     /// same already-onboarded app-managed vault the first one created.
-    private func makeModel(defaults: UserDefaults, appSupportRoot: URL) throws -> NotesFeatureModel {
+    private func makeModel(
+        defaults: UserDefaults,
+        appSupportRoot: URL,
+        vaultOperationLeases: VaultOperationLeaseCoordinator? = nil
+    ) throws -> NotesFeatureModel {
         let fileManager = TempApplicationSupportFileManager(tempRoot: appSupportRoot)
         let configurationStore = VaultConfigurationStore(
             userDefaults: defaults,
@@ -55,7 +66,8 @@ struct NotesFeatureModelTests {
             configurationStore: configurationStore,
             bookmarkStore: bookmarkStore,
             userDefaults: defaults,
-            fileManager: fileManager
+            fileManager: fileManager,
+            vaultOperationLeases: vaultOperationLeases
         )
     }
 
@@ -158,6 +170,50 @@ struct NotesFeatureModelTests {
         // The note file itself is never deleted by a reset.
         let entries = try FileManager.default.contentsOfDirectory(atPath: resolvedPath)
         #expect(entries.contains { $0.hasSuffix(".md") })
+    }
+
+    @Test func resetKeepsTheExternalBookmarkUntilAnActiveVaultLeaseDrains() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let leaseCoordinator = VaultOperationLeaseCoordinator()
+        let model = try makeModel(defaults: fixture.defaults, vaultOperationLeases: leaseCoordinator)
+        let externalFolder = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: externalFolder) }
+        fixture.defaults.set(true, forKey: SettingsKeys.notesEnabled)
+
+        await model.chooseExternalVault(url: externalFolder)
+        guard case .external(let bookmarkKey) = SettingsStorage.loadNotesVaultLocation(userDefaults: fixture.defaults) else {
+            Issue.record("Expected an external vault location")
+            return
+        }
+        let lease = try #require(model.acquireVaultOperationLease(expectedVaultID: model.configurationStore.vaultID))
+
+        let resetTask = Task {
+            await model.resetVaultConfiguration()
+        }
+        await leaseCoordinator.waitUntilTeardownStarted()
+
+        // The reset has begun but is waiting for the held operation lease, so
+        // the bookmark the old vault resolves per operation must remain valid.
+        #expect(fixture.defaults.data(forKey: bookmarkKey) != nil)
+
+        lease.release()
+        await resetTask.value
+
+        #expect(fixture.defaults.data(forKey: bookmarkKey) == nil)
+    }
+
+    @Test func configuredModelCannotGrantAVaultOperationLeaseAfterNotesIsDisabled() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        fixture.defaults.set(true, forKey: SettingsKeys.notesEnabled)
+        let model = try makeModel(defaults: fixture.defaults)
+
+        await model.chooseAppManagedVault()
+        let configuredVaultID = model.configurationStore.vaultID
+        fixture.defaults.set(false, forKey: SettingsKeys.notesEnabled)
+
+        #expect(model.acquireVaultOperationLease(expectedVaultID: configuredVaultID) == nil)
     }
 
     @Test func createNoteFailureSurfacesAsAListErrorRatherThanSilently() async throws {

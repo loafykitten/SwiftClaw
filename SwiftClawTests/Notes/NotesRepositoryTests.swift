@@ -239,6 +239,39 @@ struct NotesRepositoryTests {
         #expect(repository.summary(forRelativePath: created.relativePath)?.sha256 == updated.sha256)
     }
 
+    @Test func exactPathCreateRejectsUnsafeOrInvisibleNotePathsWithoutWriting() async throws {
+        let (repository, vaultRoot, revisionsDirectory) = try makeRepository()
+        defer {
+            try? FileManager.default.removeItem(at: vaultRoot)
+            try? FileManager.default.removeItem(at: revisionsDirectory)
+        }
+
+        let invalidPaths = [
+            ".hidden.md",
+            ".obsidian/Config.md",
+            "notes/../outside.md",
+            "/absolute.md",
+            "note.txt",
+            "note.md.tmp",
+            "folder//note.md",
+            "folder/./note.md",
+        ]
+
+        for path in invalidPaths {
+            do {
+                _ = try await repository.createExactPath(relativePath: path, content: "content")
+                Issue.record("Expected \(path) to be rejected")
+            } catch let error as NotesError {
+                #expect(error == .invalidNotePath(path))
+            } catch {
+                Issue.record("Expected \(path) to fail with an invalid note path, got \(error)")
+            }
+        }
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: vaultRoot.path).isEmpty)
+        #expect(repository.notes.isEmpty)
+    }
+
     @Test func saveOnHashMismatchThrowsExternalConflictAndKeepsOriginalIntact() async throws {
         let (repository, vaultRoot, _) = try makeRepository()
         defer { try? FileManager.default.removeItem(at: vaultRoot) }

@@ -29,4 +29,21 @@ nonisolated enum VaultIgnoreRules {
         if name.hasSuffix(temporaryArtifactSuffix) { return true }
         return name.lowercased().hasSuffix(".md") == false
     }
+
+    /// Whether a relative path names a note the vault would expose. Proposal
+    /// tools use this before reading, and exact-path creation uses it before
+    /// writing, so neither can create or target opaque vault content.
+    static func isVisibleMarkdownNotePath(_ relativePath: String) -> Bool {
+        guard !relativePath.isEmpty, !relativePath.hasPrefix("/") else { return false }
+
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard let fileName = components.last,
+              components.allSatisfy({
+                  !$0.isEmpty && $0 != "." && $0 != ".." && !isHidden(name: String($0))
+              }),
+              !isIgnoredFile(name: String(fileName))
+        else { return false }
+
+        return true
+    }
 }
