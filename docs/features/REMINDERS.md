@@ -13,19 +13,20 @@ template (`docs/features/CALENDAR.md`).
   the calendar models (built in `Shared/SwiftClawModelContainerFactory.swift`;
   the documented exception in `docs/conventions/MODELS.md`), so flipping on
   sync needs no migration.
-- **Recurrence = roll-forward-on-completion**, in two modes: fixed-schedule
-  (an RFC 5545 RRULE string reusing `RecurrenceRule`/`RecurrenceExpander`)
-  and after-completion interval (calendar components `{count, unit}` JSON).
-  One row per series; while the master is pending, `dueDate` is the next
-  pending occurrence (an exhausted series keeps its final due date with
-  `completedAt` set) — occurrences are never expanded or persisted. Completing inserts a detached
-  completed log row (`parentReminderID`/`originalOccurrenceDate`) and
-  advances the master: fixed-schedule from the *scheduled* date (so early
-  completion works), after-completion from the completion date
+- **Recurrence rolls forward on completion** in two modes: fixed schedule (an
+  RFC 5545 RRULE using `RecurrenceRule`/`RecurrenceExpander`) and an
+  after-completion interval (`{count, unit}` JSON). One row represents the
+  series; occurrences are never expanded or persisted.
+- While a recurring master is pending, `dueDate` is its next occurrence.
+  Completion inserts a detached log row
+  (`parentReminderID`/`originalOccurrenceDate`) and advances the master from
+  the scheduled date for fixed recurrence or the completion date for
+  after-completion recurrence
   (`Services/Reminders/Recurrence/ReminderRecurrenceEngine.swift`). COUNT is
-  decremented in the stored string on each advance. Undo deletes the log row
-  and restores `dueDate`. No EXDATEs/overrides — editing a recurring
-  reminder edits the series.
+  decremented on each advance; an exhausted series keeps its final due date
+  with `completedAt` set.
+- Undo removes the log row and restores `dueDate`. There are no EXDATEs or
+  per-occurrence overrides; editing a recurring reminder edits the series.
 - Date-only vs timed: `hasDueTime: Bool`; date-only reminders store local
   start-of-day with a nil timezone (floating, like the calendar's `isAllDay`).
 - Priority raw values sit on the RFC 5545 / EKReminder scale (0/1/5/9).
@@ -79,21 +80,20 @@ back to the manual editor with the typed phrase as the title.
 
 ## Alerts (`Services/Reminders/ReminderAlertScheduler.swift`)
 
-A `CalendarAlertScheduler` mirror: one alert per pending due-dated reminder,
-reconciled over a rolling 7-day fire window on every store save
-(`.reminderStoreDidChange`) and a 12 h tick, soonest-first under a
-12-request budget (the calendar drops from 48 to 36 only while reminder
-alerts can actually book, sharing the 64-request system cap). Timed
-reminders fire at `dueDate`; date-only reminders fire at
-`settings.reminders.allDayAlertMinutes` (default 9:00 AM; toggle + time
-picker in Settings › Notifications), with fire dates built from calendar
-components so DST can't shift them. Identifiers embed a content fingerprint
-so edits rebook the request. Disabling the toggle or the feature clears
-booked alerts. Taps route via `NotificationRoutingPayload.Kind.reminder` →
-`AppRouter.showReminders(focusing:)` (a no-op while the feature is disabled —
-a delivered banner can outlive the toggle), which threads a focus ID down
-ContentView → WorkspaceView → RemindersView to select the reminder's list,
-or its editor directly when that list is hidden.
+- One alert is booked per pending due-dated reminder. The scheduler reconciles
+  a rolling 7-day fire window after store saves
+  (`.reminderStoreDidChange`) and every 12 hours, keeping the soonest 12
+  requests. Calendar uses 36 of the 64 system slots while Reminder alerts are
+  active and 48 otherwise.
+- Timed reminders fire at `dueDate`. Date-only reminders use
+  `settings.reminders.allDayAlertMinutes` (default 9:00 AM; configured in
+  Settings › Notifications), with calendar components preventing DST shifts.
+- Content fingerprints make edits replace stale requests. Disabling the alert
+  source or feature clears booked alerts.
+- Taps route through `NotificationRoutingPayload.Kind.reminder` to
+  `AppRouter.showReminders(focusing:)`. Routing is a no-op while the feature is
+  disabled. Otherwise it selects the reminder's list, or opens the editor when
+  that list is hidden.
 
 ## Reminders Review (`Services/Reminders/Review/`, `ReminderWorkflowManager`)
 

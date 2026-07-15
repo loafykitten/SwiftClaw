@@ -3,8 +3,7 @@
 SwiftClaw's own calendar: SwiftData-backed events with month/week/day/agenda
 views, Apple Calendar + .ics import, .ics export, scheduled event alerts, an
 AI Calendar Review mirroring the Inbox Review, and an optional read-only
-Apple Calendar overlay. Mirrors the Email subsystem's architecture throughout
-— when in doubt, the Email counterpart is the template.
+Apple Calendar overlay.
 
 ## Data model (`Models/CalendarEvent.swift`, `Models/UserCalendar.swift`)
 
@@ -26,13 +25,12 @@ Apple Calendar overlay. Mirrors the Email subsystem's architecture throughout
 
 ## CloudKit sync (dormant)
 
-`SwiftClawModelContainerFactory` prefers a CloudKit-backed calendar
-configuration but only when the process is actually signed with
-`com.apple.developer.icloud-services` (checked via `SecTask` — CloudKit
-*traps* rather than throws without it). Personal development teams cannot
-carry iCloud entitlements, so sync is currently dormant; the re-enable recipe
-lives in a comment in `SwiftClaw/SwiftClaw.entitlements`. The local fallback
-opens the same store, so nothing is lost either way.
+`SwiftClawModelContainerFactory` uses a CloudKit-backed calendar configuration
+only when the process has `com.apple.developer.icloud-services` (checked via
+`SecTask` because CloudKit traps rather than throws without it). Builds without
+the entitlement use the same local store. The re-enable recipe lives in
+`SwiftClaw/SwiftClaw.entitlements`.
+
 `Services/Calendar/CalendarSyncCoordinator.swift` runs a debounced dedupe
 pass on remote-change notifications once sync is live.
 
@@ -49,11 +47,11 @@ pass on remote-change notifications once sync is live.
   subsets — VTODO serves the Reminders subsystem — folding/escaping,
   tolerant parse; mixed-component files work). All VEVENT usage funnels
   through `ICSTransfer.swift` (VTODO through the Reminders subsystem's
-  `ICSTodoTransfer.swift`) so the backend is swappable. All-day values serialize as
-  floating local dates (`VALUE=DATE`, including EXDATEs — never UTC, which
-  would shift the date in non-UTC zones); `RECURRENCE-ID` VEVENTs import as
-  detached override rows keyed `uid@detached@<original-start>`, masters first
-  regardless of file order.
+  `ICSTodoTransfer.swift`) so the backend is swappable. All-day values
+  serialize as floating local dates (`VALUE=DATE`, including EXDATEs — never
+  UTC, which would shift the date in non-UTC zones). `RECURRENCE-ID` VEVENTs
+  import as detached override rows keyed `uid@detached@<original-start>`,
+  masters first regardless of file order.
 - First-enable onboarding (`Features/Calendar/Import/CalendarOnboardingSheet`)
   offers Apple import / .ics import / start fresh; everything re-runnable from
   Settings › Calendar.
@@ -75,21 +73,21 @@ as chips in the month grid, all-day strip, and agenda — see
 
 ## Alerts (`Services/Calendar/CalendarAlertScheduler.swift`)
 
-Event alarms become `UNCalendarNotificationTrigger` requests through
-`AppNotificationService` (the service's only scheduled posting path).
-The scheduler reconciles a rolling 7-day window **by fire date** (occurrences
-are expanded a further 28 days out so long-lead alarms still book;
-deterministic (event, fire date, content-fingerprint) identifiers so title
-and all-day edits rebook stale requests, soonest-first under a 36-request budget while
-reminder alerts can book, 48 when they can't — the split shares the
-64-request system cap without reserving slots an idle reminder scheduler
-never uses) on every
-store save (`.calendarStoreDidChange`), remote change, and a 12 h tick.
-Disabling the notification toggle empties the desired set, so the next
-reconcile *clears* already-booked requests (`settingsDidChange()` triggers one
-promptly); disabling the Calendar feature calls `clearAllPendingAlerts()`.
-Taps route via `NotificationRoutingPayload.Kind.calendarEvent` →
-`AppRouter.showCalendar()`.
+- Event alarms become `UNCalendarNotificationTrigger` requests through
+  `AppNotificationService`, the only scheduled posting path.
+- The scheduler reconciles a rolling 7-day window by fire date. It expands
+  occurrences 28 days further so long-lead alarms still book, then keeps the
+  soonest requests.
+- Request IDs include the event, fire date, and a content fingerprint, so title
+  and all-day edits replace stale notifications.
+- Calendar uses a 36-request budget while Reminder alerts are active and 48
+  otherwise. This shares the 64-request system cap without reserving unused
+  Reminder slots.
+- Reconciliation runs after store saves (`.calendarStoreDidChange`), remote
+  changes, settings changes, and every 12 hours. Disabling alerts clears booked
+  requests; disabling Calendar calls `clearAllPendingAlerts()`.
+- Taps route through `NotificationRoutingPayload.Kind.calendarEvent` to
+  `AppRouter.showCalendar()`.
 
 ## Calendar Review (`Services/Calendar/Review/`, `CalendarWorkflowManager`)
 

@@ -16,5 +16,4 @@
   owned-to-many (template: `Chat.messages`).
 - JSON blobs on a `Data?` property (template: `ChatMessage.imageAttachmentsData`;
   reused for `reviewCardData` ↔ `reviewCard`).
-- New domain types are `Codable, Sendable, Hashable` where it applies (Swift 6
-  strict concurrency).
+- New domain types are `Codable`, `Sendable`, and `Hashable` where applicable.

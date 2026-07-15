@@ -2,7 +2,7 @@
 
 ## Context
 
-SwiftClaw gains a **Notes** feature: a markdown vault where plain `.md` files
+SwiftClaw's **Notes** feature is a markdown vault where plain `.md` files
 are always the source of truth, freely importable/exportable to apps like
 Obsidian and Apple Notes. The vault is either **app-managed** (App Support
 folder; iCloud sync designed-but-dormant, like Calendar's CloudKit) or a
@@ -26,20 +26,11 @@ sentiment) drove the design principles:
   vault; `.obsidian/` and dotfiles are opaque; display title ≠ filename;
   index is a rebuildable cache, never stored in the vault.
 
-Codebase starting points: a Notes scaffold already exists (`NotesView`/
-`NotesSettingsView` placeholders, `settings.notes.enabled`,
-`WorkspaceSection.notes` wired in `WorkspaceView`). No search/RAG or
-approval-gate infrastructure exists anywhere. The Reminders subsystem is the
-feature template. `ChatCompletionService` is the single user-chat inference
-call site (proposal cards append there). `ReviewCardPayload` has
-forward-compat `ReviewType.unknown` and UUID `ReviewItem.itemID` — extending
-it is migration-free.
-
 Decisions locked in with the user: **hybrid local RAG** (FTS5 + on-device
 NLEmbedding, RRF fusion), **styled-source editor + reading mode** (not
 live-preview), **proposal diff cards** (not blocking approval), **full v1
 scope** (wikilinks/backlinks, quick capture + daily note, fuzzy switcher,
-Workspace tile + review service). Work happens on the `feature/notes` branch.
+Workspace tile + review service).
 
 ## Key decisions
 
@@ -111,9 +102,8 @@ conflict banner); rewrite `NotesSettingsView.swift` (vault location +
 Change/Reveal/Reset, stats).
 
 **Modified**: `SwiftClaw.entitlements`
-(+`com.apple.security.files.user-selected.read-write`; caveat: re-signing
-voids the debug build's Accessibility grant — affects computer-use
-verification only), `AppSettings.swift` (keys in §Settings keys).
+(+`com.apple.security.files.user-selected.read-write`) and `AppSettings.swift`
+(keys in §Settings keys).
 
 **Tests** (`SwiftClawTests/Notes/`): `NotesVaultTests` (round-trip byte
 equality, conflict copy + original intact, create-collision, rename),
@@ -157,12 +147,6 @@ change only typed chars), `MarkdownDocumentTests` (outline, excluded ranges).
 ## Phase 3 — Index & search, backlinks, quick switcher, vault health
 
 **Status: Complete (2026-07-14).**
-
-The full test suite and unsigned macOS/iPhone builds pass. Separate final
-Computer Use passes are green on both platforms, including index-rebuild
-responsiveness and editor preservation on macOS, plus compact navigation,
-full-height Quick Switcher layout, same-note route deduplication, backlinks,
-health navigation, real-caret wikilink completion, and editing on iPhone.
 
 **Generic engine** (`SwiftClaw/Services/Search/` — source-agnostic,
 cross-feature #2):
@@ -227,14 +211,6 @@ NLEmbedding unavailable.
 
 **Status: Complete (2026-07-14).**
 
-Unsigned macOS and iOS Simulator builds, focused Phase 5 suites, and the full
-non-parallel macOS test suite pass. Separate isolated Computer Use passes are
-green on macOS and iPhone 17 / iOS 27.0 through Device Hub: Show/Hide changes,
-clean edit approval, rejection, stale-edit conflict, clean create, and
-wrong-vault expiry all produced the expected card state and on-disk result.
-Both passes used fixture-only bundle/data identities with no model credentials
-or real vault, and removed their disposable app data after evidence capture.
-
 - `Models/NoteEditProposal.swift` — @Model, main store: id (.unique), kind
   (`create|edit|append|rename`), notePath, newPath?, baseContentHash? (nil =
   create), proposedContent?/appendText?, summary, status
@@ -271,9 +247,9 @@ or real vault, and removed their disposable app data after evidence capture.
 - Tests: `NoteProposalDispatcherTests` (the critical suite:
   approve-after-external-edit → conflicted + file untouched; clean approve →
   applied + revision exists; reject; double-approve idempotent),
-  `DiffEngineTests`, `ProposeNoteEditToolTests` (creates record, never
-  writes), payload coding, and `NoteProposalFixtureSeederTests` for isolated
-  macOS/iOS launch data, retry cleanup, and path-replacement refusal.
+  `DiffEngineTests`, `ProposeNoteEditToolTests` (creates record, never writes),
+  payload coding, and `NoteProposalFixtureSeederTests` for isolated macOS/iOS
+  fixture data.
 
 ## Phase 6 — Quick capture, daily note, Workspace tile, scheduled review
 
@@ -305,8 +281,8 @@ or real vault, and removed their disposable app data after evidence capture.
 - `docs/features/NOTES.md` (architecture, safety invariants, index schema,
   proposal flow — REMINDERS.md depth); update `docs/conventions/TOOLS.md`
   (shared tools + proposal-gate pattern) + `docs/architecture/OVERVIEW.md`;
-  **delete** `docs/memory/notes-implementation.md`; add Notes entries to
-  `docs/testing/USER_FACING_TESTS.md` (end-of-feature step per AGENTS.md).
+  add Notes entries to `docs/testing/USER_FACING_TESTS.md` (end-of-feature
+  step per AGENTS.md).
 - Performance pass: generated 5,000-note fixture (index < 30s target, search
   latency, 1MB-note editor — cap styling beyond size threshold).
 - Accessibility pass: editor VoiceOver, diff-card labels, keyboard-only
@@ -354,8 +330,7 @@ FSEvents misses/coalescing → hints + rescans + hashes. FTS5 CJK weakness →
 documented, trigram follow-up. NLEmbedding unavailable/mediocre → provider
 protocol, FTS-only degrade, health-surfaced. Proposal races user edits →
 approve-time hash re-check + pre-apply revision snapshot. Index corruption →
-rebuildable cache, Rebuild button. Entitlement re-sign voids the debug
-build's Accessibility grant → affects computer-use verification only.
+rebuildable cache, Rebuild button.
 
 **Deferred from v1**: wikilink rename back-propagation (corruption risk;
 health surfaces broken links instead), graph view, CJK trigram table,

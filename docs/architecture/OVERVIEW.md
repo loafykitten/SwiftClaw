@@ -10,10 +10,14 @@ versioned schema needed.
 
 ## Navigation
 
-`NavigationSplitView` two-pane UI: `AccentSidebarList` +
-`ContentView.destination(for:)`. Settings-gated nav items are filtered in
-`ContentView.visibleNavigationItems` (e.g. Email against
-`SettingsStorage.isEmailEnabled()`).
+`ContentView` uses a `NavigationSplitView` at regular width and a `TabView` on
+compact iOS. Home, Chats, Workspace, and Research are the main destinations;
+Settings is also a top-level compact destination on iOS. Feature views own
+their nested `NavigationStack`s where needed.
+
+Email, Calendar, Reminders, and Notes live inside `WorkspaceView`. Their
+`WorkspaceFeature` toggles control the Workspace items and feature-backed
+Settings sections.
 
 ## Repository pattern
 

@@ -1,10 +1,9 @@
-# Email Feature Notes
+# Email
 
 The Email subsystem lives under `SwiftClaw/Services/Email/`. One
 `SwiftMailClient` is created per `StoredEmailAccount`.
 
-The feature is code-complete and live-verified except for the open items in
-[Remaining work](#remaining-work-and-deferred-items) at the end of this doc.
+Current verification gaps and possible follow-ups are listed at the end.
 
 ## Mail client
 
@@ -142,10 +141,9 @@ local state until the destination folder sync lands. Archive has a Message-ID
 reclaim path; other cross-folder moves may show a temporary duplicate/Trash row
 until the next pass settles the store.
 
-## Remaining work and deferred items
+## Verification gaps and follow-ups
 
-Live checks still open (everything else has been verified against a real
-account):
+Live checks still open:
 
 - Reply sends: threads on the recipient side, the APPEND to Sent, and the
   local synthetic row reconciling to the real Sent UID.
@@ -153,21 +151,20 @@ account):
   folders with plausible contents; Settings → Email → Review Folders lists the
   real folders; toggling one on feeds "Review Now"; with everything off,
   scheduled review matches the previous INBOX-only behavior.
-- Behavior to watch, not a code change yet: unread/flagged/notated threads
+- Large review backlogs: unread/flagged/notated threads
   override the review fetch limit, so a first review over a large unread
   backlog returns every unread thread in one prompt. Intentional and
-  self-correcting as the inbox is cleared — if a live first pass produces an
+  self-correcting as the inbox is cleared. If a live first pass produces an
   unwieldy prompt, the fix is a soft cap on the unread override (newest N
   unread), not removing the override.
-
 - IMAP connection reuse landed code-complete with unit coverage
   (`IMAPSessionTests`), but hasn't had a live pass yet: watch a sync pass +
   a flag toggle mid-sync against a real account, and confirm the idle-close
   doesn't fight providers that drop connections early.
 
-Deferred:
+Possible follow-ups:
 
-- iOS target and `BGTaskScheduler` mail sync.
+- iOS background mail sync with `BGTaskScheduler`.
 - Memory-backed email review context (e.g. sender-level preferences), once
   there are concrete preferences worth remembering.
 - More review follow-up tools (reply/delete) if the review-chat workflow needs

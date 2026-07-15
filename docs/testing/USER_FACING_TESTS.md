@@ -15,8 +15,8 @@ organized first by who should run a check, then by feature.
 - Keep secrets, personal mail, and production calendars out of automation
   fixtures. Human tests that use external systems should use disposable data.
 
-Baseline: project history through `d550bdb` (2026-07-12). The shipped target is
-macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
+SwiftClaw supports macOS and iOS. A step that names a platform applies only to
+that platform; otherwise cover both where the behavior exists on both.
 
 ## Human Testing
 
@@ -412,9 +412,9 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
 
 ### Workspace and Widgets
 
-- **CU-WORK-001 — Grid and feature navigation.** Enabled Email, Calendar, and
-  Reminders tiles appear with Notes/Memory in an adaptive readable grid. Each tile
-  opens its feature.
+- **CU-WORK-001 — Grid and feature navigation.** Enabled Email, Calendar,
+  Reminders, and Notes tiles appear with Memory in an adaptive readable grid.
+  Each tile opens its feature.
 - **CU-WORK-002 — Disabled feature affordance.** Disabled features move to More
   Features. Selecting one opens Settings > Tools with the correct row centered
   and highlighted; re-enabling restores the tile.
@@ -628,11 +628,9 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
   files untouched, and approval must apply exactly once. Change an edit target
   before approval and confirm the card becomes conflicted without overwriting it.
   Repeat after switching or disconnecting the vault and confirm the old proposal
-  cannot write into the new or unavailable vault. On Xcode 27+, iOS testers must
-  use Device Hub (`com.apple.dt.Devices`/`DeviceHub.app`); a missing standalone
-  `Simulator.app` is expected and is not a blocker.
+  cannot write into the new or unavailable vault.
 
-### Settings Window
+### Settings
 
 - **CU-SET-001 — Open and reuse.** Command-, and the app menu must open the native
   Settings window at Appearance without spawning duplicate windows unexpectedly.
@@ -684,37 +682,8 @@ macOS. Compact/iOS-only checks are deferred until iOS becomes supported.
 - **CU-SET-019 — Reminders settings.** Enable reveals default list, Show in
   Calendar, review cadence, imports, and per-list export; values persist and
   disable hides the feature-backed section safely.
-- **CU-SET-020 — Notes settings.** Enabling Notes reveals vault location, resolved
-  path, note count, default folder and review defaults, plus Change, Reveal, and
-  Reset controls. Notes and Settings must agree on the active vault; Reset must
-  disconnect without deleting files, and disabling Notes must stop vault activity.
-
-## Maintenance Log
-
-- **2026-07-12 — Project-history baseline.** Catalog created from the current
-  implementation, feature docs, and user-facing commit history through Reminders
-  completion. Calendar CloudKit is retained as blocked.
-- **2026-07-12 — Calendar alert scheduler backport.** The stale-title-after-edit
-  and rapid disable-then-enable fixes landed in `CalendarAlertScheduler`, so the
-  former H-CAL-006 expected-failure entry was removed; both cases are now
-  positive checks under H-CAL-005.
-- **2026-07-13 — Notes Phase 1.** Replaced placeholder coverage with the vault
-  onboarding, plain-editor autosave, external reconciliation, conflict safety,
-  permission recovery, and Settings behavior delivered by the vault foundation.
-- **2026-07-13 — Notes Phase 2.** Added styled-source losslessness, reading-mode
-  rendering, Edit/Read switching, relative-image identity, explicit external-change
-  choices, single-copy Keep Mine behavior, and visible create-failure coverage.
-- **2026-07-13 — Notes Phase 3 implementation.** Added indexed and hybrid search,
-  quick switching, backlinks and wikilink completion, vault health, embedding
-  fallback, and rebuild coverage. Interactive macOS and iOS Computer Use remains
-  host-blocked; the catalog records the required passes rather than claiming them.
-- **2026-07-14 — Notes Phase 4.** Added always-allowed Search Notes and Read Note
-  tools, cited and length-capped output, registry/configuration gating, and live
-  Tools readiness updates. Disposable macOS and iOS Computer Use passes verified
-  the Ready, disabled, and re-enabled states without per-tool switches.
-- **2026-07-14 — Notes Phase 5 implementation.** Added persistent create/edit
-  proposals, accessible diff cards, explicit approval/rejection, approve-time
-  hash and vault-identity guards, exact-path create safety, and terminal outcome
-  coverage. Isolated macOS and iPhone 17 / iOS 27.0 Device Hub passes verified
-  Show/Hide changes plus applied, rejected, conflicted, created, and expired
-  outcomes without touching a real vault.
+- **CU-SET-020 — Notes settings.** Enabling Notes reveals vault location,
+  resolved path, note count, semantic-search and index-health controls, plus
+  Change, Reveal, and Reset. Notes and Settings must agree on the active vault;
+  Reset must disconnect without deleting files, and disabling Notes must stop
+  vault activity.
