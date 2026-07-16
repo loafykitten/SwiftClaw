@@ -338,7 +338,7 @@ nonisolated struct NoteProposalFixtureLaunch: Sendable {
 /// temporary directory and is never a production container or default store.
 @MainActor
 enum NoteProposalFixtureSeeder {
-    static let launchArgument = "-SwiftClawSeedNoteProposalFixture"
+    nonisolated static let launchArgument = "-SwiftClawSeedNoteProposalFixture"
 
     private static let logger = AppLog.make("notes.fixture")
     private static let chatTitle = "Notes proposal fixture — safe temporary vault"
@@ -492,7 +492,7 @@ enum NoteProposalFixtureSeeder {
         ]
     }
 
-    private static let expectedProposalCount = 5
+    nonisolated private static let expectedProposalCount = 5
 
     /// The factory has already validated the launch contract and opened only
     /// explicit fixture stores. Revalidation deliberately happens again inside

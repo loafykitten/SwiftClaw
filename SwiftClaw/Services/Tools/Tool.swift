@@ -141,13 +141,13 @@ nonisolated protocol Tool: Sendable {
     func execute(arguments: [String: JSONValue]) async throws -> String
 }
 
-extension Tool {
+nonisolated extension Tool {
     var isEnabled: Bool { true }
 
     var requiresExplicitEnable: Bool { false }
 }
 
-extension Tool {
+nonisolated extension Tool {
     /// JSON Schema for the tool's parameters, in the shape expected by
     /// OpenAI-compatible function-calling APIs.
     var parametersSchema: JSONValue {

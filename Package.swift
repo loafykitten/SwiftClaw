@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 
 import PackageDescription
 
@@ -28,14 +28,28 @@ let package = Package(
                 .product(name: "Markdown", package: "swift-markdown"),
             ],
             path: "SwiftClaw",
+            exclude: [
+                "AppIcon.icon",
+                "SwiftClaw.entitlements",
+            ],
             resources: [
                 .process("Assets.xcassets"),
+            ],
+            swiftSettings: [
+                .defaultIsolation(MainActor.self),
+                .enableUpcomingFeature("InferIsolatedConformances"),
+                .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
             ]
         ),
         .testTarget(
             name: "SwiftClawTests",
             dependencies: ["SwiftClaw"],
-            path: "SwiftClawTests"
+            path: "SwiftClawTests",
+            swiftSettings: [
+                .defaultIsolation(MainActor.self),
+                .enableUpcomingFeature("InferIsolatedConformances"),
+                .enableUpcomingFeature("NonisolatedNonsendingByDefault"),
+            ]
         ),
     ]
 )

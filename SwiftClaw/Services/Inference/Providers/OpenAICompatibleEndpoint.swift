@@ -163,7 +163,7 @@ struct OpenAICompatibleClient: Sendable {
     }
 }
 
-private final class OpenAICompatibleResponseRecorder: @unchecked Sendable {
+private nonisolated final class OpenAICompatibleResponseRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var latestResponse: OpenAICompatibleCapturedResponse?
 
@@ -216,7 +216,7 @@ private struct OpenAICompatibleResponseCaptureMiddleware: OpenAIMiddleware {
     }
 }
 
-private struct OpenAICompatibleCapturedResponse: Sendable {
+private nonisolated struct OpenAICompatibleCapturedResponse: Sendable {
     private static let previewLimit = 4_096
 
     let method: String

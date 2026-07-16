@@ -5,7 +5,7 @@ import Testing
 /// Redirects `.applicationSupportDirectory` to an isolated temp root so
 /// `VaultConfigurationStore`'s app-managed vault/revisions paths never touch
 /// the real `~/Library/Application Support` during tests.
-private final class TempApplicationSupportFileManager: FileManager, @unchecked Sendable {
+private nonisolated final class TempApplicationSupportFileManager: FileManager, @unchecked Sendable {
     let tempRoot: URL
 
     init(tempRoot: URL) {

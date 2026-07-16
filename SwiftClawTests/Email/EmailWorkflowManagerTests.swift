@@ -165,7 +165,7 @@ struct EmailWorkflowManagerTests {
 @MainActor
 private final class ReviewCompletionNotificationProbe {
     private(set) var didReceive = false
-    private var observer: NSObjectProtocol?
+    private nonisolated(unsafe) var observer: NSObjectProtocol?
 
     init() {
         observer = NotificationCenter.default.addObserver(

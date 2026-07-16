@@ -55,15 +55,15 @@ struct CalendarReviewServiceTests {
     @Test func skipsScheduledPassWhenNothingUpcoming() async throws {
         let harness = try Harness()
         defer { harness.cleanup() }
-        var inferenceCalls = 0
+        let inferenceCalls = LockedValue(0)
         harness.service.completeProvider = { _, _, _, _ in
-            inferenceCalls += 1
+            inferenceCalls.update { $0 += 1 }
             return ""
         }
 
         let didRun = await harness.service.runOnce(force: false)
         #expect(!didRun)
-        #expect(inferenceCalls == 0)
+        #expect(inferenceCalls.value == 0)
         #expect(harness.service.lastStatusMessage == "Nothing on the calendar to review")
     }
 
@@ -99,14 +99,14 @@ struct CalendarReviewServiceTests {
         event.lastReviewedAt = .now
         harness.repository.saveChanges()
 
-        var inferenceCalls = 0
+        let inferenceCalls = LockedValue(0)
         harness.service.completeProvider = { _, _, _, _ in
-            inferenceCalls += 1
+            inferenceCalls.update { $0 += 1 }
             return ""
         }
         let didRun = await harness.service.runOnce(force: false)
         #expect(!didRun)
-        #expect(inferenceCalls == 0)
+        #expect(inferenceCalls.value == 0)
         #expect(harness.service.lastStatusMessage == "Nothing new since the last review")
 
         // Editing the event (modifiedAt bump) makes the next scheduled pass
@@ -114,7 +114,7 @@ struct CalendarReviewServiceTests {
         harness.repository.noteUpdated(event)
         let didRunAfterEdit = await harness.service.runOnce(force: false)
         #expect(didRunAfterEdit)
-        #expect(inferenceCalls == 1)
+        #expect(inferenceCalls.value == 1)
     }
 
     @Test func stampsFetchedEventsOnlyAfterSuccess() async throws {
@@ -157,12 +157,12 @@ struct CalendarReviewServiceTests {
         defer { harness.cleanup() }
         harness.insertUpcomingEvent()
 
-        var offeredTools: [String] = []
+        let offeredTools = LockedValue<[String]>([])
         harness.service.completeProvider = { _, _, _, tools in
-            offeredTools = tools.map(\.name).sorted()
+            offeredTools.update { $0 = tools.map(\.name).sorted() }
             return ""
         }
         _ = await harness.service.runOnce(force: true)
-        #expect(offeredTools == ["fetch_calendar_events", "notify_user_about_events"])
+        #expect(offeredTools.value == ["fetch_calendar_events", "notify_user_about_events"])
     }
 }

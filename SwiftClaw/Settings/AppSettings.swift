@@ -70,11 +70,11 @@ enum QuoteAccent {
     }
 }
 
-enum SettingsKeys { }
+nonisolated enum SettingsKeys { }
 
 // MARK: - Appearance keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     static let theme = "settings.appearance.theme"
     static let quoteAccentHue = "settings.appearance.quoteAccentHue"
     static let quoteAccentLightness = "settings.appearance.quoteAccentLightness"
@@ -82,7 +82,7 @@ extension SettingsKeys {
 
 // MARK: - Provider keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     static let azureResourceName = "settings.azure.resourceName"
     static let azureAPIKey = "settings.azure.apiKey"
     static let azureDeployments = "settings.azure.deployments"
@@ -96,7 +96,7 @@ extension SettingsKeys {
 
 // MARK: - Tool keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     static let webSearchEnabled = "settings.tools.webSearch.enabled"
     static let investigationEnabled = "settings.tools.investigation.enabled"
     nonisolated static let investigationMaxSubAgents = "settings.tools.investigation.maxSubAgents"
@@ -104,7 +104,7 @@ extension SettingsKeys {
 
 // MARK: - Model behavior keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     static let swiftModel = "settings.behaviors.swiftModel"
     static let clawModel = "settings.behaviors.clawModel"
     static let clawReasoningEffort = "settings.behaviors.clawReasoningEffort"
@@ -115,7 +115,7 @@ extension SettingsKeys {
 
 // MARK: - Persona keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     static let personaDisplayName = "settings.persona.displayName"
     static let personaAvatarData = "settings.persona.avatarData"
     static let assistantDisplayName = "settings.assistant.displayName"
@@ -127,7 +127,7 @@ extension SettingsKeys {
 
 // MARK: - Workspace feature keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     static let calendarEnabled = "settings.calendar.enabled"
     static let remindersEnabled = "settings.reminders.enabled"
     static let notesEnabled = "settings.notes.enabled"
@@ -135,7 +135,7 @@ extension SettingsKeys {
 
 // MARK: - Calendar keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     /// UUID string of the calendar new events default into.
     static let calendarDefaultCalendarID = "settings.calendar.defaultCalendarID"
     /// App state (not a user setting): whether the first-enable import
@@ -152,7 +152,7 @@ extension SettingsKeys {
 
 // MARK: - Reminders keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     /// UUID string of the list new reminders default into.
     static let remindersDefaultListID = "settings.reminders.defaultListID"
     /// Minutes after local midnight when date-only (no due time) reminders
@@ -171,7 +171,7 @@ extension SettingsKeys {
 
 // MARK: - Notes keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     /// Which case of `VaultLocation` is active — `"appManaged"` or
     /// `"external"`. Paired with `notesVaultBookmarkKey` rather than
     /// encoding the whole `VaultLocation` as one JSON blob, so switching
@@ -212,7 +212,7 @@ extension SettingsKeys {
 
 // MARK: - Notification keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     static let notificationsEnabled = "settings.notifications.enabled"
     static let notificationsNewMailEnabled = "settings.notifications.newMail.enabled"
     static let notificationsReviewResultsEnabled = "settings.notifications.reviewResults.enabled"
@@ -226,7 +226,7 @@ extension SettingsKeys {
 
 // MARK: - Email keys
 
-extension SettingsKeys {
+nonisolated extension SettingsKeys {
     static let emailEnabled = "settings.email.enabled"
     static let emailAccounts = "settings.email.accounts"
     static let emailImapHost = "settings.email.imapHost"
@@ -260,7 +260,7 @@ extension SettingsKeys {
     static let unreadChatIDs = "state.chats.unreadChatIDs"
 }
 
-enum SettingsNotifications {
+nonisolated enum SettingsNotifications {
     static let keychainDidChange = Notification.Name("settings.keychain.didChange")
     static let emailReviewScheduleDidChange = Notification.Name(
         "settings.email.reviewSchedule.didChange"
@@ -935,10 +935,10 @@ enum SettingsStorage {
 
     nonisolated static let defaultBraveSearchRequestsPerSecond = 1.0
     nonisolated static let braveSearchRequestsPerSecondRange: ClosedRange<Double> = 0.5...20
-    static let defaultWebSearchEnabled = true
-    static let defaultInvestigationEnabled = true
+    nonisolated static let defaultWebSearchEnabled = true
+    nonisolated static let defaultInvestigationEnabled = true
 
-    static func isWebSearchEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+    nonisolated static func isWebSearchEnabled(userDefaults: UserDefaults = .standard) -> Bool {
         toolEnabled(
             forKey: SettingsKeys.webSearchEnabled,
             defaultValue: defaultWebSearchEnabled,
@@ -946,7 +946,7 @@ enum SettingsStorage {
         )
     }
 
-    static func isInvestigationEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+    nonisolated static func isInvestigationEnabled(userDefaults: UserDefaults = .standard) -> Bool {
         isWebSearchEnabled(userDefaults: userDefaults)
             && toolEnabled(
                 forKey: SettingsKeys.investigationEnabled,
@@ -1546,7 +1546,7 @@ enum SettingsStorage {
         )
     }
 
-    private static func toolEnabled(
+    nonisolated private static func toolEnabled(
         forKey key: String,
         defaultValue: Bool,
         userDefaults: UserDefaults
@@ -1554,7 +1554,7 @@ enum SettingsStorage {
         boolSetting(forKey: key, defaultValue: defaultValue, userDefaults: userDefaults)
     }
 
-    private static func boolSetting(
+    nonisolated private static func boolSetting(
         forKey key: String,
         defaultValue: Bool,
         userDefaults: UserDefaults

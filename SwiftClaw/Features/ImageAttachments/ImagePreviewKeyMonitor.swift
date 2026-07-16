@@ -87,9 +87,6 @@ struct ImagePreviewKeyMonitor: NSViewRepresentable {
             monitor = nil
         }
 
-        deinit {
-            remove()
-        }
     }
 }
 

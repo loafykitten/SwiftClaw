@@ -51,19 +51,22 @@ struct PersonaSettingsView: View {
 
             Section("Chat Avatar") {
                 #if os(iOS)
+                let pickerAvatarData = avatarData
+                let pickerHasAvatarOverride = hasAvatarOverride
+                let pickerAvatarStatusText = avatarStatusText
                 PhotosPicker(
                     selection: $selectedAvatarItem,
                     matching: .images,
                     photoLibrary: .shared()
                 ) {
                     HStack(spacing: 12) {
-                        PersonaAvatarPreview(avatarData: avatarData, size: 56)
+                        PersonaAvatarPreview(avatarData: pickerAvatarData, size: 56)
 
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(hasAvatarOverride ? "Change Image" : "Choose Image")
+                            Text(pickerHasAvatarOverride ? "Change Image" : "Choose Image")
                                 .foregroundStyle(.primary)
 
-                            Text(avatarStatusText)
+                            Text(pickerAvatarStatusText)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -215,7 +218,7 @@ private struct PersonaAvatarPreview: View {
     let avatarData: Data
     let size: CGFloat
 
-    init(avatarData: Data, size: CGFloat = 72) {
+    nonisolated init(avatarData: Data, size: CGFloat = 72) {
         self.avatarData = avatarData
         self.size = size
     }

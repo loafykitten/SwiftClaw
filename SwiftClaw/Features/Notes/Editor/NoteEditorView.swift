@@ -4,6 +4,13 @@ import SwiftUI
 #if os(macOS)
 import AppKit
 
+/// `NSTextViewDelegate` has no actor metadata, but AppKit invokes these
+/// callbacks for this editor on the main thread. This wrapper expresses that
+/// invariant when entering `MainActor.assumeIsolated`.
+private nonisolated struct MainActorTextView: @unchecked Sendable {
+    let value: NSTextView
+}
+
 /// The styled-source editor. `NSTextView`'s own text storage is the single
 /// source of truth for what's on screen — this view never binds the
 /// document through a SwiftUI `@State`/`Binding` round trip. Content only
@@ -84,8 +91,10 @@ struct NoteEditorView: NSViewRepresentable {
         }
 
         nonisolated func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            let mainActorTextView = MainActorTextView(value: textView)
             MainActor.assumeIsolated {
-                guard let textView = notification.object as? NSTextView else { return }
+                let textView = mainActorTextView.value
                 controller.textDidChange(textView.string)
                 controller.updateWikilinkCompletion(text: textView.string, cursorLocation: textView.selectedRange().location)
             }
@@ -99,8 +108,10 @@ struct NoteEditorView: NSViewRepresentable {
         }
 
         nonisolated func textViewDidChangeSelection(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            let mainActorTextView = MainActorTextView(value: textView)
             MainActor.assumeIsolated {
-                guard let textView = notification.object as? NSTextView else { return }
+                let textView = mainActorTextView.value
                 controller.updateWikilinkCompletion(text: textView.string, cursorLocation: textView.selectedRange().location)
             }
         }

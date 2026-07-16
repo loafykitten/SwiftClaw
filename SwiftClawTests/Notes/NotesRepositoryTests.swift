@@ -33,9 +33,9 @@ struct NotesRepositoryTests {
         _ = try await vault.write(relativePath: "zebra.md", content: "z", expectedHash: nil)
         _ = try await vault.write(relativePath: "alpha.md", content: "a", expectedHash: nil)
 
-        var notified = false
+        let notified = LockedValue(false)
         let observer = NotificationCenter.default.addObserver(forName: .notesStoreDidChange, object: repository, queue: nil) { _ in
-            notified = true
+            notified.update { $0 = true }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
@@ -43,7 +43,7 @@ struct NotesRepositoryTests {
 
         #expect(repository.notes.map(\.relativePath) == ["alpha.md", "zebra.md"])
         #expect(repository.lastError == nil)
-        #expect(!notified)
+        #expect(!notified.value)
     }
 
     @Test func reloadSkipsAnUnreadableNoteAndSurfacesAPartialError() async throws {
@@ -69,9 +69,9 @@ struct NotesRepositoryTests {
         let vault = NotesVault(root: vaultRoot)
         _ = try await vault.write(relativePath: "note.md", content: "hello", expectedHash: nil)
 
-        var notified = false
+        let notified = LockedValue(false)
         let observer = NotificationCenter.default.addObserver(forName: .notesStoreDidChange, object: repository, queue: nil) { _ in
-            notified = true
+            notified.update { $0 = true }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
@@ -86,7 +86,7 @@ struct NotesRepositoryTests {
         #expect(mutated)
         #expect(repository.notes.count == 1)
         #expect(repository.notes.first?.relativePath == "note.md")
-        #expect(notified)
+        #expect(notified.value)
     }
 
     @Test func applyDeltaHandlesRenamedPairsWithoutRereadingContent() async throws {
@@ -133,16 +133,16 @@ struct NotesRepositoryTests {
         let (repository, vaultRoot, _) = try makeRepository()
         defer { try? FileManager.default.removeItem(at: vaultRoot) }
 
-        var notified = false
+        let notified = LockedValue(false)
         let observer = NotificationCenter.default.addObserver(forName: .notesStoreDidChange, object: repository, queue: nil) { _ in
-            notified = true
+            notified.update { $0 = true }
         }
         defer { NotificationCenter.default.removeObserver(observer) }
 
         let mutated = await repository.apply(delta: .empty)
 
         #expect(!mutated)
-        #expect(!notified)
+        #expect(!notified.value)
     }
 
     // MARK: - Create / filename collisions

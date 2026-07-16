@@ -405,10 +405,13 @@ final class NotesFeatureModel {
             }
         }
 
-        let vault = NotesVault(root: root, fileManager: fileManager, scopeAccessor: scopeAccessor)
+        // Each filesystem actor owns its FileManager instead of sharing the
+        // main actor's injected instance across isolation domains. The
+        // resolved directories already carry any test-specific location mapping.
+        let vault = NotesVault(root: root, fileManager: FileManager(), scopeAccessor: scopeAccessor)
         let revisionStore = NoteRevisionStore(
             directory: configurationStore.revisionsDirectory(),
-            fileManager: fileManager
+            fileManager: FileManager()
         )
         let repository = NotesRepository(vault: vault, revisionStore: revisionStore)
         await repository.reload()

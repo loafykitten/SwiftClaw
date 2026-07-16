@@ -60,9 +60,6 @@ struct ImagePasteKeyMonitor: NSViewRepresentable {
             monitor = nil
         }
 
-        deinit {
-            remove()
-        }
     }
 }
 #endif

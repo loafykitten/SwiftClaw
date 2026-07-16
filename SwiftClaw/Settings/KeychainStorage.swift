@@ -2,7 +2,7 @@ import Foundation
 import Security
 import SwiftUI
 
-enum Keychain {
+nonisolated enum Keychain {
     private static let service = Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw"
 
     static func string(forKey key: String) -> String? {

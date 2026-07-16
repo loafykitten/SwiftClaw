@@ -2,7 +2,7 @@ import Foundation
 
 /// Whitespace-tokenized matching for the `.searchable` filters: every token
 /// must appear (case/diacritic-insensitively) in at least one value.
-enum SearchQuery {
+nonisolated enum SearchQuery {
     /// Whether `text` contains anything worth filtering on.
     static func isActive(_ text: String) -> Bool {
         text.contains { !$0.isWhitespace }

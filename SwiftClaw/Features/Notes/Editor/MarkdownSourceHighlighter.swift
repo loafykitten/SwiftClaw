@@ -2,6 +2,14 @@ import Foundation
 #if os(macOS)
 import AppKit
 
+/// `NSTextStorageDelegate` is an Objective-C protocol with no actor metadata.
+/// This wrapper carries the text view-owned storage through
+/// `MainActor.assumeIsolated`; the delegate invariant below guarantees the
+/// object never actually crosses threads.
+private nonisolated struct MainActorTextStorage: @unchecked Sendable {
+    let value: NSTextStorage
+}
+
 /// Restyles the editor's `NSTextStorage` as markdown source, attributes
 /// only — it never inserts, deletes, or replaces a single character.
 /// Ordinary edits restyle just the touched paragraph; edits that touch a
@@ -34,8 +42,9 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
         range editedRange: NSRange,
         changeInLength delta: Int
     ) {
+        let mainActorTextStorage = MainActorTextStorage(value: textStorage)
         MainActor.assumeIsolated {
-            self.restyle(textStorage, editedMask: editedMask, editedRange: editedRange)
+            self.restyle(mainActorTextStorage.value, editedMask: editedMask, editedRange: editedRange)
         }
     }
 
