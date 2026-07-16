@@ -82,6 +82,7 @@ final class NotesFeatureModel {
     private var vault: NotesVault?
     private var indexer: NotesIndexer?
     private var reconciler: VaultReconciler?
+    private var quickCaptureService: NotesQuickCaptureService?
     private var searchTask: Task<Void, Never>?
     /// Gates `NoteProposalDispatcher` approvals against a vault teardown/
     /// switch beginning mid-approval — see `acquireVaultOperationLease` and
@@ -452,6 +453,10 @@ final class NotesFeatureModel {
         self.notes = repository.notes
         self.editor = NoteEditorController(repository: repository)
         self.editor?.candidateNotes = repository.notes
+        self.quickCaptureService = NotesQuickCaptureService(
+            repository: repository,
+            statsStore: NotesCaptureStatsStore(userDefaults: userDefaults)
+        )
         self.indexer = indexer
         self.reconciler = reconciler
         self.currentLocation = location
@@ -621,6 +626,7 @@ final class NotesFeatureModel {
         indexer = nil
         repository = nil
         editor = nil
+        quickCaptureService = nil
         notes = []
         currentLocation = nil
         currentRootURL = nil
@@ -739,6 +745,50 @@ final class NotesFeatureModel {
             lastListError = NotesError.from(error)
             return nil
         }
+    }
+
+    /// Shared mutation path for the Notes toolbar and Workspace capture
+    /// action. One service instance per configured vault prevents two UI
+    /// surfaces from racing the same read/append/save sequence.
+    @discardableResult
+    func quickCapture(
+        _ text: String,
+        destination: NotesQuickCaptureService.Destination
+    ) async throws -> String {
+        guard let repository, let quickCaptureService else {
+            throw NotesError.underlying("Set up a Notes vault before using quick capture.")
+        }
+
+        let previousPaths = Set(repository.notes.map(\.relativePath))
+        let result: NotesQuickCaptureService.CaptureResult
+        switch destination {
+        case .dailyNote:
+            result = try await quickCaptureService.captureDaily(
+                text,
+                folder: SettingsStorage.loadNotesDailyNoteFolder(userDefaults: userDefaults)
+            )
+        case .standaloneNote:
+            result = try await quickCaptureService.captureStandalone(
+                text,
+                folder: SettingsStorage.loadNotesDefaultNewNoteFolder(userDefaults: userDefaults)
+            )
+        }
+
+        notes = repository.notes
+        editor?.candidateNotes = repository.notes
+        let delta = previousPaths.contains(result.path)
+            ? VaultReconciler.ReconcileDelta(added: [], modified: [result.path], removed: [], renamedPairs: [])
+            : VaultReconciler.ReconcileDelta(added: [result.path], modified: [], removed: [], renamedPairs: [])
+        _ = await indexer?.apply(delta: delta)
+        await refreshHealth()
+        await select(path: result.path)
+        NotificationCenter.default.post(name: .notesQuickCaptureDidChange, object: nil)
+        return result.path
+    }
+
+    func capturedTodayCount(now: Date = .now) -> Int {
+        quickCaptureService?.capturedTodayCount(now: now)
+            ?? NotesCaptureStatsStore(userDefaults: userDefaults).capturedCount(on: now)
     }
 
     /// Dismisses a create-note (or other catalog-mutation) failure banner.

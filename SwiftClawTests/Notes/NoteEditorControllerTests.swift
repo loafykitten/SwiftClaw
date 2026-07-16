@@ -12,9 +12,8 @@ import Testing
 /// unset in these tests (no live `NSTextView` exists here) — `currentText`
 /// is the controller's own authoritative copy either way.
 ///
-/// Serialized for the same reason as `NotesFeatureModelTests` — saves here
-/// post the shared/unscoped `.notesStoreDidChange`, which races
-/// `NotesRepositoryTests`' "no notification posted" assertions.
+/// Serialized because several cases exercise timing-sensitive controller
+/// state and repository callbacks through shared MainActor scheduling.
 @Suite(.serialized)
 @MainActor
 struct NoteEditorControllerTests {

@@ -52,6 +52,9 @@ struct WorkspaceView: View {
 
     @State private var navigationPath = NavigationPath()
     @State private var hasAppliedLaunchSelection = false
+    @State private var notesModel = NotesFeatureModel.shared
+    @State private var hasActivatedNotesModel = false
+    @State private var isShowingNotesQuickCapture = false
 
     private var visibleItems: [WorkspaceItem] {
         WorkspaceItem.allCases.filter { item in
@@ -95,10 +98,32 @@ struct WorkspaceView: View {
                         spacing: 16
                     ) {
                         ForEach(visibleItems) { item in
-                            NavigationLink(value: item) {
-                                WorkspaceWidgetPanel(item: item, emailContent: emailContent)
+                            ZStack(alignment: .topTrailing) {
+                                NavigationLink(value: item) {
+                                    WorkspaceWidgetPanel(
+                                        item: item,
+                                        emailContent: emailContent,
+                                        notesModel: notesModel
+                                    )
+                                }
+                                .buttonStyle(.plain)
+
+                                if item == .notes {
+                                    Button {
+                                        isShowingNotesQuickCapture = true
+                                    } label: {
+                                        Label("Quick Capture", systemImage: "bolt.fill")
+                                            .labelStyle(.iconOnly)
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .controlSize(.small)
+                                    .padding(12)
+                                    .disabled(notesModel.configurationState != .configured)
+                                    .help("Quick Capture to Notes")
+                                    .accessibilityLabel("Quick Capture to Notes")
+                                    .accessibilityIdentifier("workspace.notes.quickCapture")
+                                }
                             }
-                            .buttonStyle(.plain)
                         }
                     }
 
@@ -123,6 +148,23 @@ struct WorkspaceView: View {
         }
         .onChange(of: pendingReminderFocusID) { _, _ in
             prepareSelection()
+        }
+        .task(id: isNotesEnabled) {
+            if isNotesEnabled, !hasActivatedNotesModel {
+                hasActivatedNotesModel = true
+                await notesModel.activate()
+            } else if !isNotesEnabled, hasActivatedNotesModel {
+                notesModel.deactivate()
+                hasActivatedNotesModel = false
+            }
+        }
+        .onDisappear {
+            guard hasActivatedNotesModel else { return }
+            notesModel.deactivate()
+            hasActivatedNotesModel = false
+        }
+        .sheet(isPresented: $isShowingNotesQuickCapture) {
+            NotesQuickCaptureSheet(model: notesModel)
         }
     }
 
@@ -262,6 +304,7 @@ private struct WorkspaceDisabledFeaturesList: View {
 private struct WorkspaceWidgetPanel: View {
     let item: WorkspaceItem
     let emailContent: WorkspaceEmailWidgetContent
+    let notesModel: NotesFeatureModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -292,7 +335,9 @@ private struct WorkspaceWidgetPanel: View {
                 WorkspaceCalendarStatsView()
             case .reminders:
                 WorkspaceRemindersStatsView()
-            default:
+            case .notes:
+                WorkspaceNotesStatsView(model: notesModel)
+            case .memory:
                 Text("Coming soon")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -308,6 +353,81 @@ private struct WorkspaceWidgetPanel: View {
     private var accountCountLabel: String {
         let count = emailContent.completeAccountCount
         return "\(count) \(count == 1 ? "account" : "accounts")"
+    }
+}
+
+/// Notes widget body: live catalog size, the durable quick-capture count for
+/// today, and a compact health state. The shared feature model owns the only
+/// vault watcher; Workspace never creates a second repository.
+private struct WorkspaceNotesStatsView: View {
+    let model: NotesFeatureModel
+    @State private var captureVersion = 0
+
+    var body: some View {
+        Group {
+            switch model.configurationState {
+            case .unknown:
+                ProgressView("Loading Notes…")
+            case .needsOnboarding:
+                Text("Choose a vault in Notes")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            case .configured:
+                stats
+            }
+        }
+        .task(id: model.configurationState) {
+            guard model.configurationState == .configured else { return }
+            await model.refreshCatalog()
+            await model.refreshHealth()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .notesQuickCaptureDidChange)) { _ in
+            captureVersion += 1
+        }
+    }
+
+    private var stats: some View {
+        let summary = WorkspaceNotesSummary(
+            notes: model.notes,
+            capturedTodayCount: model.capturedTodayCount(),
+            healthSummary: model.healthSummary
+        )
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                GridRow(alignment: .firstTextBaseline) {
+                    WorkspaceEmailStatTile(count: summary.noteCount, label: "Notes")
+                    WorkspaceEmailStatTile(count: summary.capturedTodayCount, label: "Captured Today")
+                }
+            }
+
+            Label(healthLabel(summary.health), systemImage: healthImage(summary.health))
+                .font(.caption)
+                .foregroundStyle(
+                    summary.health == .healthy
+                        ? AnyShapeStyle(.secondary)
+                        : AnyShapeStyle(.orange)
+                )
+                .accessibilityIdentifier("workspace.notes.health")
+        }
+        .id(captureVersion)
+        .accessibilityIdentifier("workspace.notes.stats")
+    }
+
+    private func healthLabel(_ health: WorkspaceNotesSummary.Health) -> String {
+        switch health {
+        case .healthy: "Vault healthy"
+        case .warning: "Vault needs attention"
+        case .unavailable: "Health unavailable"
+        }
+    }
+
+    private func healthImage(_ health: WorkspaceNotesSummary.Health) -> String {
+        switch health {
+        case .healthy: "checkmark.circle"
+        case .warning: "exclamationmark.triangle"
+        case .unavailable: "questionmark.circle"
+        }
     }
 }
 

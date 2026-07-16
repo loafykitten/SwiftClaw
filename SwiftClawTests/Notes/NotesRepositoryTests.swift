@@ -2,10 +2,8 @@ import Foundation
 import Testing
 @testable import SwiftClaw
 
-/// Serialized: several tests assert on `NotificationCenter.default` posts of
-/// `.notesStoreDidChange`, a global/unscoped signal (matches
-/// `ReminderRepository`'s `object: nil` convention) that would otherwise
-/// cross-contaminate between concurrently-running tests in this suite.
+/// Serialized because several tests assert on repository notifications and
+/// mutate the same local observation variables within async operations.
 @Suite(.serialized)
 @MainActor
 struct NotesRepositoryTests {
@@ -36,7 +34,7 @@ struct NotesRepositoryTests {
         _ = try await vault.write(relativePath: "alpha.md", content: "a", expectedHash: nil)
 
         var notified = false
-        let observer = NotificationCenter.default.addObserver(forName: .notesStoreDidChange, object: nil, queue: nil) { _ in
+        let observer = NotificationCenter.default.addObserver(forName: .notesStoreDidChange, object: repository, queue: nil) { _ in
             notified = true
         }
         defer { NotificationCenter.default.removeObserver(observer) }
@@ -72,7 +70,7 @@ struct NotesRepositoryTests {
         _ = try await vault.write(relativePath: "note.md", content: "hello", expectedHash: nil)
 
         var notified = false
-        let observer = NotificationCenter.default.addObserver(forName: .notesStoreDidChange, object: nil, queue: nil) { _ in
+        let observer = NotificationCenter.default.addObserver(forName: .notesStoreDidChange, object: repository, queue: nil) { _ in
             notified = true
         }
         defer { NotificationCenter.default.removeObserver(observer) }
@@ -136,7 +134,7 @@ struct NotesRepositoryTests {
         defer { try? FileManager.default.removeItem(at: vaultRoot) }
 
         var notified = false
-        let observer = NotificationCenter.default.addObserver(forName: .notesStoreDidChange, object: nil, queue: nil) { _ in
+        let observer = NotificationCenter.default.addObserver(forName: .notesStoreDidChange, object: repository, queue: nil) { _ in
             notified = true
         }
         defer { NotificationCenter.default.removeObserver(observer) }

@@ -40,7 +40,7 @@ nonisolated struct NoteSummary: Identifiable, Equatable, Sendable {
 /// Sanitizes user-facing input (a requested title, an optional subfolder)
 /// into vault-safe path components. Pure and side-effect free so the
 /// collision/sanitization rules are unit-testable without a vault.
-enum NotesFilenameSanitizer {
+nonisolated enum NotesFilenameSanitizer {
     static let untitledFallback = "Untitled"
 
     /// Strips path separators and control characters, trims whitespace, and
@@ -215,7 +215,7 @@ final class NotesRepository {
 
         guard mutated else { return false }
         notes = byPath.values.sorted { $0.relativePath < $1.relativePath }
-        NotificationCenter.default.post(name: .notesStoreDidChange, object: nil)
+        NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
         return true
     }
 
@@ -247,7 +247,7 @@ final class NotesRepository {
                 case .wrote(let snapshot):
                     let summary = NoteSummary(snapshot: snapshot)
                     upsert(summary)
-                    NotificationCenter.default.post(name: .notesStoreDidChange, object: nil)
+                    NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
                     return summary
                 case .conflict:
                     continue
@@ -292,7 +292,7 @@ final class NotesRepository {
         case .created(let snapshot):
             let summary = NoteSummary(snapshot: snapshot)
             upsert(summary)
-            NotificationCenter.default.post(name: .notesStoreDidChange, object: nil)
+            NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
             return summary
         case .collision:
             throw NotesError.pathAlreadyExists(relativePath)
@@ -329,11 +329,11 @@ final class NotesRepository {
         case .wrote(let snapshot):
             let summary = NoteSummary(snapshot: snapshot)
             upsert(summary)
-            NotificationCenter.default.post(name: .notesStoreDidChange, object: nil)
+            NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
             return summary
         case .conflict(let conflictSnapshot):
             upsert(NoteSummary(snapshot: conflictSnapshot))
-            NotificationCenter.default.post(name: .notesStoreDidChange, object: nil)
+            NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
             throw NotesError.externalConflict(copyPath: conflictSnapshot.relativePath)
         }
     }
@@ -364,7 +364,7 @@ final class NotesRepository {
         let summary = NoteSummary(snapshot: renamed)
         byPath[newRelativePath] = summary
         notes = byPath.values.sorted { $0.relativePath < $1.relativePath }
-        NotificationCenter.default.post(name: .notesStoreDidChange, object: nil)
+        NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
         return summary
     }
 
@@ -387,7 +387,7 @@ final class NotesRepository {
         }
 
         notes.removeAll { $0.relativePath == relativePath }
-        NotificationCenter.default.post(name: .notesStoreDidChange, object: nil)
+        NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
     }
 
     // MARK: - Helpers
@@ -407,7 +407,11 @@ final class NotesRepository {
 extension Notification.Name {
     /// Posted after every catalog-mutating `NotesRepository` operation
     /// (create/save/rename/delete/apply-delta) so interested views/services
-    /// can reconcile without polling. Never posted by `reload()` — see its
-    /// doc comment.
+    /// can reconcile without polling. `object` is the originating repository,
+    /// allowing parallel vaults/tests to filter unrelated mutations. Never
+    /// posted by `reload()` — see its doc comment.
     static let notesStoreDidChange = Notification.Name("SwiftClaw.notesStoreDidChange")
+    /// Posted after a successful quick capture so Workspace can refresh its
+    /// durable per-day capture count even when the note catalog is unchanged.
+    static let notesQuickCaptureDidChange = Notification.Name("SwiftClaw.notesQuickCaptureDidChange")
 }

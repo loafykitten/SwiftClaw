@@ -47,6 +47,9 @@ final class AppBootstrap {
             CalendarAlertScheduler.shared.start(modelContainer: modelContainer)
             CalendarWorkflowManager.shared.start(modelContainer: modelContainer)
         }
+        if SettingsStorage.isNotesEnabled() {
+            NotesWorkflowManager.shared.start(modelContainer: modelContainer)
+        }
         Self.logger.info("App bootstrap complete")
     }
 }

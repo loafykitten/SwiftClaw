@@ -253,6 +253,8 @@ NLEmbedding unavailable.
 
 ## Phase 6 — Quick capture, daily note, Workspace tile, scheduled review
 
+**Status: Complete (2026-07-15).**
+
 - `Services/Notes/QuickCapture/NotesQuickCaptureService.swift` (@MainActor,
   mirrors `ReminderQuickEntryService`): timestamped bullet append to today's
   daily note (`YYYY-MM-DD.md` in `settings.notes.dailyNoteFolder`, minimal

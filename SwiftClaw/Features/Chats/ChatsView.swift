@@ -1212,8 +1212,7 @@ private struct ChatMessageRow: View {
                                 router.showEmail(itemID)
                             case .noteProposal, .notes, .unknown:
                                 // The card itself is the whole interaction
-                                // (Approve/Reject + inline diff) — there's
-                                // nowhere else to navigate to.
+                                // (approval diff or read-only Notes digest).
                                 break
                             }
                         },
@@ -1225,8 +1224,10 @@ private struct ChatMessageRow: View {
                                 await ReminderWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
                             case .email:
                                 await EmailWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
-                            case .noteProposal, .notes, .unknown:
-                                // No refresh action on a note-proposal card.
+                            case .notes:
+                                await NotesWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
+                            case .noteProposal, .unknown:
+                                // No refresh action on a proposal/unknown card.
                                 break
                             }
                         }

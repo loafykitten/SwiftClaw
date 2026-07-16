@@ -33,7 +33,7 @@ enum WorkspaceFeature: String, CaseIterable, Hashable, Identifiable {
         case .email: "IMAP/SMTP inbox sync and AI inbox review."
         case .calendar: "Your schedule at a glance, with month, week, day, and agenda views."
         case .reminders: "Lists, due dates, repeats, and checklists in Workspace."
-        case .notes: "Quick notes in Workspace. Coming soon."
+        case .notes: "Markdown notes, quick capture, search, and vault health."
         }
     }
 

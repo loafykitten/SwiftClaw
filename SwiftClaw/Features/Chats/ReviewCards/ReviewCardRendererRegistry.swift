@@ -52,10 +52,10 @@ struct ReviewCardRendererRegistry {
                 dispatcher: dispatcherProvider(.noteProposal) ?? AnyHashableReviewActionDispatcher(NoOpReviewActionDispatcher())
             )
         case .notes:
-            // Reserved for a future Notes vault-hygiene digest card — no
-            // producer exists yet, so this only ever renders for a payload a
-            // future build wrote and this build doesn't know how to show.
-            unsupportedCardMessage
+            NotesReviewCardRenderer(
+                payload: payload,
+                onRefreshAnalysis: onRefreshAnalysis
+            )
         case .unknown:
             unsupportedCardMessage
         }

@@ -201,6 +201,10 @@ extension SettingsKeys {
     static let notesReviewIntervalSeconds = "settings.notes.reviewInterval"
     /// App state: when the last notes review pass completed.
     static let notesLastReviewCompletedAt = "settings.notes.lastReviewCompletedAt"
+    /// App state: local calendar day + count for successful quick captures.
+    /// These keep Workspace's "Captured Today" stat honest across relaunches.
+    nonisolated static let notesQuickCaptureStatsDay = "state.notes.quickCapture.day"
+    nonisolated static let notesQuickCaptureStatsCount = "state.notes.quickCapture.count"
     /// Whether on-device `NLEmbedding` vector search runs alongside FTS
     /// (Phase 3) — degrades to FTS-only when off or unavailable.
     static let notesEmbeddingsEnabled = "settings.notes.embeddingsEnabled"

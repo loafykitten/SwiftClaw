@@ -22,11 +22,8 @@ private final class TempApplicationSupportFileManager: FileManager, @unchecked S
 /// transitions: onboarding gating, app-managed/external vault setup,
 /// vault-change `vaultID` regeneration, and reset never touching note files.
 ///
-/// Serialized: several tests here drive `NotesRepository.create`, which
-/// posts the shared/unscoped `.notesStoreDidChange` to
-/// `NotificationCenter.default` — the same global signal
-/// `NotesRepositoryTests` asserts is *not* posted in its reload tests. See
-/// that suite's own `.serialized` comment for the underlying reason.
+/// Serialized because several tests exercise the shared feature lifecycle
+/// and timing-sensitive configuration generation guards.
 @Suite(.serialized)
 @MainActor
 struct NotesFeatureModelTests {

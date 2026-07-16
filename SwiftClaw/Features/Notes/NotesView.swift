@@ -8,6 +8,7 @@ struct NotesView: View {
     @State private var searchText = ""
     @State private var isReadingMode = false
     @State private var isShowingQuickSwitcher = false
+    @State private var isShowingQuickCapture = false
     @State private var isShowingInspector = false
     @State private var isShowingHealthDetail = false
     @State private var compactActionDestination: CompactActionDestination?
@@ -52,6 +53,9 @@ struct NotesView: View {
         }
         .sheet(isPresented: $isShowingQuickSwitcher) {
             quickSwitcherSheet
+        }
+        .sheet(isPresented: $isShowingQuickCapture) {
+            NotesQuickCaptureSheet(model: model, onCaptured: handleQuickCapture)
         }
         .sheet(isPresented: $isShowingHealthDetail) {
             healthDetailSheet
@@ -156,6 +160,21 @@ struct NotesView: View {
 
     @ToolbarContentBuilder
     private var splitToolbar: some ToolbarContent {
+        #if os(macOS)
+        ToolbarItem(placement: .automatic) {
+            NotesQuickCaptureControl(model: model, onCaptured: handleQuickCapture)
+                .frame(width: 290)
+        }
+        #else
+        ToolbarItem(placement: .automatic) {
+            Button {
+                isShowingQuickCapture = true
+            } label: {
+                Label("Quick Capture", systemImage: "bolt.fill")
+            }
+            .accessibilityIdentifier("notes.quickCapture.open")
+        }
+        #endif
         if model.selectedPath != nil {
             ToolbarItem(placement: .automatic) {
                 Button {
@@ -242,6 +261,14 @@ struct NotesView: View {
             compactDetail(path: destination.path)
         }
         .toolbar {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    isShowingQuickCapture = true
+                } label: {
+                    Label("Quick Capture", systemImage: "bolt.fill")
+                }
+                .accessibilityIdentifier("notes.quickCapture.open")
+            }
             ToolbarItem(placement: .automatic) {
                 Button {
                     isShowingQuickSwitcher = true
@@ -630,6 +657,16 @@ struct NotesView: View {
             guard usesCompactNavigation, let createdPath else { return }
             compactActionDestination = CompactActionDestination(path: createdPath)
         }
+    }
+
+    private func handleQuickCapture(path: String) {
+        guard usesCompactNavigation else { return }
+        guard let destination = NotesCompactNavigation.destination(
+            for: path,
+            selectedPath: model.selectedPath,
+            currentDetailPath: compactDetailPath
+        ) else { return }
+        compactActionDestination = CompactActionDestination(path: destination)
     }
 }
 

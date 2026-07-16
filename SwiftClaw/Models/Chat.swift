@@ -124,6 +124,7 @@ extension Chat {
     static let emailReviewTitlePrefix = "Inbox review —"
     static let calendarReviewTitlePrefix = "Calendar review —"
     static let remindersReviewTitlePrefix = "Reminders review —"
+    static let notesReviewTitlePrefix = "Notes review —"
 
     /// Whether this chat was created by the email review pass. A chat *is* a
     /// review chat for its whole life — keyed off the title stamped at
@@ -142,6 +143,11 @@ extension Chat {
     /// title-prefix contract as `isEmailReviewChat`).
     var isRemindersReviewChat: Bool {
         title.hasPrefix(Self.remindersReviewTitlePrefix)
+    }
+
+    /// Whether this chat was created by the Notes vault-hygiene review pass.
+    var isNotesReviewChat: Bool {
+        title.hasPrefix(Self.notesReviewTitlePrefix)
     }
 
     func matchesSearch(_ searchText: String) -> Bool {

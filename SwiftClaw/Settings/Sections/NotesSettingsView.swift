@@ -1,13 +1,21 @@
+import SwiftData
 import SwiftUI
 
 struct NotesSettingsView: View {
+    @Environment(\.modelContext) private var modelContext
     @AppStorage(SettingsKeys.notesEnabled) private var isNotesEnabled = SettingsStorage.defaultNotesEnabled
     @AppStorage(SettingsKeys.notesEmbeddingsEnabled) private var isEmbeddingsEnabled = SettingsStorage.defaultNotesEmbeddingsEnabled
+    @AppStorage(SettingsKeys.notesReviewIntervalSeconds)
+    private var reviewIntervalSeconds = SettingsStorage.defaultNotesReviewIntervalSeconds
 
     @State private var model = NotesFeatureModel.shared
     @State private var isShowingOnboarding = false
     @State private var isShowingResetConfirmation = false
     @State private var hasActivatedModel = false
+    @State private var dailyNoteFolder = SettingsStorage.defaultNotesDailyNoteFolder
+    @State private var dailyNoteFolderError: String?
+    @State private var isReviewing = false
+    @State private var reviewStatusMessage: String?
 
     var body: some View {
         Form {
@@ -22,6 +30,8 @@ struct NotesSettingsView: View {
 
                 if model.configurationState == .configured {
                     statsSection
+                    quickCaptureSection
+                    reviewSection
                     embeddingsSection
                     healthSection
                     if !model.brokenLinks.isEmpty || model.isLoadingBrokenLinks {
@@ -49,6 +59,7 @@ struct NotesSettingsView: View {
             Task { await model.updateEmbeddingsEnabled(newValue) }
         }
         .onAppear {
+            dailyNoteFolder = SettingsStorage.loadNotesDailyNoteFolder()
             // Unlike `.task(id: model.configurationState)` above (which only
             // reruns on a state *transition*), this fires on every appearance
             // — including navigating back to this section without the vault
@@ -73,6 +84,70 @@ struct NotesSettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("SwiftClaw will forget this vault's location. Your note files are not deleted.")
+        }
+    }
+
+    @ViewBuilder
+    private var quickCaptureSection: some View {
+        Section {
+            TextField("Daily Note Folder", text: $dailyNoteFolder)
+                .onSubmit(saveDailyNoteFolder)
+                .accessibilityIdentifier("settings.notes.dailyNoteFolder")
+            Button("Save Daily Note Folder", action: saveDailyNoteFolder)
+            if let dailyNoteFolderError {
+                Text(dailyNoteFolderError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        } header: {
+            Text("Quick Capture")
+        } footer: {
+            Text("Daily captures append to YYYY-MM-DD.md in this vault-relative folder. Leave it blank to use the vault root.")
+        }
+    }
+
+    @ViewBuilder
+    private var reviewSection: some View {
+        Section {
+            Picker("Scheduled Review", selection: $reviewIntervalSeconds) {
+                Text("Manually only").tag(0)
+                Text("Every 6 hours").tag(6 * 3600)
+                Text("Every 12 hours").tag(12 * 3600)
+                Text("Daily").tag(24 * 3600)
+            }
+            .onChange(of: reviewIntervalSeconds) { _, _ in
+                NotificationCenter.default.post(
+                    name: SettingsNotifications.notesReviewScheduleDidChange,
+                    object: nil
+                )
+            }
+
+            Button {
+                runReviewNow()
+            } label: {
+                if isReviewing {
+                    HStack {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Reviewing…")
+                    }
+                } else {
+                    Text("Review Now")
+                }
+            }
+            .disabled(isReviewing || model.configurationState != .configured)
+            .accessibilityIdentifier("settings.notes.reviewNow")
+
+            if let reviewStatusMessage {
+                Text(reviewStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("settings.notes.reviewStatus")
+            }
+        } header: {
+            Text("AI Review")
+        } footer: {
+            Text("The assistant checks vault hygiene and triage: unchecked daily-note tasks, conflicts, broken links, recent notes, and index health. It never edits notes.")
         }
     }
 
@@ -190,6 +265,35 @@ struct NotesSettingsView: View {
                     }
                 }
             }
+        }
+    }
+
+    private func saveDailyNoteFolder() {
+        let trimmed = dailyNoteFolder.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            SettingsStorage.saveNotesDailyNoteFolder("")
+            dailyNoteFolder = ""
+            dailyNoteFolderError = nil
+            return
+        }
+        guard let safe = NotesFilenameSanitizer.sanitizeFolder(trimmed), safe == trimmed else {
+            dailyNoteFolderError = "Use a vault-relative folder without dot folders, empty components, or .."
+            return
+        }
+        SettingsStorage.saveNotesDailyNoteFolder(safe)
+        dailyNoteFolder = safe
+        dailyNoteFolderError = nil
+    }
+
+    private func runReviewNow() {
+        guard !isReviewing else { return }
+        isReviewing = true
+        reviewStatusMessage = nil
+        NotesWorkflowManager.shared.start(modelContainer: modelContext.container)
+        Task {
+            reviewStatusMessage = await NotesWorkflowManager.shared.reviewNow()
+                ?? "Notes review isn't available yet."
+            isReviewing = false
         }
     }
 }

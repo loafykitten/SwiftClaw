@@ -239,6 +239,11 @@ that platform; otherwise cover both where the behavior exists on both.
   of changing files immediately. Approve one proposal, reject another, and alter
   a target externally before approval; only the approved unchanged target may be
   written, while the stale proposal must explain that it was not applied.
+- **H-NOTE-010 — Notes review judgment.** With a representative disposable
+  vault, run manual and scheduled Notes reviews through a configured model.
+  Selection and summaries must stay restrained and read-only while usefully
+  surfacing unchecked daily-note work, conflict copies, broken links, recent
+  notes that need follow-up, and degraded index health.
 
 ### Settings
 
@@ -429,6 +434,10 @@ that platform; otherwise cover both where the behavior exists on both.
 - **CU-WORK-006 — Deep links.** Route prepared email/review/calendar/reminder IDs
   into the correct feature and item, including old mail beyond the first window
   and reminder list selection (a hidden-list reminder opens its editor directly).
+- **CU-WORK-007 — Notes tile and capture.** The Notes tile must show live note
+  count, Captured Today, and health without clipping on macOS or compact iOS.
+  Its Quick Capture action must append through the configured vault and update
+  both counts immediately without navigating first.
 
 ### Email
 
@@ -629,6 +638,17 @@ that platform; otherwise cover both where the behavior exists on both.
   before approval and confirm the card becomes conflicted without overwriting it.
   Repeat after switching or disconnecting the vault and confirm the old proposal
   cannot write into the new or unavailable vault.
+- **CU-NOTE-013 — Quick capture and daily notes.** From the Notes toolbar and
+  Workspace action on macOS and iOS, append several captures to today's
+  `YYYY-MM-DD.md` and create colliding standalone titles. Existing Markdown must
+  be preserved byte-for-byte outside the appended separator/bullet, filenames
+  must uniquify safely, Captured Today must roll over by local day, and a hash
+  conflict must preserve the external edit.
+- **CU-NOTE-014 — Notes review card.** In an isolated vault containing an
+  unchecked daily task, conflict copy, broken link, and recent note, Review Now
+  must create a readable `.notes` card with index health and no edit actions.
+  Sparkle refresh must replace the prior card, disable while running, and remain
+  credential-free under the DEBUG fixture on both macOS and iOS.
 
 ### Settings
 
@@ -687,3 +707,7 @@ that platform; otherwise cover both where the behavior exists on both.
   Change, Reveal, and Reset. Notes and Settings must agree on the active vault;
   Reset must disconnect without deleting files, and disabling Notes must stop
   vault activity.
+- **CU-SET-021 — Notes capture and review settings.** Daily Note Folder must
+  accept only safe vault-relative folders (blank means root), Scheduled Review
+  must persist manual/6-hour/12-hour/daily choices, and Review Now must show an
+  honest progress/result state while using the configured disposable vault.
