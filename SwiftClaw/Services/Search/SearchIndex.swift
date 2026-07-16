@@ -2,7 +2,8 @@ import Foundation
 
 /// Source-agnostic full-text + vector index. Callers identify content with
 /// `sourceType`/`sourceID` (Notes is the first adapter; email/chat indexing
-/// is a later, migration-free addition per `docs/NOTES_PLAN.md`) — this type
+/// is a later, migration-free addition per `docs/features/NOTES.md`
+/// cross-feature follow-up #2) — this type
 /// imports nothing feature-specific.
 ///
 /// An **actor** over a single `SQLiteDatabase` connection; schema

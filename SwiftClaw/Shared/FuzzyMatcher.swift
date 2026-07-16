@@ -2,8 +2,8 @@ import Foundation
 
 /// A reusable, case-insensitive subsequence matcher for quick-switcher-style
 /// UI (Notes' switcher is the first caller; a follow-up app-global Cmd-K
-/// switcher can reuse it unchanged per `docs/NOTES_PLAN.md` cross-feature
-/// #4). Pure and dependency-free.
+/// switcher can reuse it unchanged per `docs/features/NOTES.md` cross-feature
+/// follow-up #4). Pure and dependency-free.
 enum FuzzyMatcher {
     struct Match: Sendable, Equatable {
         let score: Double

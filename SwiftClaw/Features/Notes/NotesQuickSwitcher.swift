@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Fuzzy-ranked, keyboard-friendly quick switcher for jumping straight to a
-/// note by title. Scoped to Notes for v1 (per `docs/NOTES_PLAN.md`
-/// cross-feature #4, a follow-up app-global Cmd-K switcher can reuse
+/// note by title. Scoped to Notes for v1 (per `docs/features/NOTES.md`
+/// cross-feature follow-up #4, an app-global Cmd-K switcher can reuse
 /// `FuzzyMatcher` unchanged) — this view only ever touches
 /// `NotesFeatureModel`. Presented as a sheet from `NotesView`, opened with
 /// `Cmd-O`.

@@ -4,7 +4,7 @@ import Testing
 
 /// Focused non-UI coverage for `NoteEditorController`'s state transitions
 /// and the autosave/conflict/reconcile invariants called out in
-/// `docs/NOTES_PLAN.md` Phase 2: the editor must retain the hash of the
+/// `docs/features/NOTES.md` §Editing and reading: the editor must retain the hash of the
 /// content it actually loaded, never let a reconcile-triggered reload
 /// clobber that hash while dirty, never silently drop content on an
 /// external-conflict save, and present exactly the Keep Mine/Take Theirs

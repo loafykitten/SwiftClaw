@@ -4,7 +4,7 @@ import Foundation
 /// A single content snapshot captured before a mutation. Content-agnostic —
 /// the store never parses or interprets `content`, so this type (and
 /// `NoteRevisionStore` itself) is reusable outside Notes later (e.g.
-/// email-draft history, per `docs/NOTES_PLAN.md` cross-feature #6).
+/// email-draft history, per `docs/features/NOTES.md` cross-feature follow-up #6).
 struct NoteRevision: Sendable, Equatable, Identifiable {
     /// Stable, filesystem-safe identifier (embeds the capture time, so
     /// listings sort chronologically by `id` alone).

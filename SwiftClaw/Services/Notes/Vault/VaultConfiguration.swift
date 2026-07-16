@@ -52,7 +52,7 @@ final class VaultConfigurationStore {
     }
 
     /// Resolves the app-managed vault root: the iCloud ubiquity container
-    /// (the dormant sync seam — see `docs/NOTES_PLAN.md` §Dormant sync) when
+    /// (the dormant sync seam — see `docs/features/NOTES.md` §Dormant sync) when
     /// the app is entitled for iCloud services *and* a container URL is
     /// actually available, else `Application Support/SwiftClaw/Notes/Vault`.
     /// Entitlement alone isn't enough to pick the ubiquity path — iCloud can

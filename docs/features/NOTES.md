@@ -96,7 +96,7 @@ link graph are rebuildable caches, never a second source of truth.
 The list supports title search and hybrid content results. Command-O opens the
 fuzzy quick switcher; keyboard focus, Up/Down selection, Return, and Escape are
 all supported. The backlinks inspector and wikilink completion remain
-Notes-scoped in v1.
+Notes-scoped in v1 (see the cross-feature follow-ups below).
 
 ## AI tools and proposal approval
 
@@ -157,3 +157,35 @@ links, tools/proposals, quick capture, review, and Workspace summaries. The
 stable human and Computer Use flows live in
 `docs/testing/USER_FACING_TESTS.md`; all UI passes use the hardened temporary
 fixture identity and never a real vault.
+
+## Remaining work and deferred items
+
+Deferred from v1: wikilink rename back-propagation (corruption risk; health
+surfaces broken links instead), a graph view, a CJK trigram FTS table,
+NLContextualEmbedding, tag-editing UI, a rich revision-history browser, the
+app-global switcher, and editor attachment embedding.
+
+Watch items:
+
+- The macOS title bar shows a double back-chevron while Notes is open. This is
+  app-shell navigation (Workspace's NavigationStack plus the custom history
+  controls in `ContentView`), not Notes — fix it there.
+- `CenteredMeasureScrollView.layout()` guards `textContainerInset` against
+  redundant sets because an unconditional set invalidates layout and can spin.
+  One ~75%-CPU editor hang was observed before the guard and never fully
+  attributed; if it recurs, profile the editor layout path first.
+
+Cross-feature follow-ups — the seams are designed in, migrations are separate
+work:
+
+1. **Approval gate** — the generic approve/reject tokens, shared `DiffEngine`
+   plus diff subview, and the coordinator-queue pattern can back email-draft
+   and calendar-edit proposals.
+2. **Hybrid index** — `Services/Search` takes no Notes types; email and
+   chat-history adapters would enable an app-wide semantic recall tool.
+3. **Markdown engine** — swap the Chats transcript renderer onto the shared
+   `Services/Markdown` stack to gain lists, tables, and code blocks.
+4. **FuzzyMatcher** (`Shared/`) — an app-global Cmd-K switcher can reuse it
+   unchanged.
+5. **File utilities** (`Services/Files/`) — import/export and watched folders.
+6. **Revision store** — content-agnostic; can hold email-draft history.

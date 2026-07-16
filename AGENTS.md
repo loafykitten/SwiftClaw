@@ -18,8 +18,8 @@ this file to stay scannable:
   → `docs/features/CALENDAR.md`
 - **The Reminders subsystem** (roll-forward recurrence, quick entry, import/export, due-date alerts, review loop, calendar chips)
   → `docs/features/REMINDERS.md`
-- **The Notes subsystem and remaining implementation phases**
-  → `docs/NOTES_PLAN.md`
+- **The Notes subsystem** (vault safety, editor, hybrid search, AI tools & proposals, quick capture, revisions, deferred items)
+  → `docs/features/NOTES.md`
 - **End-of-feature/phase user-facing test catalog**
   → `docs/testing/USER_FACING_TESTS.md`
 - **Headless iOS-simulator UI verification** (idb taps, screenshots, Xcode 27 setup)
