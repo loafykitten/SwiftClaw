@@ -62,7 +62,9 @@ editable text visible.
 characters are unchanged. It styles paragraphs incrementally, widening after a
 fence-state change. Syntax styling is capped above 1 MiB of UTF-8 content so a
 large note remains responsive and editable; normal base text styling remains.
-iOS uses the lossless SwiftUI `TextEditor` fallback.
+The styled-source editor is macOS-only and uses `NSTextView` with an
+`NSTextStorageDelegate`. By design in v1, iOS uses a plain-text SwiftUI
+`TextEditor` fallback without source styling or syntax highlighting.
 
 Reading mode uses the shared `Services/Markdown` parser/renderer for headings,
 lists, tables, code, callouts, wikilinks, and relative images. Front matter is

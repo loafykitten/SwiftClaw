@@ -82,6 +82,14 @@ actor SearchIndex {
         let document: Document
         let chunk: Chunk
         let rank: Double
+        let snippet: String?
+
+        init(document: Document, chunk: Chunk, rank: Double, snippet: String? = nil) {
+            self.document = document
+            self.chunk = chunk
+            self.rank = rank
+            self.snippet = snippet
+        }
     }
 
     struct VectorHit: Sendable, Equatable {
@@ -96,6 +104,11 @@ actor SearchIndex {
     }
 
     private static let schemaVersion: Int32 = 1
+
+    /// Apple English sentence embeddings measured 0.613 for a direct
+    /// paraphrase and about 0.16 for unrelated sentences in local calibration.
+    /// A 0.50 floor keeps the strong paraphrase while removing the far tail.
+    static let defaultMinimumCosineSimilarity = 0.50
 
     private let database: SQLiteDatabase
     /// Test-only seam: production callers never set this. Real FTS5
@@ -205,6 +218,7 @@ actor SearchIndex {
             """
             SELECT c.id, c.document_id, c.ordinal, c.heading_path, c.byte_start, c.byte_end, c.content,
                    d.id, d.source_type, d.source_id, d.title, d.uri, d.content_hash, d.updated_at,
+                   snippet(chunks_fts, -1, '', '', '…', 32) AS snippet,
                    bm25(chunks_fts) AS rank
             FROM chunks_fts
             JOIN chunks c ON c.id = chunks_fts.rowid
@@ -222,7 +236,12 @@ actor SearchIndex {
     /// best match first. Rows whose stored `dim` doesn't match
     /// `queryVector.count` are skipped rather than treated as an error, so a
     /// stale embedding from a retired model can't crash a search.
-    func vectorSearch(queryVector: [Float], modelID: String, limit: Int = 20) async throws -> [VectorHit] {
+    func vectorSearch(
+        queryVector: [Float],
+        modelID: String,
+        limit: Int = 20,
+        minimumSimilarity: Double = defaultMinimumCosineSimilarity
+    ) async throws -> [VectorHit] {
         try await ensureSchema()
         guard !queryVector.isEmpty else { return [] }
         let rows = try await database.query(
@@ -240,6 +259,7 @@ actor SearchIndex {
         var scored: [(hit: VectorHit, similarity: Double)] = []
         for row in rows {
             guard let scoredHit = try Self.decodeVectorHit(row, queryVector: queryVector) else { continue }
+            guard scoredHit.similarity >= minimumSimilarity else { continue }
             scored.append((scoredHit, scoredHit.similarity))
         }
         scored.sort { lhs, rhs in
@@ -442,12 +462,13 @@ actor SearchIndex {
     }
 
     private static func decodeFTSHit(_ row: [SQLiteValue]) throws -> FTSHit {
-        guard row.count == 15,
+        guard row.count == 16,
               let chunkID = int64(row[0]), let documentID = int64(row[1]), let ordinal = int64(row[2]),
               let headingPath = string(row[3]), let byteStart = int64(row[4]), let byteEnd = int64(row[5]),
               let content = string(row[6]), let docID = int64(row[7]), let sourceType = string(row[8]),
               let sourceID = string(row[9]), let title = string(row[10]), let uri = string(row[11]),
-              let contentHash = string(row[12]), let updatedAt = double(row[13]), let rank = double(row[14])
+              let contentHash = string(row[12]), let updatedAt = double(row[13]), let snippet = string(row[14]),
+              let rank = double(row[15])
         else {
             throw IndexError.malformedRow
         }
@@ -459,7 +480,7 @@ actor SearchIndex {
             id: docID, sourceType: sourceType, sourceID: sourceID, title: title, uri: uri,
             contentHash: contentHash, updatedAt: Date(timeIntervalSince1970: updatedAt)
         )
-        return FTSHit(document: document, chunk: chunk, rank: rank)
+        return FTSHit(document: document, chunk: chunk, rank: rank, snippet: snippet)
     }
 
     private static func decodeVectorHit(_ row: [SQLiteValue], queryVector: [Float]) throws -> VectorHit? {

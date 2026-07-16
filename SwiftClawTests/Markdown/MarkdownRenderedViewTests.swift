@@ -77,4 +77,19 @@ struct MarkdownRenderedViewTests {
         #expect(MarkdownListView.marker(checkbox: .checked, ordered: false, startIndex: 1, index: 0) == "☑")
         #expect(MarkdownListView.marker(checkbox: .unchecked, ordered: true, startIndex: 3, index: 0) == "☐")
     }
+
+    @Test func headingLevelsMapToVoiceOverHeadingLevels() {
+        #expect(MarkdownBlockView.accessibilityHeadingLevel(for: 1) == .h1)
+        #expect(MarkdownBlockView.accessibilityHeadingLevel(for: 2) == .h2)
+        #expect(MarkdownBlockView.accessibilityHeadingLevel(for: 3) == .h3)
+        #expect(MarkdownBlockView.accessibilityHeadingLevel(for: 4) == .h4)
+        #expect(MarkdownBlockView.accessibilityHeadingLevel(for: 5) == .h5)
+        #expect(MarkdownBlockView.accessibilityHeadingLevel(for: 6) == .h6)
+    }
+
+    @Test func checkboxMarkersHaveSpokenTaskStateLabels() {
+        #expect(MarkdownListView.taskAccessibilityLabel(checkbox: .checked) == "Completed task")
+        #expect(MarkdownListView.taskAccessibilityLabel(checkbox: .unchecked) == "Incomplete task")
+        #expect(MarkdownListView.taskAccessibilityLabel(checkbox: nil) == nil)
+    }
 }

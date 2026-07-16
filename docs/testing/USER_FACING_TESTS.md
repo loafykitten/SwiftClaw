@@ -588,12 +588,14 @@ that platform; otherwise cover both where the behavior exists on both.
 
 - **CU-NOTE-001 — Onboarding and vault choice.** Reset first-open state and cover
   app-managed vault creation, choosing a prepared external folder, cancellation,
-  Not Now, and completion persistence. No vault work should run before Notes is
-  enabled and configured.
+  Not Now, and completion persistence. On iOS, Choose an Existing Folder must
+  present the system folder picker and cancel cleanly. No vault work should run
+  before Notes is enabled and configured.
 - **CU-NOTE-002 — Create, edit, autosave, and search.** Create several notes,
   type distinctive content, wait for idle autosave, switch selections, relaunch,
-  and confirm content persists. New filenames must be safe and unique; title
-  search and empty states must track the visible list. Creation through equivalent
+  and confirm content persists. New filenames must be safe and unique; the list
+  must sort in Finder-like natural order (case-insensitive, numeric-aware);
+  title search and empty states must track the visible list. Creation through equivalent
   `/tmp` and `/private/tmp` external-vault paths must work; a real creation failure
   must show a dismissible error instead of silently doing nothing.
 - **CU-NOTE-003 — External catalog refresh.** With a prepared disposable vault,
@@ -611,7 +613,8 @@ that platform; otherwise cover both where the behavior exists on both.
   sizes, resize the Notes list/detail split and inspect screenshots as well as
   accessibility state. The selected note text must keep normal leading padding;
   the list, editor, New Note, and Search notes must remain visible without
-  clipping or overlap.
+  clipping or overlap. At wide window sizes the macOS editor caps its text
+  measure near 72 characters and centers it rather than growing unreadably wide.
 - **CU-NOTE-006 — Styled-source losslessness.** Type and edit headings, emphasis,
   lists with a non-1 start, links, wikilinks, fenced code, callouts, tables, front
   matter, and image syntax. Source styling must never alter characters; switching
@@ -626,14 +629,26 @@ that platform; otherwise cover both where the behavior exists on both.
 - **CU-NOTE-008 — Indexed search.** In a disposable vault, verify initial and
   incremental indexing, exact and punctuation-heavy queries, heading/snippet
   presentation, result navigation, no-result state, and FTS-only behavior with
-  embeddings disabled. Inspect screenshots and accessibility state together.
+  embeddings disabled. Snippets must be single-line context around the match
+  (not the chunk's opening heading), and semantic results must exclude notes
+  unrelated to the query (similarity floor) instead of listing most of the
+  vault. Inspect screenshots and accessibility state together.
 - **CU-NOTE-009 — Quick switcher and backlinks.** Exercise Command-O ranking,
   keyboard dismissal and selection, then open the backlinks inspector for linked,
   unlinked, and multiply-linked notes. Resizing must not clip either surface.
+  Switcher and list rows show a path caption only when it adds information
+  beyond the title. On iOS the backlinks sheet must offer a Done button (plus
+  drag-to-dismiss) and dismiss back to the editor.
 - **CU-NOTE-010 — Wikilink completion and health.** Type `[[` and narrow, accept,
-  and dismiss suggestions; then create a broken link and conflict copy, inspect
-  the health banner and Settings details, rebuild, and verify the visible state
-  recovers without disturbing the current edit.
+  and dismiss suggestions. On macOS the popup must appear adjacent to the caret
+  (flipping above when there is no room below) and support full keyboard use:
+  Up/Down move the highlighted row, Return/Tab accept it, Escape dismisses
+  without inserting. Then create a broken link and conflict copy, inspect the
+  health banner and Settings details (broken-link rows show a navigation
+  chevron), rebuild, and verify the visible state recovers without disturbing
+  the current edit. *(Caution: synthetic AX-injected input cannot drive the
+  keyboard path — see `docs/testing/SIMULATOR_UI_VERIFICATION.md` caveats;
+  use real key events or the hosted integration tests.)*
 - **CU-NOTE-011 — AI read-tool listing and gating.** With Notes enabled and a
   disposable indexed vault, Search Notes and Read Note must show Ready in Tools
   without per-tool switches. While remaining on Tools, disable Notes and confirm
@@ -648,13 +663,17 @@ that platform; otherwise cover both where the behavior exists on both.
   files untouched, and approval must apply exactly once. Change an edit target
   before approval and confirm the card becomes conflicted without overwriting it.
   Repeat after switching or disconnecting the vault and confirm the old proposal
-  cannot write into the new or unavailable vault.
+  cannot write into the new or unavailable vault. Diff line text must render in
+  primary label color (only markers and backgrounds tinted), and with Increase
+  Contrast enabled the added/removed backgrounds become opaque.
 - **CU-NOTE-013 — Quick capture and daily notes.** From the Notes toolbar and
   Workspace action on macOS and iOS, append several captures to today's
-  `YYYY-MM-DD.md` and create colliding standalone titles. Existing Markdown must
-  be preserved byte-for-byte outside the appended separator/bullet, filenames
-  must uniquify safely, Captured Today must roll over by local day, and a hash
-  conflict must preserve the external edit.
+  `YYYY-MM-DD.md` and create colliding standalone titles. The destination menu
+  must show a checkmark on the current choice, and the iOS sheet must be
+  top-aligned with a labeled Save button. Existing Markdown must be preserved
+  byte-for-byte outside the appended separator/bullet, filenames must uniquify
+  safely, Captured Today must roll over by local day, and a hash conflict must
+  preserve the external edit.
 - **CU-NOTE-014 — Notes review card.** In an isolated vault containing an
   unchecked daily task, conflict copy, broken link, and recent note, Review Now
   must create a readable `.notes` card with index health and no edit actions.
@@ -667,12 +686,17 @@ that platform; otherwise cover both where the behavior exists on both.
   Return, and dismiss with Escape. On iOS, verify the TextEditor fallback keeps
   the same readable label and lossless content behavior. Proposal diffs must
   speak added, removed, unchanged, and blank lines without relying on color or
-  `+`/`-` punctuation.
+  `+`/`-` punctuation. In reading mode, headings must expose their level as
+  accessibility headings and task checkboxes must read as Completed/Incomplete
+  task rather than raw glyphs. Vault banners (conflict, save error, health)
+  must expose each action — Keep Mine, Take Theirs, Dismiss, Choose a Vault —
+  as an individually focusable control with a self-explanatory label.
 - **CU-NOTE-016 — Revisions sheet and restore copy.** In the hardened temporary
   fixture on macOS and iOS, open Revisions for a note with history and for one
   without it. Verify newest-first dates, short previews, empty/loading/error
   states, accessible Restore/Close controls, and disabled duplicate activation
-  while restoring. Restore a revision and confirm the success path names one
+  while restoring. Previews must show note content, skipping front matter, so
+  cards are distinguishable. Restore a revision and confirm the success path names one
   new conflict copy containing the historical content while the live note stays
   unchanged. Close the sheet and confirm the copy is visible and searchable.
 
@@ -730,9 +754,9 @@ that platform; otherwise cover both where the behavior exists on both.
   disable hides the feature-backed section safely.
 - **CU-SET-020 — Notes settings.** Enabling Notes reveals vault location,
   resolved path, note count, semantic-search and index-health controls, plus
-  Change, Reveal, and Reset. Notes and Settings must agree on the active vault;
-  Reset must disconnect without deleting files, and disabling Notes must stop
-  vault activity.
+  Change and Reset (Reveal in Finder is macOS-only and must not appear on iOS).
+  Notes and Settings must agree on the active vault; Reset must disconnect
+  without deleting files, and disabling Notes must stop vault activity.
 - **CU-SET-021 — Notes capture and review settings.** Daily Note Folder must
   accept only safe vault-relative folders (blank means root), Scheduled Review
   must persist manual/6-hour/12-hour/daily choices, and Review Now must show an

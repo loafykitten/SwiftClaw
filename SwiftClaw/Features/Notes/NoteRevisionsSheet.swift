@@ -162,8 +162,12 @@ struct NoteRevisionsSheet: View {
         }
     }
 
-    private static func preview(for content: String) -> String {
-        let normalized = content.trimmingCharacters(in: .whitespacesAndNewlines)
+    static func preview(for content: String) -> String {
+        var previewContent = content
+        if let frontMatter = FrontMatterBlock(source: content) {
+            previewContent = String(content[frontMatter.range.upperBound...])
+        }
+        let normalized = previewContent.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { return "Empty note" }
         let prefix = String(normalized.prefix(240))
         return prefix.count == normalized.count ? prefix : prefix + "…"

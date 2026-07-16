@@ -11,6 +11,10 @@ nonisolated struct NoteSummary: Identifiable, Equatable, Sendable {
     let sha256: String
     let modifiedAt: Date
 
+    var hasRedundantRootPathCaption: Bool {
+        relativePath == "\(title).md"
+    }
+
     init(relativePath: String, title: String, sha256: String, modifiedAt: Date) {
         self.relativePath = relativePath
         self.title = title
@@ -165,7 +169,7 @@ final class NotesRepository {
             }
         }
 
-        notes = summaries.sorted { $0.relativePath < $1.relativePath }
+        notes = summaries.sorted(by: Self.catalogOrder)
         if unreadableCount > 0 {
             lastError = .partialLoadFailure(count: unreadableCount)
         }
@@ -214,7 +218,7 @@ final class NotesRepository {
         }
 
         guard mutated else { return false }
-        notes = byPath.values.sorted { $0.relativePath < $1.relativePath }
+        notes = byPath.values.sorted(by: Self.catalogOrder)
         NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
         return true
     }
@@ -410,7 +414,7 @@ final class NotesRepository {
         byPath.removeValue(forKey: relativePath)
         let summary = NoteSummary(snapshot: renamed)
         byPath[newRelativePath] = summary
-        notes = byPath.values.sorted { $0.relativePath < $1.relativePath }
+        notes = byPath.values.sorted(by: Self.catalogOrder)
         NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
         return summary
     }
@@ -442,7 +446,11 @@ final class NotesRepository {
     private func upsert(_ summary: NoteSummary) {
         var byPath = Dictionary(uniqueKeysWithValues: notes.map { ($0.relativePath, $0) })
         byPath[summary.relativePath] = summary
-        notes = byPath.values.sorted { $0.relativePath < $1.relativePath }
+        notes = byPath.values.sorted(by: Self.catalogOrder)
+    }
+
+    private static func catalogOrder(_ lhs: NoteSummary, _ rhs: NoteSummary) -> Bool {
+        lhs.relativePath.localizedStandardCompare(rhs.relativePath) == .orderedAscending
     }
 
     private static func isFileNotFound(_ error: NotesVault.VaultError) -> Bool {

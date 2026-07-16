@@ -2,6 +2,15 @@ import Foundation
 import Testing
 @testable import SwiftClaw
 
+private nonisolated struct HybridSearchStubEmbeddingProvider: TextEmbeddingProvider {
+    let modelID = "hybrid-search-stub"
+    let vector: [Float]?
+
+    func embed(_: String) async -> [Float]? {
+        vector
+    }
+}
+
 struct HybridSearcherTests {
     private func makeDocument(id: Int64) -> SearchIndex.Document {
         SearchIndex.Document(
@@ -81,5 +90,72 @@ struct HybridSearcherTests {
     @Test func snippetLeavesShortContentUnchanged() {
         let snippet = HybridSearcher.snippet(from: "short", maxLength: 50)
         #expect(snippet == "short")
+    }
+
+    @Test func vectorFallbackSnippetSkipsFrontMatterAndHeadings() {
+        let content = """
+        ---
+        tags: [search]
+        ---
+        # Heading
+
+        First useful content line.
+        Second content line.
+        """
+
+        #expect(HybridSearcher.snippet(from: content) == "First useful content line.")
+    }
+
+    @Test func ftsHitSnippetIsCarriedIntoTheFusedResult() {
+        let document = makeDocument(id: 1)
+        let chunk = makeChunk(id: 10, documentID: 1, content: "A raw prefix without the match")
+        let ftsHits = [
+            SearchIndex.FTSHit(
+                document: document, chunk: chunk, rank: 0,
+                snippet: "Context around the needle match."
+            ),
+        ]
+
+        let fused = HybridSearcher.fuse(ftsHits: ftsHits, vectorHits: [])
+        #expect(fused.first?.snippet == "Context around the needle match.")
+    }
+
+    @Test func fusedSnippetsAreFlattenedToASingleLine() {
+        let document = makeDocument(id: 1)
+        let chunk = makeChunk(id: 10, documentID: 1, content: "unused")
+        let ftsHits = [
+            SearchIndex.FTSHit(
+                document: document, chunk: chunk, rank: 0,
+                snippet: "## Tasks\n- [x] Ship cards\n\nNever rewrite the invariant."
+            ),
+        ]
+
+        let fused = HybridSearcher.fuse(ftsHits: ftsHits, vectorHits: [])
+        #expect(fused.first?.snippet == "## Tasks - [x] Ship cards Never rewrite the invariant.")
+    }
+
+    @Test func ftsResultsRemainWhenVectorSearchHasNoHitAboveTheFloor() async throws {
+        let index = try SearchIndex(path: ":memory:")
+        let document = SearchIndex.DocumentInput(
+            sourceType: "note", sourceID: "fts-only", title: "FTS only",
+            uri: "file:///fts-only.md", contentHash: "hash", updatedAt: .distantPast
+        )
+        let content = "The needle appears in this sentence."
+        let documentID = try await index.upsert(
+            document: document,
+            chunks: [.init(ordinal: 0, headingPath: "", byteStart: 0, byteEnd: content.utf8.count, content: content)]
+        )
+        let chunk = try #require(try await index.chunks(forDocumentID: documentID).first)
+        try await index.upsertEmbedding(
+            chunkID: chunk.id, modelID: "hybrid-search-stub", vector: [0, 1]
+        )
+        let searcher = HybridSearcher(
+            searchIndex: index,
+            embeddingProvider: HybridSearchStubEmbeddingProvider(vector: [1, 0])
+        )
+
+        let hits = try await searcher.search(query: "needle")
+        #expect(hits.map(\.chunk.id) == [chunk.id])
+        #expect(hits.first?.snippet.localizedCaseInsensitiveContains("needle") == true)
     }
 }

@@ -110,6 +110,15 @@ final class NoteEditorController {
 
     private(set) var wikilinkTrigger: WikilinkCompletion.Trigger?
     private(set) var wikilinkCandidates: [WikilinkCompletion.Candidate] = []
+    private(set) var selectedWikilinkCandidateIndex: Int?
+    private(set) var wikilinkAnchorRect: CGRect?
+
+    var selectedWikilinkCandidate: WikilinkCompletion.Candidate? {
+        guard let selectedWikilinkCandidateIndex,
+              wikilinkCandidates.indices.contains(selectedWikilinkCandidateIndex)
+        else { return nil }
+        return wikilinkCandidates[selectedWikilinkCandidateIndex]
+    }
 
     /// Wired up by the view layer to perform the actual text replacement a
     /// chosen completion needs — on macOS, `NSTextView.insertText(_:
@@ -573,14 +582,32 @@ final class NoteEditorController {
             return
         }
         wikilinkTrigger = trigger
-        wikilinkCandidates = WikilinkCompletion.rankedCandidates(
+        let candidates = WikilinkCompletion.rankedCandidates(
             query: trigger.query, notes: candidateNotes, excluding: selectedPath
         )
+        if candidates != wikilinkCandidates {
+            selectedWikilinkCandidateIndex = WikilinkCompletionSelection.reset(candidateCount: candidates.count)
+        }
+        wikilinkCandidates = candidates
     }
 
     func dismissWikilinkCompletion() {
         wikilinkTrigger = nil
         wikilinkCandidates = []
+        selectedWikilinkCandidateIndex = nil
+        wikilinkAnchorRect = nil
+    }
+
+    func moveWikilinkCompletionSelection(_ direction: WikilinkCompletionSelection.Direction) {
+        selectedWikilinkCandidateIndex = WikilinkCompletionSelection.move(
+            direction,
+            from: selectedWikilinkCandidateIndex,
+            candidateCount: wikilinkCandidates.count
+        )
+    }
+
+    func updateWikilinkAnchorRect(_ rect: CGRect?) {
+        wikilinkAnchorRect = rect
     }
 
     /// Resolves the pending trigger against a chosen candidate, returning the
@@ -813,5 +840,30 @@ final class NoteEditorController {
     private func clearConflictBanner() {
         conflictBanner = nil
         conflictBannerContent = nil
+    }
+}
+
+/// Pure, bounded selection policy for wikilink completion keyboard handling.
+/// Keeping indices out of the view makes result changes and empty lists safe.
+enum WikilinkCompletionSelection {
+    enum Direction {
+        case up
+        case down
+    }
+
+    static func reset(candidateCount: Int) -> Int? {
+        candidateCount > 0 ? 0 : nil
+    }
+
+    static func move(_ direction: Direction, from selectedIndex: Int?, candidateCount: Int) -> Int? {
+        guard candidateCount > 0 else { return nil }
+        guard let selectedIndex, (0..<candidateCount).contains(selectedIndex) else { return 0 }
+
+        switch direction {
+        case .up:
+            return max(0, selectedIndex - 1)
+        case .down:
+            return min(candidateCount - 1, selectedIndex + 1)
+        }
     }
 }

@@ -240,6 +240,8 @@ struct NoteProposalCardRenderer: View {
 /// explicit accessible labels ("Line added"/"Line removed") — the +/- marker
 /// glyph and color aren't otherwise conveyed to VoiceOver.
 private struct NoteProposalDiffView: View {
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+
     let lines: [DiffLine]
 
     var body: some View {
@@ -268,7 +270,7 @@ private struct NoteProposalDiffView: View {
                 .foregroundStyle(color(for: line.kind))
             Text(line.content.isEmpty ? " " : line.content)
                 .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(color(for: line.kind))
+                .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 4)
@@ -289,16 +291,16 @@ private struct NoteProposalDiffView: View {
     private func color(for kind: DiffLine.Kind) -> Color {
         switch kind {
         case .unchanged: .secondary
-        case .added: .green
-        case .removed: .red
+        case .added: colorSchemeContrast == .increased ? .primary : .green
+        case .removed: colorSchemeContrast == .increased ? .primary : .red
         }
     }
 
     private func background(for kind: DiffLine.Kind) -> Color {
         switch kind {
         case .unchanged: .clear
-        case .added: Color.green.opacity(0.12)
-        case .removed: Color.red.opacity(0.12)
+        case .added: Color.green.opacity(colorSchemeContrast == .increased ? 1 : 0.18)
+        case .removed: Color.red.opacity(colorSchemeContrast == .increased ? 1 : 0.18)
         }
     }
 }

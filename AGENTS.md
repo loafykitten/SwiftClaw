@@ -22,6 +22,8 @@ this file to stay scannable:
   → `docs/NOTES_PLAN.md`
 - **End-of-feature/phase user-facing test catalog**
   → `docs/testing/USER_FACING_TESTS.md`
+- **Headless iOS-simulator UI verification** (idb taps, screenshots, Xcode 27 setup)
+  → `docs/testing/SIMULATOR_UI_VERIFICATION.md`
 
 `docs/testing/USER_FACING_TESTS.md` is an end-of-feature/phase inventory, not
 implementation guidance. Only open or update it at those checkpoints.
@@ -53,6 +55,7 @@ Small tasks and bug fixes must be handled as normal work, not deferred.
 `swiftformat` - format Swift — `swiftformat --lint .` to check only
 `swiftlint` - lint Swift for style/correctness
 `shellcheck` - validate shell scripts before running
+`idb` / `idb_companion` - tap & inspect the booted iOS simulator headlessly — setup and caveats in `docs/testing/SIMULATOR_UI_VERIFICATION.md`
 `node` - run JavaScript tooling and skill helpers (`node --version`)
 `opencode` - alternate model runner and independent review CLI (`opencode models neuralwatt`)
 

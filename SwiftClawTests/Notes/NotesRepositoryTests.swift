@@ -31,6 +31,8 @@ struct NotesRepositoryTests {
 
         let vault = NotesVault(root: vaultRoot)
         _ = try await vault.write(relativePath: "zebra.md", content: "z", expectedHash: nil)
+        _ = try await vault.write(relativePath: "Note 10.md", content: "ten", expectedHash: nil)
+        _ = try await vault.write(relativePath: "Note 2.md", content: "two", expectedHash: nil)
         _ = try await vault.write(relativePath: "alpha.md", content: "a", expectedHash: nil)
 
         let notified = LockedValue(false)
@@ -41,7 +43,7 @@ struct NotesRepositoryTests {
 
         await repository.reload()
 
-        #expect(repository.notes.map(\.relativePath) == ["alpha.md", "zebra.md"])
+        #expect(repository.notes.map(\.relativePath) == ["alpha.md", "Note 2.md", "Note 10.md", "zebra.md"])
         #expect(repository.lastError == nil)
         #expect(!notified.value)
     }

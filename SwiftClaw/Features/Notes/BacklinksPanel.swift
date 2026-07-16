@@ -10,18 +10,32 @@ struct BacklinksPanel: View {
     /// Compact Notes supplies this so choosing a backlink can push the new
     /// detail view. The regular layouts keep their selection-driven columns.
     let onSelectPath: ((String) -> Void)?
+    /// iOS inspectors can adapt to a sheet, where a visible close control is
+    /// needed. The macOS trailing pane leaves this nil.
+    let onDismiss: (() -> Void)?
 
-    init(model: NotesFeatureModel, onSelectPath: ((String) -> Void)? = nil) {
+    init(
+        model: NotesFeatureModel,
+        onSelectPath: ((String) -> Void)? = nil,
+        onDismiss: (() -> Void)? = nil
+    ) {
         self.model = model
         self.onSelectPath = onSelectPath
+        self.onDismiss = onDismiss
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("Backlinks")
-                .font(.headline)
-                .padding([.horizontal, .top], 12)
-                .padding(.bottom, 8)
+            HStack {
+                Text("Backlinks")
+                    .font(.headline)
+                Spacer()
+                if let onDismiss {
+                    Button("Done", action: onDismiss)
+                }
+            }
+            .padding([.horizontal, .top], 12)
+            .padding(.bottom, 8)
 
             Divider()
 

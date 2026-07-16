@@ -21,16 +21,13 @@ struct NotesQuickCaptureControl: View {
                 .accessibilityIdentifier("notes.quickCapture.text")
 
             Menu {
-                Button {
-                    destination = .dailyNote
-                } label: {
-                    Label("Today's Daily Note", systemImage: destination == .dailyNote ? "checkmark" : "calendar")
+                Picker("Destination", selection: $destination) {
+                    Label("Today's Daily Note", systemImage: "calendar")
+                        .tag(NotesQuickCaptureService.Destination.dailyNote)
+                    Label("Standalone Note", systemImage: "note.text")
+                        .tag(NotesQuickCaptureService.Destination.standaloneNote)
                 }
-                Button {
-                    destination = .standaloneNote
-                } label: {
-                    Label("Standalone Note", systemImage: destination == .standaloneNote ? "checkmark" : "note.text")
-                }
+                .pickerStyle(.inline)
             } label: {
                 Image(systemName: destination == .dailyNote ? "calendar" : "note.text")
             }
@@ -39,18 +36,11 @@ struct NotesQuickCaptureControl: View {
             .accessibilityValue(destination == .dailyNote ? "Today's Daily Note" : "Standalone Note")
             .accessibilityIdentifier("notes.quickCapture.destination")
 
-            Button(action: submit) {
-                if isSaving {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.down.doc")
-                }
-            }
-            .disabled(isSaving || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.repository == nil)
-            .help("Save quick capture")
-            .accessibilityLabel("Save quick capture")
-            .accessibilityIdentifier("notes.quickCapture.save")
+            saveButton
+                .disabled(isSaving || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.repository == nil)
+                .help("Save quick capture")
+                .accessibilityLabel("Save quick capture")
+                .accessibilityIdentifier("notes.quickCapture.save")
         }
         .alert(
             "Couldn't Save Quick Capture",
@@ -67,6 +57,35 @@ struct NotesQuickCaptureControl: View {
         } message: {
             Text(errorMessage ?? "The capture couldn't be saved.")
         }
+    }
+
+    /// iOS gets a labeled, bordered button (small bare icons tested poorly
+    /// for tap-target discoverability); the macOS toolbar keeps the compact
+    /// icon form.
+    private var saveButton: some View {
+        #if os(iOS)
+        Button(action: submit) {
+            if isSaving {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Saving…")
+                }
+            } else {
+                Label("Save", systemImage: "arrow.down.doc")
+            }
+        }
+        .buttonStyle(.bordered)
+        #else
+        Button(action: submit) {
+            if isSaving {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Image(systemName: "arrow.down.doc")
+            }
+        }
+        #endif
     }
 
     private func submit() {
@@ -106,7 +125,7 @@ struct NotesQuickCaptureSheet: View {
                         }
                     }
                     .padding()
-                    .frame(maxWidth: 520, alignment: .leading)
+                    .frame(maxWidth: 520, maxHeight: .infinity, alignment: .topLeading)
                 } else {
                     ContentUnavailableView(
                         "Set Up Notes First",

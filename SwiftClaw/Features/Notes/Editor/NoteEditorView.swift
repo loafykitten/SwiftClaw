@@ -11,6 +11,24 @@ private nonisolated struct MainActorTextView: @unchecked Sendable {
     let value: NSTextView
 }
 
+private final class CenteredMeasureScrollView: NSScrollView {
+    weak var editorTextView: NSTextView?
+    var maximumContentWidth: CGFloat = 0
+
+    override func layout() {
+        super.layout()
+        guard let editorTextView else { return }
+        let horizontalInset = max(10, (contentView.bounds.width - maximumContentWidth) / 2)
+        let inset = NSSize(width: horizontalInset, height: 10)
+        // Only assign on change: setting `textContainerInset` invalidates
+        // layout, so an unconditional write from inside `layout()` can spin
+        // the layout pass at full CPU.
+        if editorTextView.textContainerInset != inset {
+            editorTextView.textContainerInset = inset
+        }
+    }
+}
+
 /// The styled-source editor. `NSTextView`'s own text storage is the single
 /// source of truth for what's on screen — this view never binds the
 /// document through a SwiftUI `@State`/`Binding` round trip. Content only
@@ -47,10 +65,12 @@ struct NoteEditorView: NSViewRepresentable {
         textView.autoresizingMask = [.width]
         textView.delegate = context.coordinator
 
-        let scrollView = NSScrollView()
+        let scrollView = CenteredMeasureScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.documentView = textView
         scrollView.drawsBackground = false
+        scrollView.editorTextView = textView
+        scrollView.maximumContentWidth = 72 * ("0" as NSString).size(withAttributes: [.font: theme.bodyFont]).width
 
         context.coordinator.textView = textView
         // Attach the highlighter before the first content assignment so
@@ -101,6 +121,7 @@ struct NoteEditorView: NSViewRepresentable {
                 let textView = mainActorTextView.value
                 controller.textDidChange(textView.string)
                 controller.updateWikilinkCompletion(text: textView.string, cursorLocation: textView.selectedRange().location)
+                updateWikilinkAnchor(for: textView)
             }
         }
 
@@ -117,19 +138,74 @@ struct NoteEditorView: NSViewRepresentable {
             MainActor.assumeIsolated {
                 let textView = mainActorTextView.value
                 controller.updateWikilinkCompletion(text: textView.string, cursorLocation: textView.selectedRange().location)
+                updateWikilinkAnchor(for: textView)
             }
         }
 
-        /// Lets `Escape` dismiss an open wikilink completion popup instead of
-        /// falling through to whatever `cancelOperation` would otherwise do.
+        /// Handles keyboard navigation while the completion popup is open.
         nonisolated func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             MainActor.assumeIsolated {
-                guard commandSelector == #selector(NSResponder.cancelOperation(_:)), controller.wikilinkTrigger != nil else {
+                guard !controller.wikilinkCandidates.isEmpty else { return false }
+
+                switch commandSelector {
+                case #selector(NSResponder.cancelOperation(_:)):
+                    controller.dismissWikilinkCompletion()
+                    return true
+                case #selector(NSResponder.moveUp(_:)):
+                    controller.moveWikilinkCompletionSelection(.up)
+                    return true
+                case #selector(NSResponder.moveDown(_:)):
+                    controller.moveWikilinkCompletionSelection(.down)
+                    return true
+                case #selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertTab(_:)):
+                    guard let candidate = controller.selectedWikilinkCandidate,
+                          let completion = controller.acceptWikilinkCompletion(candidate)
+                    else { return false }
+                    controller.applyReplacement?(
+                        completion.range,
+                        completion.replacement,
+                        completion.reusesTrailingClosingBrackets
+                    )
+                    return true
+                default:
                     return false
                 }
-                controller.dismissWikilinkCompletion()
-                return true
             }
+        }
+
+        private func updateWikilinkAnchor(for textView: NSTextView) {
+            guard controller.wikilinkTrigger != nil,
+                  let scrollView = textView.enclosingScrollView,
+                  let window = textView.window
+            else {
+                controller.updateWikilinkAnchorRect(nil)
+                return
+            }
+
+            var actualRange = NSRange()
+            let screenRect = textView.firstRect(
+                forCharacterRange: textView.selectedRange(),
+                actualRange: &actualRange
+            )
+            guard !screenRect.isNull, !screenRect.isInfinite, screenRect.height > 0 else {
+                controller.updateWikilinkAnchorRect(nil)
+                return
+            }
+
+            let windowRect = window.convertFromScreen(screenRect)
+            let localRect = scrollView.convert(windowRect, from: nil)
+            let bounds = scrollView.bounds
+            let topLeadingY = scrollView.isFlipped
+                ? localRect.minY - bounds.minY
+                : bounds.maxY - localRect.maxY
+            controller.updateWikilinkAnchorRect(
+                CGRect(
+                    x: localRect.minX - bounds.minX,
+                    y: topLeadingY,
+                    width: localRect.width,
+                    height: localRect.height
+                )
+            )
         }
     }
 }
@@ -192,47 +268,74 @@ struct NoteEditorView: View {
 }
 #endif
 
-/// Wikilink autocomplete popup: a small, keyboard-dismissible list anchored
-/// to the top of the editor. Not pixel-anchored to the text caret — SwiftUI
-/// has no supported way to read the live text view's caret screen position
-/// from here — but fully functional and accessible on both platforms: it's
-/// plain SwiftUI, dismissible (`controller.dismissWikilinkCompletion()`), and
-/// each row is a plain accessible button.
+/// Wikilink autocomplete popup. On macOS its custom layout uses the caret
+/// rectangle reported by the live `NSTextView`; other platforms retain the
+/// editor's top-leading placement.
 struct WikilinkCompletionOverlay: View {
     let controller: NoteEditorController
 
+    @ViewBuilder
     var body: some View {
         if !controller.wikilinkCandidates.isEmpty {
+            #if os(macOS)
+            WikilinkCompletionLayout(anchorRect: controller.wikilinkAnchorRect) {
+                completionList
+            }
+            #else
+            completionList
+                .padding(12)
+            #endif
+        }
+    }
+
+    private var completionList: some View {
+        ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                ForEach(controller.wikilinkCandidates, id: \.note.relativePath) { candidate in
+                // Identity must live on the candidate, never the index:
+                // accepting/dismissing empties the array while SwiftUI may
+                // still evaluate children for the old identities, and a
+                // stale index subscript then traps (seen as a live crash on
+                // Return/Escape).
+                ForEach(
+                    Array(controller.wikilinkCandidates.enumerated()),
+                    id: \.element.note.relativePath
+                ) { index, candidate in
+                    let isSelected = index == controller.selectedWikilinkCandidateIndex
                     Button {
                         accept(candidate)
                     } label: {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(candidate.note.title)
                                 .font(.body)
-                            Text(candidate.note.relativePath)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                            if !candidate.note.hasRedundantRootPathCaption {
+                                Text(candidate.note.relativePath)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    .background(
+                        Color.accentColor.opacity(isSelected ? 0.18 : 0),
+                        in: .rect(cornerRadius: 4)
+                    )
                     .accessibilityLabel("Link to \(candidate.note.title)")
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                 }
             }
             .padding(.vertical, 4)
-            .background(.regularMaterial, in: .rect(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
-            .frame(maxWidth: 320)
-            .shadow(radius: 6)
-            .padding(12)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Wikilink suggestions")
         }
+        .frame(maxHeight: 320)
+        .background(.regularMaterial, in: .rect(cornerRadius: 8))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.2)))
+        .frame(maxWidth: 320)
+        .shadow(radius: 6)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Wikilink suggestions")
     }
 
     private func accept(_ candidate: WikilinkCompletion.Candidate) {
@@ -244,3 +347,55 @@ struct WikilinkCompletionOverlay: View {
         )
     }
 }
+
+#if os(macOS)
+/// Measures the popup before placing it, so it can flip above the caret when
+/// there is not enough room below and remain inside the editor horizontally.
+private struct WikilinkCompletionLayout: Layout {
+    let anchorRect: CGRect?
+
+    private let edgeMargin: CGFloat = 12
+    private let caretSpacing: CGFloat = 4
+    private let maximumWidth: CGFloat = 320
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let popup = subviews.first else { return }
+        let popupWidth = max(0, min(maximumWidth, bounds.width - edgeMargin * 2))
+        let naturalPopupSize = popup.sizeThatFits(ProposedViewSize(width: popupWidth, height: nil))
+        let anchor = anchorRect ?? CGRect(x: edgeMargin, y: edgeMargin, width: 0, height: 0)
+
+        let minimumX = bounds.minX + edgeMargin
+        let maximumX = max(minimumX, bounds.maxX - edgeMargin - naturalPopupSize.width)
+        let x = min(max(bounds.minX + anchor.minX, minimumX), maximumX)
+
+        let belowY = bounds.minY + anchor.maxY + caretSpacing
+        let aboveBottom = bounds.minY + anchor.minY - caretSpacing
+        let belowSpace = max(0, bounds.maxY - edgeMargin - belowY)
+        let aboveSpace = max(0, aboveBottom - bounds.minY - edgeMargin)
+        let placeBelow = naturalPopupSize.height <= belowSpace
+            || (naturalPopupSize.height > aboveSpace && belowSpace >= aboveSpace)
+        let availableHeight = placeBelow ? belowSpace : aboveSpace
+        let popupHeight = min(naturalPopupSize.height, availableHeight)
+        let y = placeBelow ? belowY : aboveBottom - popupHeight
+
+        popup.place(
+            at: CGPoint(x: x, y: y),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: naturalPopupSize.width, height: popupHeight)
+        )
+    }
+}
+#endif

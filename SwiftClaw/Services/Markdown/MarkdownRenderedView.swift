@@ -57,6 +57,8 @@ struct MarkdownBlockView: View {
         case let heading as Heading:
             MarkdownInlineFlowView(inlines: Array(heading.inlineChildren), onWikilinkTap: onWikilinkTap, imageLoadScope: imageLoadScope, loadImage: loadImage)
                 .font(Self.font(forHeadingLevel: heading.level))
+                .accessibilityHeading(Self.accessibilityHeadingLevel(for: heading.level))
+                .accessibilityAddTraits(.isHeader)
 
         case let paragraph as Paragraph:
             MarkdownInlineFlowView(inlines: Array(paragraph.inlineChildren), onWikilinkTap: onWikilinkTap, imageLoadScope: imageLoadScope, loadImage: loadImage)
@@ -94,6 +96,17 @@ struct MarkdownBlockView: View {
         default: .subheadline
         }
     }
+
+    static func accessibilityHeadingLevel(for level: Int) -> AccessibilityHeadingLevel {
+        switch level {
+        case 1: .h1
+        case 2: .h2
+        case 3: .h3
+        case 4: .h4
+        case 5: .h5
+        default: .h6
+        }
+    }
 }
 
 private struct MarkdownCodeBlockView: View {
@@ -123,16 +136,40 @@ struct MarkdownListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                itemRow(item, index: index)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func itemRow(_ item: ListItem, index: Int) -> some View {
+        let row = HStack(alignment: .top, spacing: 6) {
+            Text(Self.marker(checkbox: item.checkbox, ordered: ordered, startIndex: startIndex, index: index))
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 16, alignment: .trailing)
+            itemContent(item)
+        }
+
+        if let taskLabel = Self.taskAccessibilityLabel(checkbox: item.checkbox) {
+            row.accessibilityRepresentation {
                 HStack(alignment: .top, spacing: 6) {
-                    Text(Self.marker(checkbox: item.checkbox, ordered: ordered, startIndex: startIndex, index: index))
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: 16, alignment: .trailing)
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(item.blockChildren.enumerated()), id: \.offset) { _, child in
-                            MarkdownBlockView(block: child, onWikilinkTap: onWikilinkTap, imageLoadScope: imageLoadScope, loadImage: loadImage)
-                        }
-                    }
+                    // `Text` alone is ambiguous here: this file imports
+                    // swift-markdown, whose `Markdown.Text` also has a
+                    // string initializer.
+                    SwiftUI.Text(taskLabel)
+                    itemContent(item)
                 }
+                .accessibilityElement(children: .combine)
+            }
+        } else {
+            row
+        }
+    }
+
+    private func itemContent(_ item: ListItem) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(Array(item.blockChildren.enumerated()), id: \.offset) { _, child in
+                MarkdownBlockView(block: child, onWikilinkTap: onWikilinkTap, imageLoadScope: imageLoadScope, loadImage: loadImage)
             }
         }
     }
@@ -145,6 +182,14 @@ struct MarkdownListView: View {
         case .checked: "☑"
         case .unchecked: "☐"
         case nil: ordered ? "\(startIndex + UInt(index))." : "•"
+        }
+    }
+
+    static func taskAccessibilityLabel(checkbox: Markdown.Checkbox?) -> String? {
+        switch checkbox {
+        case .checked: "Completed task"
+        case .unchecked: "Incomplete task"
+        case nil: nil
         }
     }
 }

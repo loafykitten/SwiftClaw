@@ -4,6 +4,21 @@ import Testing
 
 @Suite
 struct WikilinkCompletionTests {
+    @Test func selectionResetsToTheFirstCandidateOrNil() {
+        #expect(WikilinkCompletionSelection.reset(candidateCount: 3) == 0)
+        #expect(WikilinkCompletionSelection.reset(candidateCount: 0) == nil)
+    }
+
+    @Test func selectionArrowMovementIsBoundedAndRepairsStaleIndices() {
+        #expect(WikilinkCompletionSelection.move(.down, from: 0, candidateCount: 3) == 1)
+        #expect(WikilinkCompletionSelection.move(.down, from: 2, candidateCount: 3) == 2)
+        #expect(WikilinkCompletionSelection.move(.up, from: 1, candidateCount: 3) == 0)
+        #expect(WikilinkCompletionSelection.move(.up, from: 0, candidateCount: 3) == 0)
+        #expect(WikilinkCompletionSelection.move(.down, from: nil, candidateCount: 3) == 0)
+        #expect(WikilinkCompletionSelection.move(.down, from: 9, candidateCount: 3) == 0)
+        #expect(WikilinkCompletionSelection.move(.down, from: 0, candidateCount: 0) == nil)
+    }
+
     @Test func utf16CursorOffsetCountsEmojiBeforeTheCursor() {
         let prefix = "🙂 See [[Auto"
         let text = prefix + "]]"

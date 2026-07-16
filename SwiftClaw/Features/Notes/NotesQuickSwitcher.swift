@@ -116,10 +116,12 @@ struct NotesQuickSwitcher: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(result.note.title)
                         .font(.body)
-                    Text(result.note.relativePath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    if !result.note.hasRedundantRootPathCaption {
+                        Text(result.note.relativePath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

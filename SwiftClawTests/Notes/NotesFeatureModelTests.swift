@@ -423,7 +423,9 @@ struct NotesFeatureModelTests {
 
         try Data("added externally".utf8).write(to: vaultRoot.appendingPathComponent("other.md"))
         await model.handle(delta: .init(added: ["other.md"], modified: [], removed: [], renamedPairs: []))
-        #expect(model.notes.map(\.relativePath) == [selectedPath, "other.md"].sorted())
+        #expect(model.notes.map(\.relativePath) == [selectedPath, "other.md"].sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        })
         #expect(model.stats.noteCount == 2)
 
         try FileManager.default.moveItem(
@@ -436,7 +438,9 @@ struct NotesFeatureModelTests {
             removed: [],
             renamedPairs: [.init(from: "other.md", to: "renamed.md")]
         ))
-        #expect(model.notes.map(\.relativePath) == [selectedPath, "renamed.md"].sorted())
+        #expect(model.notes.map(\.relativePath) == [selectedPath, "renamed.md"].sorted {
+            $0.localizedStandardCompare($1) == .orderedAscending
+        })
         #expect(model.stats.noteCount == 2)
 
         try FileManager.default.removeItem(at: vaultRoot.appendingPathComponent("renamed.md"))

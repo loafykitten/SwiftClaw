@@ -72,11 +72,39 @@ struct SearchIndexTests {
         try await index.upsertEmbedding(chunkID: sortedChunks[0].chunk.id, modelID: "stub", vector: [1, 0, 0])
         try await index.upsertEmbedding(chunkID: sortedChunks[1].chunk.id, modelID: "stub", vector: [0, 1, 0])
 
-        let hits = try await index.vectorSearch(queryVector: [1, 0, 0], modelID: "stub")
+        let hits = try await index.vectorSearch(
+            queryVector: [1, 0, 0], modelID: "stub", minimumSimilarity: -1
+        )
         #expect(hits.count == 2)
         #expect(hits[0].chunk.id == sortedChunks[0].chunk.id)
         #expect(hits[0].similarity > hits[1].similarity)
         _ = documentID
+    }
+
+    @Test func vectorSearchDropsHitsBelowTheDefaultSimilarityFloor() async throws {
+        let index = try SearchIndex(path: ":memory:")
+        let documentID = try await index.upsert(document: makeDocument(), chunks: makeChunks("related", "unrelated"))
+        let chunks = try await index.chunks(forDocumentID: documentID)
+
+        try await index.upsertEmbedding(chunkID: chunks[0].id, modelID: "stub", vector: [1, 0])
+        try await index.upsertEmbedding(chunkID: chunks[1].id, modelID: "stub", vector: [0, 1])
+
+        let hits = try await index.vectorSearch(queryVector: [1, 0], modelID: "stub")
+        #expect(hits.map(\.chunk.id) == [chunks[0].id])
+    }
+
+    @Test func ftsSearchReturnsMatchContextSnippet() async throws {
+        let index = try SearchIndex(path: ":memory:")
+        let preface = Array(repeating: "introductory", count: 80).joined(separator: " ")
+        _ = try await index.upsert(
+            document: makeDocument(),
+            chunks: makeChunks("# Heading\n\n\(preface)\nThe needle appears in this useful sentence.")
+        )
+
+        let hit = try #require(try await index.ftsSearch(query: "needle").first)
+        let snippet = try #require(hit.snippet)
+        #expect(snippet.localizedCaseInsensitiveContains("needle"))
+        #expect(!snippet.hasPrefix("# Heading"))
     }
 
     @Test func healthReportsFTSAvailableOnANormalDatabase() async throws {
@@ -163,5 +191,27 @@ struct SearchIndexTests {
         try await index.upsertEmbedding(chunkID: chunkID, modelID: provider.modelID, vector: vector)
         let vectorHits = try await index.vectorSearch(queryVector: vector, modelID: provider.modelID)
         #expect(vectorHits.first?.chunk.id == chunkID)
+    }
+
+    @Test func defaultSimilarityFloorKeepsARealNLParaphraseAndDropsUnrelatedTextWhenAvailable() async throws {
+        let provider = NLSentenceEmbeddingProvider()
+        guard let query = await provider.embed("How do I reset my forgotten password?"),
+              let paraphrase = await provider.embed("I forgot my password and need to change it."),
+              let unrelated = await provider.embed("The sourdough starter needs flour and water.")
+        else {
+            return
+        }
+
+        let index = try SearchIndex(path: ":memory:")
+        let documentID = try await index.upsert(
+            document: makeDocument(), chunks: makeChunks("password paraphrase", "bread recipe")
+        )
+        let chunks = try await index.chunks(forDocumentID: documentID)
+        try await index.upsertEmbedding(chunkID: chunks[0].id, modelID: provider.modelID, vector: paraphrase)
+        try await index.upsertEmbedding(chunkID: chunks[1].id, modelID: provider.modelID, vector: unrelated)
+
+        let hits = try await index.vectorSearch(queryVector: query, modelID: provider.modelID)
+        #expect(hits.map(\.chunk.id) == [chunks[0].id])
+        #expect(hits[0].similarity >= SearchIndex.defaultMinimumCosineSimilarity)
     }
 }

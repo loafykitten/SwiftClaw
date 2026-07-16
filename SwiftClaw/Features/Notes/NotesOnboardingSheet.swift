@@ -1,6 +1,8 @@
 import SwiftUI
 #if os(macOS)
 import AppKit
+#else
+import UniformTypeIdentifiers
 #endif
 
 /// First-configure onboarding: create an app-managed vault, or point at an
@@ -16,6 +18,9 @@ struct NotesOnboardingSheet: View {
 
     @State private var isWorking = false
     @State private var errorMessage: String?
+    #if os(iOS)
+    @State private var isShowingFolderImporter = false
+    #endif
 
     var body: some View {
         VStack(spacing: 20) {
@@ -74,6 +79,13 @@ struct NotesOnboardingSheet: View {
         }
         #if os(macOS)
         .frame(minWidth: 440, minHeight: 440)
+        #else
+        .fileImporter(
+            isPresented: $isShowingFolderImporter,
+            allowedContentTypes: [.folder]
+        ) { result in
+            handleFolderImport(result)
+        }
         #endif
     }
 
@@ -157,18 +169,39 @@ struct NotesOnboardingSheet: View {
         panel.message = "Choose a folder for your Notes vault. This can be an empty folder or an existing Obsidian vault."
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        Task {
+            await configureExternalVault(url: url)
+        }
+        #else
+        isShowingFolderImporter = true
+        #endif
+    }
+
+    #if os(iOS)
+    private func handleFolderImport(_ result: Result<URL, Error>) {
+        guard case .success(let url) = result else { return }
+        Task {
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer {
+                if accessing {
+                    url.stopAccessingSecurityScopedResource()
+                }
+            }
+            await configureExternalVault(url: url)
+        }
+    }
+    #endif
+
+    private func configureExternalVault(url: URL) async {
         isWorking = true
         errorMessage = nil
-        Task {
-            await model.chooseExternalVault(url: url)
-            isWorking = false
-            if model.configurationState == .configured {
-                complete()
-            } else {
-                errorMessage = model.lastConfigurationError?.errorDescription ?? "Couldn't open that folder."
-            }
+        await model.chooseExternalVault(url: url)
+        isWorking = false
+        if model.configurationState == .configured {
+            complete()
+        } else {
+            errorMessage = model.lastConfigurationError?.errorDescription ?? "Couldn't open that folder."
         }
-        #endif
     }
 
     private func complete() {

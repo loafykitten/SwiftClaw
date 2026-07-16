@@ -168,10 +168,12 @@ struct NotesSettingsView: View {
             Button("Change…") {
                 isShowingOnboarding = true
             }
+            #if os(macOS)
             Button("Reveal in Finder") {
                 model.revealVaultInFinder()
             }
             .disabled(model.configurationState != .configured)
+            #endif
             Button("Reset…", role: .destructive) {
                 isShowingResetConfirmation = true
             }

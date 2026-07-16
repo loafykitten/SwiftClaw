@@ -97,24 +97,31 @@ struct NotesView: View {
 
     private var needsOnboardingView: some View {
         VStack(spacing: 12) {
-            Image(systemName: "note.text")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text("Set Up Notes")
-                .font(.headline)
-            if let message = model.lastConfigurationError?.errorDescription {
-                Text(message)
-                    .font(.subheadline)
+            VStack(spacing: 12) {
+                Image(systemName: "note.text")
+                    .font(.system(size: 36))
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
+                Text("Set Up Notes")
+                    .font(.headline)
+                if let message = model.lastConfigurationError?.errorDescription {
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                model.lastConfigurationError?.errorDescription.map { "Set Up Notes. \($0)" }
+                    ?? "Set Up Notes"
+            )
             Button("Choose a Vault…") {
                 isShowingOnboarding = true
             }
+            .accessibilityLabel("Choose a notes vault")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .combine)
     }
 
     @ViewBuilder
@@ -162,7 +169,11 @@ struct NotesView: View {
                 detailColumn
             }
             .inspector(isPresented: $isShowingInspector) {
-                BacklinksPanel(model: model)
+                BacklinksPanel(
+                    model: model,
+                    onDismiss: { isShowingInspector = false }
+                )
+                .presentationDragIndicator(.visible)
             }
             .toolbar { splitToolbar }
         }
@@ -211,7 +222,7 @@ struct NotesView: View {
             Button {
                 isShowingQuickSwitcher = true
             } label: {
-                Label("Quick Switcher", systemImage: "arrow.right.doc.on.clipboard")
+                Label("Quick Switcher", systemImage: "text.magnifyingglass")
             }
             .keyboardShortcut("o", modifiers: .command)
             .accessibilityLabel("Open quick switcher")
@@ -294,7 +305,7 @@ struct NotesView: View {
                 Button {
                     isShowingQuickSwitcher = true
                 } label: {
-                    Label("Quick Switcher", systemImage: "arrow.right.doc.on.clipboard")
+                    Label("Quick Switcher", systemImage: "text.magnifyingglass")
                 }
                 .keyboardShortcut("o", modifiers: .command)
                 .accessibilityLabel("Open quick switcher")
@@ -370,7 +381,12 @@ struct NotesView: View {
             }
         }
         .inspector(isPresented: $isShowingInspector) {
-            BacklinksPanel(model: model, onSelectPath: selectAndNavigateCompact)
+            BacklinksPanel(
+                model: model,
+                onSelectPath: selectAndNavigateCompact,
+                onDismiss: { isShowingInspector = false }
+            )
+            .presentationDragIndicator(.visible)
         }
         .toolbar {
             ToolbarItem(placement: .automatic) {
@@ -385,7 +401,7 @@ struct NotesView: View {
                 Button {
                     isShowingQuickSwitcher = true
                 } label: {
-                    Label("Quick Switcher", systemImage: "arrow.right.doc.on.clipboard")
+                    Label("Quick Switcher", systemImage: "text.magnifyingglass")
                 }
                 .keyboardShortcut("o", modifiers: .command)
                 .accessibilityLabel("Open quick switcher")
@@ -536,10 +552,12 @@ struct NotesView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text(note.title)
                 .font(.body)
-            Text(note.relativePath)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if !note.hasRedundantRootPathCaption {
+                Text(note.relativePath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
     }
 
@@ -583,28 +601,32 @@ struct NotesView: View {
         .background(Color.orange.opacity(0.18), in: .rect(cornerRadius: 8))
         .padding(8)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Vault health issues: \(banner.message). Tap for details.")
+        .accessibilityLabel("Vault health issues: \(banner.message)")
+        .accessibilityHint("Opens the vault health details")
     }
 
     private func listErrorBanner(_ error: NotesError) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(error.errorDescription ?? "Couldn't create the note.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(error.errorDescription ?? "Couldn't create the note.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Couldn't create the note: \(error.errorDescription ?? "An unknown error occurred.")")
             Spacer(minLength: 0)
             Button("Dismiss") {
                 model.dismissListError()
             }
             .buttonStyle(.plain)
             .font(.caption)
+            .accessibilityLabel("Dismiss note creation error")
         }
         .padding(10)
         .background(Color.orange.opacity(0.18), in: .rect(cornerRadius: 8))
         .padding(8)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Couldn't create the note: \(error.errorDescription ?? "An unknown error occurred.")")
     }
 
     private var emptyListState: some View {
@@ -784,13 +806,20 @@ private struct NotesHealthDetailSheet: View {
                                 }
                             }
                         } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(NoteSummary.title(forRelativePath: link.sourcePath))
-                                    .font(.body)
-                                Text("Links to unresolved \"\(link.pagePath)\"")
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(NoteSummary.title(forRelativePath: link.sourcePath))
+                                        .font(.body)
+                                    Text("Links to unresolved \"\(link.pagePath)\"")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("\(NoteSummary.title(forRelativePath: link.sourcePath)) links to unresolved \(link.pagePath)")
@@ -866,15 +895,19 @@ private struct NoteEditorDetailView: View {
 
     private func externalChangeChoiceBar(_ choice: NoteEditorController.ExternalChangeChoice) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("This note changed outside SwiftClaw")
-                    .font(.subheadline.weight(.semibold))
-                Text("You have unsaved edits here. Keep yours (saved as a separate copy) or take the version on disk.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("This note changed outside SwiftClaw")
+                        .font(.subheadline.weight(.semibold))
+                    Text("You have unsaved edits here. Keep yours (saved as a separate copy) or take the version on disk.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("This note changed outside SwiftClaw. Choose Keep Mine to save your edits as a separate copy, or Take Theirs to discard them and reload the version on disk.\(editor.isResolvingExternalChange ? " Resolving." : "")")
             Spacer(minLength: 0)
             if editor.isResolvingExternalChange {
                 ProgressView("Resolving…")
@@ -888,43 +921,46 @@ private struct NoteEditorDetailView: View {
             .buttonStyle(.bordered)
             .font(.caption)
             .disabled(editor.isResolvingExternalChange)
+            .accessibilityLabel("Keep my edits, save the disk version as a separate copy")
             Button("Take Theirs") {
                 Task { await editor.takeTheirs() }
             }
             .buttonStyle(.bordered)
             .font(.caption)
             .disabled(editor.isResolvingExternalChange)
+            .accessibilityLabel("Discard my edits and reload the version on disk")
         }
         .padding(10)
         .background(Color.orange.opacity(0.18), in: .rect(cornerRadius: 8))
         .padding(8)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("This note changed outside SwiftClaw. Choose Keep Mine to save your edits as a separate copy, or Take Theirs to discard them and reload the version on disk.\(editor.isResolvingExternalChange ? " Resolving." : "")")
     }
 
     private func conflictBanner(_ banner: NoteEditorController.ConflictBanner) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("This note changed outside SwiftClaw")
-                    .font(.subheadline.weight(.semibold))
-                Text("Your edits were saved separately as \"\(banner.copyPath)\". Review and merge manually.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("This note changed outside SwiftClaw")
+                        .font(.subheadline.weight(.semibold))
+                    Text("Your edits were saved separately as \"\(banner.copyPath)\". Review and merge manually.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Conflict: this note changed outside SwiftClaw. Your edits were saved separately as \(banner.copyPath).")
             Spacer(minLength: 0)
             Button("Dismiss") {
                 editor.dismissConflictBanner()
             }
             .buttonStyle(.plain)
             .font(.caption)
+            .accessibilityLabel("Dismiss conflict notification")
         }
         .padding(10)
         .background(Color.orange.opacity(0.18), in: .rect(cornerRadius: 8))
         .padding(8)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Conflict: this note changed outside SwiftClaw. Your edits were saved separately as \(banner.copyPath).")
     }
 
     private func externalRemovalBanner(_ banner: NoteEditorController.ExternalRemovalBanner) -> some View {
