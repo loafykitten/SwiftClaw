@@ -338,6 +338,53 @@ final class NotesRepository {
         }
     }
 
+    // MARK: - Revisions
+
+    /// Lists the private, out-of-vault snapshots for one live note. The
+    /// repository remains the only UI-facing path to the revision store.
+    func revisions(forRelativePath relativePath: String) async throws -> [NoteRevision] {
+        do {
+            return try await revisionStore.revisions(forKey: relativePath)
+        } catch {
+            throw NotesError.from(error)
+        }
+    }
+
+    /// Restores one historical snapshot as a new sibling conflict copy. The
+    /// current note is never mutated, and the copy becomes a normal visible
+    /// catalog entry so the user can compare or merge it manually.
+    @discardableResult
+    func restoreRevisionAsConflictCopy(
+        relativePath: String,
+        revisionID: String
+    ) async throws -> NoteSummary {
+        let revision: NoteRevision
+        do {
+            let available = try await revisionStore.revisions(forKey: relativePath)
+            guard let match = available.first(where: { $0.id == revisionID }) else {
+                throw NotesError.revisionNotFound(revisionID)
+            }
+            revision = match
+        } catch {
+            throw NotesError.from(error)
+        }
+
+        let restored: NoteFileSnapshot
+        do {
+            restored = try await vault.createConflictCopy(
+                relativeTo: relativePath,
+                content: revision.content
+            )
+        } catch {
+            throw NotesError.from(error)
+        }
+
+        let summary = NoteSummary(snapshot: restored)
+        upsert(summary)
+        NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
+        return summary
+    }
+
     // MARK: - Rename
 
     /// Snapshots the pre-rename content, then moves the file (never

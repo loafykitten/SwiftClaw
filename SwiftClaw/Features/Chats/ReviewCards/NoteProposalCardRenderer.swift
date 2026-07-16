@@ -275,7 +275,7 @@ private struct NoteProposalDiffView: View {
         .padding(.vertical, 1)
         .background(background(for: line.kind))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel(for: line))
+        .accessibilityLabel(NoteProposalDiffAccessibility.label(for: line))
     }
 
     private func marker(for kind: DiffLine.Kind) -> String {
@@ -301,12 +301,23 @@ private struct NoteProposalDiffView: View {
         case .removed: Color.red.opacity(0.12)
         }
     }
+}
 
-    private func accessibilityLabel(for line: DiffLine) -> String {
-        switch line.kind {
-        case .unchanged: line.content
-        case .added: "Line added: \(line.content)"
-        case .removed: "Line removed: \(line.content)"
+enum NoteProposalDiffAccessibility {
+    static func label(for line: DiffLine) -> String {
+        let content = line.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if content.isEmpty {
+            return switch line.kind {
+            case .unchanged: "Blank line unchanged"
+            case .added: "Blank line added"
+            case .removed: "Blank line removed"
+            }
+        } else {
+            return switch line.kind {
+            case .unchanged: "Unchanged line: \(line.content)"
+            case .added: "Line added: \(line.content)"
+            case .removed: "Line removed: \(line.content)"
+            }
         }
     }
 }

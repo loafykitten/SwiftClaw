@@ -92,6 +92,26 @@ struct NotesFeatureModelTests {
         #expect(SettingsStorage.loadNotesVaultLocation(userDefaults: fixture.defaults) == .appManaged)
     }
 
+    @Test func revisionRestoreUpdatesTheVisibleCatalogWithoutReplacingTheLiveNote() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let model = try makeModel(defaults: fixture.defaults)
+        await model.chooseAppManagedVault()
+        let repository = try #require(model.repository)
+        let created = try await repository.createExactPath(relativePath: "note.md", content: "original")
+        _ = try await repository.save(relativePath: "note.md", content: "current", expectedHash: created.sha256)
+        let revision = try #require(try await model.revisions(forRelativePath: "note.md").first)
+
+        let restored = try await model.restoreRevisionAsConflictCopy(
+            relativePath: "note.md",
+            revisionID: revision.id
+        )
+
+        #expect(model.notes.contains { $0.relativePath == restored.relativePath })
+        #expect(try await repository.read(relativePath: restored.relativePath).content == "original")
+        #expect(try await repository.read(relativePath: "note.md").content == "current")
+    }
+
     @Test func choosingAnExternalFolderSavesABookmarkAndConfigures() async throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }

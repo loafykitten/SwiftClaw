@@ -22,6 +22,9 @@ enum NotesError: LocalizedError, Equatable {
     /// An exact-path create was asked to target a path the vault would not
     /// expose as a Markdown note (for example a hidden or non-Markdown path).
     case invalidNotePath(String)
+    /// A revision row became stale (for example, retention pruned it while
+    /// its sheet was open). No live note or conflict copy was changed.
+    case revisionNotFound(String)
     /// Wraps an error from `NotesVault`/`NoteRevisionStore` (or anything
     /// else) that doesn't need its own case — its message is reused as-is.
     case underlying(String)
@@ -40,6 +43,8 @@ enum NotesError: LocalizedError, Equatable {
             "\"\(path)\" already exists."
         case .invalidNotePath(let path):
             "\"\(path)\" isn't a visible Markdown note path."
+        case .revisionNotFound:
+            "That revision is no longer available. Refresh Revisions and try again."
         case .underlying(let message):
             message
         }

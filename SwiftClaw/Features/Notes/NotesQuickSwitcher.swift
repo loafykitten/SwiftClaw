@@ -51,13 +51,14 @@ struct NotesQuickSwitcher: View {
             selectedPath = ranked.first?.note.relativePath
         }
         .onChange(of: query) {
-            selectedPath = ranked.first?.note.relativePath
+            selectedPath = NotesQuickSwitcherSelection.validSelection(
+                selectedPath,
+                in: ranked.map(\.note.relativePath)
+            )
         }
         #if os(macOS)
         .onExitCommand { onDismiss() }
         #endif
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Quick switcher")
     }
 
     @ViewBuilder
@@ -78,6 +79,9 @@ struct NotesQuickSwitcher: View {
                 TextField("Jump to note…", text: $query)
                     .textFieldStyle(.plain)
                     .focused($isSearchFieldFocused)
+                    .onKeyPress { keyPress in
+                        handleKeyPress(keyPress)
+                    }
                     .onSubmit { selectHighlightedOrFirst() }
                     .accessibilityLabel("Search notes to jump to")
             }
@@ -106,18 +110,23 @@ struct NotesQuickSwitcher: View {
 
     private var resultsList: some View {
         List(ranked, id: \.note.relativePath, selection: $selectedPath) { result in
-            VStack(alignment: .leading, spacing: 2) {
-                Text(result.note.title)
-                    .font(.body)
-                Text(result.note.relativePath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            Button {
+                choose(result.note)
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(result.note.title)
+                        .font(.body)
+                    Text(result.note.relativePath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .buttonStyle(.plain)
             .tag(result.note.relativePath)
-            .contentShape(Rectangle())
-            .onTapGesture { choose(result.note) }
             .accessibilityLabel("\(result.note.title), \(result.note.relativePath)")
+            .accessibilityHint("Opens this note")
         }
     }
 
@@ -135,6 +144,27 @@ struct NotesQuickSwitcher: View {
         choose(target)
     }
 
+    private func handleKeyPress(_ keyPress: KeyPress) -> KeyPress.Result {
+        let paths = ranked.map(\.note.relativePath)
+
+        switch keyPress.key {
+        case .upArrow:
+            selectedPath = NotesQuickSwitcherSelection.move(.up, from: selectedPath, in: paths)
+            return .handled
+        case .downArrow:
+            selectedPath = NotesQuickSwitcherSelection.move(.down, from: selectedPath, in: paths)
+            return .handled
+        case .return:
+            selectHighlightedOrFirst()
+            return .handled
+        case .escape:
+            onDismiss()
+            return .handled
+        default:
+            return .ignored
+        }
+    }
+
     private func choose(_ note: NoteSummary) {
         if let onSelectPath {
             onSelectPath(note.relativePath)
@@ -144,6 +174,37 @@ struct NotesQuickSwitcher: View {
         Task {
             await model.select(path: note.relativePath)
             onDismiss()
+        }
+    }
+}
+
+/// Pure selection policy for keyboard navigation. Keeping this separate from
+/// SwiftUI makes stale-selection and empty-result behavior deterministic.
+enum NotesQuickSwitcherSelection {
+    enum Direction {
+        case up
+        case down
+    }
+
+    static func validSelection(_ selectedPath: String?, in paths: [String]) -> String? {
+        guard !paths.isEmpty else { return nil }
+        if let selectedPath, paths.contains(selectedPath) {
+            return selectedPath
+        }
+        return paths.first
+    }
+
+    static func move(_ direction: Direction, from selectedPath: String?, in paths: [String]) -> String? {
+        guard !paths.isEmpty else { return nil }
+        guard let selectedPath, let index = paths.firstIndex(of: selectedPath) else {
+            return paths.first
+        }
+
+        switch direction {
+        case .up:
+            return paths[max(paths.startIndex, index - 1)]
+        case .down:
+            return paths[min(paths.index(before: paths.endIndex), index + 1)]
         }
     }
 }

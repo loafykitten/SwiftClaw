@@ -25,6 +25,10 @@ struct NoteEditorView: NSViewRepresentable {
         let textView = NSTextView()
         textView.isEditable = true
         textView.isSelectable = true
+        // Set these directly on the native editor so VoiceOver gets useful
+        // context without replacing NSTextView's editable-text role or value.
+        textView.setAccessibilityLabel("Note editor")
+        textView.setAccessibilityHelp("Edit the Markdown content of this note.")
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false

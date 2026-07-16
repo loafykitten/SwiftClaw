@@ -712,6 +712,54 @@ final class NotesFeatureModel {
         await refreshBacklinks()
     }
 
+    /// Lists snapshots for a note while holding the configured vault stable.
+    /// A settings reset or vault switch waits for this read to finish instead
+    /// of letting a stale sheet populate from the prior vault.
+    func revisions(forRelativePath relativePath: String) async throws -> [NoteRevision] {
+        guard configurationState == .configured, let repository else {
+            throw NotesError.underlying("The Notes vault is no longer available.")
+        }
+        guard let lease = vaultOperationLeases.acquireLease() else {
+            throw NotesError.underlying("The Notes vault is changing. Close Revisions and try again.")
+        }
+        defer { lease.release() }
+        return try await repository.revisions(forRelativePath: relativePath)
+    }
+
+    /// Restores historical content beside the selected live note, never over
+    /// it. The lease keeps a concurrent vault reset/switch from tearing down
+    /// the repository while the copy is being published.
+    @discardableResult
+    func restoreRevisionAsConflictCopy(
+        relativePath: String,
+        revisionID: String
+    ) async throws -> NoteSummary {
+        guard configurationState == .configured, let repository else {
+            throw NotesError.underlying("The Notes vault is no longer available.")
+        }
+        guard let lease = vaultOperationLeases.acquireLease() else {
+            throw NotesError.underlying("The Notes vault is changing. Close Revisions and try again.")
+        }
+        defer { lease.release() }
+
+        let restored = try await repository.restoreRevisionAsConflictCopy(
+            relativePath: relativePath,
+            revisionID: revisionID
+        )
+        notes = repository.notes
+        editor?.candidateNotes = repository.notes
+        _ = await indexer?.apply(
+            delta: VaultReconciler.ReconcileDelta(
+                added: [restored.relativePath],
+                modified: [],
+                removed: [],
+                renamedPairs: []
+            )
+        )
+        await refreshHealth()
+        return restored
+    }
+
     /// Forces `currentLocation`/`notes` to catch up with their sources of
     /// truth instead of waiting on the next FSEvents hint or the 300s
     /// periodic rescan. `NotesSettingsView` calls this on every appearance:

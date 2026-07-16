@@ -280,6 +280,8 @@ NLEmbedding unavailable.
 
 ## Phase 7 — Docs, hardening, polish
 
+**Status: Complete (2026-07-16).**
+
 - `docs/features/NOTES.md` (architecture, safety invariants, index schema,
   proposal flow — REMINDERS.md depth); update `docs/conventions/TOOLS.md`
   (shared tools + proposal-gate pattern) + `docs/architecture/OVERVIEW.md`;

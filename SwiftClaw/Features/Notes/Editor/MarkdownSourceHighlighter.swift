@@ -22,7 +22,13 @@ private nonisolated struct MainActorTextStorage: @unchecked Sendable {
 /// below.
 @MainActor
 final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
+    /// Markdown syntax styling is intentionally disabled above one MiB of
+    /// UTF-8 source. Large notes remain readable without paying for regex and
+    /// fence-state work on every keystroke.
+    static let maximumStyledUTF8ByteCount = 1 * 1024 * 1024
+
     private var isStyling = false
+    private var isInLargeDocumentMode = false
     private var fenceState = FenceStateMachine()
     private let themeProvider: () -> MarkdownEditorTheme
 
@@ -62,11 +68,37 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
         #endif
 
         let nsString = textStorage.string as NSString
+        let exceedsStylingLimit = textStorage.string.utf8.count > Self.maximumStyledUTF8ByteCount
+        if exceedsStylingLimit {
+            let theme = themeProvider()
+            if !isInLargeDocumentMode {
+                // Clear all syntax-specific attributes exactly once when the
+                // document crosses the limit, leaving a plain readable base.
+                textStorage.setAttributes(
+                    [.font: theme.bodyFont, .foregroundColor: theme.textColor],
+                    range: NSRange(location: 0, length: nsString.length)
+                )
+                fenceState = FenceStateMachine()
+                isInLargeDocumentMode = true
+            } else if nsString.length > 0 {
+                // Newly typed text can inherit syntax attributes from its
+                // neighbours. Normalize only the touched paragraph; do not
+                // repeatedly clear the whole large document.
+                let range = nsString.paragraphRange(for: editedRange)
+                textStorage.addAttributes([.font: theme.bodyFont, .foregroundColor: theme.textColor], range: range)
+            }
+            return
+        }
+
+        let wasInLargeDocumentMode = isInLargeDocumentMode
+        isInLargeDocumentMode = false
         let previousFenceStates = fenceState.insideFenceAtLineStart
         fenceState.recompute(for: textStorage.string)
         let frontMatterLineCount = Self.frontMatterLineCount(in: textStorage.string, nsString: nsString)
 
-        let paragraphRange = nsString.paragraphRange(for: editedRange)
+        let paragraphRange = wasInLargeDocumentMode
+            ? NSRange(location: 0, length: nsString.length)
+            : nsString.paragraphRange(for: editedRange)
         let editedLineIndex = Self.lineNumber(in: nsString, at: paragraphRange.location)
         let styleRange = Self.rangeToRestyle(
             nsString: nsString,
@@ -78,7 +110,14 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
         guard styleRange.location != NSNotFound, styleRange.length > 0 || nsString.length == 0 else { return }
 
         let theme = themeProvider()
-        textStorage.addAttributes([.font: theme.bodyFont, .foregroundColor: theme.textColor], range: styleRange)
+        let baseAttributes: [NSAttributedString.Key: Any] = [.font: theme.bodyFont, .foregroundColor: theme.textColor]
+        if wasInLargeDocumentMode {
+            // Remove any attributes inherited during large-document editing
+            // before restoring syntax styling across the shrunken document.
+            textStorage.setAttributes(baseAttributes, range: styleRange)
+        } else {
+            textStorage.addAttributes(baseAttributes, range: styleRange)
+        }
         styleLines(in: textStorage, range: styleRange, nsString: nsString, frontMatterLineCount: frontMatterLineCount, theme: theme)
 
         #if DEBUG

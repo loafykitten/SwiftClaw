@@ -164,7 +164,8 @@ final class NoteProposalDispatcher: ReviewActionDispatcher {
             switch error {
             case .externalConflict(_), .pathAlreadyExists(_):
                 markConflicted(proposal, in: context)
-            case .partialLoadFailure(_), .createFailed(_), .invalidNotePath(_), .underlying(_):
+            case .partialLoadFailure(_), .createFailed(_), .invalidNotePath(_),
+                 .revisionNotFound(_), .underlying(_):
                 restorePendingAfterOperationFailure(proposal, in: context)
             }
             return

@@ -208,5 +208,71 @@ struct MarkdownLosslessnessTests {
         let colorAfter = textStorage.attribute(.foregroundColor, at: codeLineLocationAfter, effectiveRange: nil) as? NSColor
         #expect(colorAfter == Self.probeTheme.textColor)
     }
+
+    @Test func stylingRemainsEnabledAtExactUTF8ByteLimit() {
+        let prefix = "# Heading\n"
+        let padding = String(
+            repeating: "a",
+            count: MarkdownSourceHighlighter.maximumStyledUTF8ByteCount - prefix.utf8.count
+        )
+        let text = prefix + padding
+        #expect(text.utf8.count == MarkdownSourceHighlighter.maximumStyledUTF8ByteCount)
+
+        let (textStorage, highlighter) = makeStyledTextStorage(text, themeProvider: { Self.probeTheme })
+        _ = highlighter
+
+        let color = textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        #expect(color == Self.probeTheme.headingColor)
+        #expect(Data(textStorage.string.utf8) == Data(text.utf8))
+    }
+
+    @Test func multibyteContentAboveUTF8ByteLimitUsesReadableBaseStylingWithoutDataLoss() {
+        let exactLimit = String(
+            repeating: "é",
+            count: MarkdownSourceHighlighter.maximumStyledUTF8ByteCount / 2
+        )
+        let text = "#" + exactLimit
+        #expect(text.utf8.count == MarkdownSourceHighlighter.maximumStyledUTF8ByteCount + 1)
+
+        let (textStorage, highlighter) = makeStyledTextStorage(text, themeProvider: { Self.probeTheme })
+        _ = highlighter
+
+        let color = textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        let font = textStorage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
+        #expect(color == Self.probeTheme.textColor)
+        #expect(font == Self.probeTheme.bodyFont)
+        #expect(Data(textStorage.string.utf8) == Data(text.utf8))
+    }
+
+    @Test func repeatedLargeDocumentEditsDoNotClearTheWholeDocumentsAttributes() {
+        let text = String(repeating: "a", count: MarkdownSourceHighlighter.maximumStyledUTF8ByteCount + 1)
+        let (textStorage, highlighter) = makeStyledTextStorage(text, themeProvider: { Self.probeTheme })
+        _ = highlighter
+
+        let sentinelKey = NSAttributedString.Key("MarkdownLosslessnessTests.sentinel")
+        textStorage.addAttribute(sentinelKey, value: true, range: NSRange(location: 0, length: 1))
+        textStorage.replaceCharacters(in: NSRange(location: textStorage.length, length: 0), with: "b")
+
+        #expect(textStorage.attribute(sentinelKey, at: 0, effectiveRange: nil) as? Bool == true)
+        #expect(textStorage.string == text + "b")
+    }
+
+    @Test func shrinkingBelowUTF8ByteLimitRestoresMarkdownStylingWithoutDataLoss() {
+        let oversizedSuffix = String(
+            repeating: "🙂",
+            count: MarkdownSourceHighlighter.maximumStyledUTF8ByteCount / 4
+        )
+        let original = "# Heading\n" + oversizedSuffix
+        let (textStorage, highlighter) = makeStyledTextStorage(original, themeProvider: { Self.probeTheme })
+        _ = highlighter
+        #expect((textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == Self.probeTheme.textColor)
+
+        let suffixRange = (textStorage.string as NSString).range(of: oversizedSuffix)
+        textStorage.replaceCharacters(in: suffixRange, with: "small")
+        let expected = "# Heading\nsmall"
+
+        #expect(Data(textStorage.string.utf8) == Data(expected.utf8))
+        #expect((textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == Self.probeTheme.headingColor)
+    }
 }
 #endif

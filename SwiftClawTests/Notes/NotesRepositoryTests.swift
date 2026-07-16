@@ -304,6 +304,46 @@ struct NotesRepositoryTests {
         #expect(originalOnDisk == "changed externally")
     }
 
+    @Test func revisionRestoreCreatesAVisibleCopyAndLeavesCurrentContentUntouched() async throws {
+        let (repository, vaultRoot, revisionsDirectory) = try makeRepository()
+        defer {
+            try? FileManager.default.removeItem(at: vaultRoot)
+            try? FileManager.default.removeItem(at: revisionsDirectory)
+        }
+        let created = try await repository.createExactPath(relativePath: "note.md", content: "original")
+        _ = try await repository.save(relativePath: "note.md", content: "current", expectedHash: created.sha256)
+        let revision = try #require(try await repository.revisions(forRelativePath: "note.md").first)
+
+        let restored = try await repository.restoreRevisionAsConflictCopy(
+            relativePath: "note.md",
+            revisionID: revision.id
+        )
+
+        #expect(restored.relativePath.contains("conflict"))
+        #expect(try await repository.read(relativePath: restored.relativePath).content == "original")
+        #expect(try await repository.read(relativePath: "note.md").content == "current")
+        #expect(repository.summary(forRelativePath: restored.relativePath) == restored)
+    }
+
+    @Test func staleRevisionRestoreFailsWithoutWriting() async throws {
+        let (repository, vaultRoot, revisionsDirectory) = try makeRepository()
+        defer {
+            try? FileManager.default.removeItem(at: vaultRoot)
+            try? FileManager.default.removeItem(at: revisionsDirectory)
+        }
+        _ = try await repository.createExactPath(relativePath: "note.md", content: "current")
+
+        await #expect(throws: NotesError.revisionNotFound("missing")) {
+            _ = try await repository.restoreRevisionAsConflictCopy(
+                relativePath: "note.md",
+                revisionID: "missing"
+            )
+        }
+
+        #expect(repository.notes.map(\.relativePath) == ["note.md"])
+        #expect(try await repository.read(relativePath: "note.md").content == "current")
+    }
+
     // MARK: - Rename
 
     @Test func renameSnapshotsBeforeMutationAndUpdatesIdentity() async throws {

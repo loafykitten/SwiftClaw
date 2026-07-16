@@ -1,5 +1,10 @@
 import SwiftUI
 
+private struct NoteRevisionsTarget: Identifiable {
+    let path: String
+    var id: String { path }
+}
+
 struct NotesView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var model = NotesFeatureModel.shared
@@ -11,6 +16,7 @@ struct NotesView: View {
     @State private var isShowingQuickCapture = false
     @State private var isShowingInspector = false
     @State private var isShowingHealthDetail = false
+    @State private var revisionsTarget: NoteRevisionsTarget?
     @State private var compactActionDestination: CompactActionDestination?
     /// The detail currently visible in compact navigation. This is deliberately
     /// lifecycle-owned rather than derived from `model.selectedPath`: a model
@@ -59,6 +65,11 @@ struct NotesView: View {
         }
         .sheet(isPresented: $isShowingHealthDetail) {
             healthDetailSheet
+        }
+        .sheet(item: $revisionsTarget) { target in
+            NoteRevisionsSheet(relativePath: target.path, model: model) {
+                revisionsTarget = nil
+            }
         }
     }
 
@@ -186,6 +197,16 @@ struct NotesView: View {
                 .accessibilityLabel(isReadingMode ? "Switch to Edit mode" : "Switch to Reading mode")
             }
         }
+        if let selectedPath = model.selectedPath {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    revisionsTarget = NoteRevisionsTarget(path: selectedPath)
+                } label: {
+                    Label("Revisions", systemImage: "clock.arrow.circlepath")
+                }
+                .accessibilityLabel("Show revisions for \(NoteSummary.title(forRelativePath: selectedPath))")
+            }
+        }
         ToolbarItem(placement: .automatic) {
             Button {
                 isShowingQuickSwitcher = true
@@ -275,6 +296,7 @@ struct NotesView: View {
                 } label: {
                     Label("Quick Switcher", systemImage: "arrow.right.doc.on.clipboard")
                 }
+                .keyboardShortcut("o", modifiers: .command)
                 .accessibilityLabel("Open quick switcher")
             }
             ToolbarItem(placement: .primaryAction) {
@@ -375,6 +397,14 @@ struct NotesView: View {
                     Label("Backlinks", systemImage: "sidebar.trailing")
                 }
                 .accessibilityLabel(isShowingInspector ? "Hide backlinks inspector" : "Show backlinks inspector")
+            }
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    revisionsTarget = NoteRevisionsTarget(path: path)
+                } label: {
+                    Label("Revisions", systemImage: "clock.arrow.circlepath")
+                }
+                .accessibilityLabel("Show revisions for \(NoteSummary.title(forRelativePath: path))")
             }
         }
     }

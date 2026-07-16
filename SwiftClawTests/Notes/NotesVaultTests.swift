@@ -83,6 +83,36 @@ struct NotesVaultTests {
         #expect(originalOnDisk == "first")
     }
 
+    @Test func explicitConflictCopyNeverChangesTheLiveNoteAndUniquifies() async throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vault = NotesVault(root: root)
+        _ = try await vault.write(relativePath: "note.md", content: "live content", expectedHash: nil)
+
+        let first = try await vault.createConflictCopy(relativeTo: "note.md", content: "older content")
+        let second = try await vault.createConflictCopy(relativeTo: "note.md", content: "oldest content")
+
+        #expect(first.relativePath.contains("conflict"))
+        #expect(second.relativePath.contains("conflict"))
+        #expect(first.relativePath != second.relativePath)
+        #expect(first.content == "older content")
+        #expect(second.content == "oldest content")
+        #expect(try await vault.read(relativePath: "note.md").content == "live content")
+    }
+
+    @Test func explicitConflictCopyRequiresAnExistingSafeSourceNote() async throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vault = NotesVault(root: root)
+
+        await #expect(throws: NotesVault.VaultError.self) {
+            _ = try await vault.createConflictCopy(relativeTo: "missing.md", content: "history")
+        }
+        await #expect(throws: NotesVault.VaultError.self) {
+            _ = try await vault.createConflictCopy(relativeTo: "../escape.md", content: "history")
+        }
+    }
+
     @Test func renameMovesTheFile() async throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

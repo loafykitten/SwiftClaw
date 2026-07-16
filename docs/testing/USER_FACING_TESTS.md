@@ -244,6 +244,17 @@ that platform; otherwise cover both where the behavior exists on both.
   Selection and summaries must stay restrained and read-only while usefully
   surfacing unchecked daily-note work, conflict copies, broken links, recent
   notes that need follow-up, and degraded index health.
+- **H-NOTE-011 — Scale and large-note usability.** Generate 5,000 varied notes
+  in an owned temporary vault and confirm initial indexing finishes within 30
+  seconds on the supported test Mac. Exact, middle/late-corpus, and no-result
+  searches should remain responsive. Open and edit a 1 MiB Markdown note;
+  typing, selection, autosave, and VoiceOver must remain usable even when syntax
+  styling is capped, with no source changes beyond what was typed.
+- **H-NOTE-012 — Revision recovery safety.** Edit a note through several saved
+  versions, understand the timestamps/previews in Revisions, and restore an old
+  version. The current note must remain byte-for-byte unchanged; the old content
+  must appear in one clearly named sibling conflict copy that can be compared
+  and merged manually.
 
 ### Settings
 
@@ -649,6 +660,21 @@ that platform; otherwise cover both where the behavior exists on both.
   must create a readable `.notes` card with index health and no edit actions.
   Sparkle refresh must replace the prior card, disable while running, and remain
   credential-free under the DEBUG fixture on both macOS and iOS.
+- **CU-NOTE-015 — Editor and quick-switcher accessibility.** On macOS, inspect
+  the native editor through the accessibility tree and VoiceOver: it must remain
+  an editable text control with a useful label/value and normal text navigation.
+  Open Command-O without the mouse; type a query, move with Up/Down, open with
+  Return, and dismiss with Escape. On iOS, verify the TextEditor fallback keeps
+  the same readable label and lossless content behavior. Proposal diffs must
+  speak added, removed, unchanged, and blank lines without relying on color or
+  `+`/`-` punctuation.
+- **CU-NOTE-016 — Revisions sheet and restore copy.** In the hardened temporary
+  fixture on macOS and iOS, open Revisions for a note with history and for one
+  without it. Verify newest-first dates, short previews, empty/loading/error
+  states, accessible Restore/Close controls, and disabled duplicate activation
+  while restoring. Restore a revision and confirm the success path names one
+  new conflict copy containing the historical content while the live note stays
+  unchanged. Close the sheet and confirm the copy is visible and searchable.
 
 ### Settings
 

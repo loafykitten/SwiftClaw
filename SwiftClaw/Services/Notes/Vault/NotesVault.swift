@@ -196,6 +196,46 @@ actor NotesVault {
         }
     }
 
+    /// Creates a uniquely named sibling conflict copy containing `content`
+    /// while leaving the live note at `relativePath` byte-for-byte untouched.
+    /// This is deliberately separate from `write`: revision restore must
+    /// never manufacture a hash mismatch or risk replacing the current note.
+    /// The destination is published create-only, so an external process that
+    /// claims a same-second name simply makes this operation try the next
+    /// deterministic suffix.
+    func createConflictCopy(relativeTo relativePath: String, content: String) async throws -> NoteFileSnapshot {
+        try await withScope {
+            let logicalURL = try resolveExistingURL(for: relativePath)
+            guard let data = content.data(using: .utf8) else {
+                throw VaultError.invalidUTF8(relativePath)
+            }
+
+            return try coordinateReplacement(at: logicalURL) { coordinatedURL in
+                while true {
+                    let conflictURLs = makeConflictURLs(for: coordinatedURL, matching: logicalURL)
+                    do {
+                        try AtomicFileWriter.createExclusive(
+                            data,
+                            at: conflictURLs.coordinatedURL,
+                            fileManager: fileManager
+                        )
+                        let conflictRelativePath = try computeRelativePath(for: conflictURLs.logicalURL)
+                        return try snapshot(
+                            at: conflictURLs.coordinatedURL,
+                            relativePath: conflictRelativePath
+                        )
+                    } catch AtomicFileWriter.WriteError.alreadyExists {
+                        continue
+                    } catch {
+                        throw VaultError.ioFailure(
+                            "Couldn't restore a revision for \"\(relativePath)\": \(error.localizedDescription)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     /// Creates a note at `relativePath` only if nothing exists there yet,
     /// atomically — no sibling "(conflict …)" copy and no overwrite, ever,
     /// unlike `write(expectedHash: nil)`. Backed by `AtomicFileWriter
