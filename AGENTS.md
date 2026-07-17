@@ -20,6 +20,10 @@ this file to stay scannable:
   → `docs/features/REMINDERS.md`
 - **The Notes subsystem** (vault safety, editor, hybrid search, AI tools & proposals, quick capture, revisions, deferred items)
   → `docs/features/NOTES.md`
+- **The Memory subsystem** (design concept — collections/entries, access levels, scoping, pinning, LLM exposure tiers, proposals; not yet implemented)
+  → `docs/features/MEMORY.md`
+- **The Memory implementation plan** (research findings, key decisions, phases)
+  → `docs/MEMORY_PLAN.md`
 - **End-of-feature/phase user-facing test catalog**
   → `docs/testing/USER_FACING_TESTS.md`
 - **Headless iOS-simulator UI verification** (idb taps, screenshots, Xcode 27 setup)
