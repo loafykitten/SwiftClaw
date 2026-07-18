@@ -1,6 +1,6 @@
 # Deep Research feature + Investigation repositioning
 
-**Started:** 2026-07-18  **Status:** Phase 2 ready for Claude review
+**Started:** 2026-07-18  **Status:** Phase 3 ready for Claude review
 
 ## Goal
 
@@ -11,19 +11,23 @@ shared parameterized `ResearchEngine`. Full plan: `docs/DEEP_RESEARCH_PLAN.md`.
 ## Current state
 
 Planning is complete on `feature/deep-research` (worktree
-`.claude/worktrees/deep-research`). Phase 1 extracted the existing Investigation
-pipeline into `ResearchEngine` + `ResearchConfiguration` and wired the optional
-Research Model fallback. Phase 2 adds the shared budget, bounded HTML/PDF page
-fetching, dependency-free main-content extraction, and evidence ledger behind
-`.fetchPages`; the `.investigation()` snippet prompt and report path remain
-unchanged. New focused test sources cover each component. Build and full test
-verification are delegated to Claude per the phase task.
+`.claude/worktrees/deep-research`). Phases 1–2 provide the shared engine,
+configuration, budget, fetching, extraction, and evidence ledger. Phase 3 adds
+the deep-only clarify/plan/run API, reflection waves, outline-first section
+writing, claim verification, progress events, and per-stage degradation. A
+scripted engine integration suite covers the happy path, writing/verification
+fallbacks, and reflection budget cutoff without network access. The
+`.investigation()` snippet prompts, flow, signature, and report template remain
+unchanged; its production calls now pass through injectable closures with the
+same defaults. Build and test verification are delegated to Claude per the
+phase task.
 
 ## Next steps
 
-1. Claude: review the Phase 2 diff and run macOS/iOS build plus focused tests.
+1. Claude: review the Phase 3 diff and run the focused
+   `DeepResearchPipelineTests` suite plus macOS/iOS builds.
 2. Address any compiler/test findings from the real project build.
-3. Phases 3–6 per the plan doc.
+3. Phases 4–6 per the plan doc.
 
 ## Decisions & constraints
 
@@ -51,3 +55,6 @@ verification are delegated to Claude per the phase task.
 - `SwiftClaw/Services/Research/{ResearchBudget,EvidenceStore,PageFetcher,ContentExtractor}.swift` — Phase 2 evidence and fetching primitives
 - `SwiftClaw/Services/Research/ResearchEngine.swift` — budget routing and `.fetchPages` gather branch
 - `SwiftClawTests/Research/{ResearchBudget,EvidenceStore,PageFetcher,ContentExtractor}Tests.swift` — Phase 2 focused coverage
+- `SwiftClaw/Services/Research/DeepResearchTypes.swift` — Phase 3 editable plan/context, result, source, and progress values
+- `SwiftClaw/Services/Research/ResearchEngine.swift` — Phase 3 deep pipeline and injected search/completion seams
+- `SwiftClawTests/Research/DeepResearchPipelineTests.swift` — scripted Phase 3 engine integration coverage
