@@ -1,6 +1,6 @@
 # Performance optimizations across features
 
-**Started:** 2026-07-18  **Status:** in progress
+**Started:** 2026-07-18  **Status:** ready for review
 
 ## Goal
 
@@ -13,12 +13,16 @@ and full test suite green, findings below addressed or explicitly skipped.
 
 ## Current state
 
-Wave 0 plus batches W1 (Notes editor), W3 (Memory), W4 (Reminders),
-W5 (Calendar), and W6 (Email) are implemented, reviewed, tested, and merged
-onto `perf/feature-optimizations`; the full macOS test suite passed on the
-integrated branch at the W1+W3+W4+W5 point, and W6's ten covering suites
-passed after merge-time fixes. W2 (Notes services) and W7 (Chat) codex runs
-are in flight; W8 (Home/Workspace) waits on W7's async attachment API.
+All eight batches (Wave 0, W1–W8) are implemented, reviewed, tested, and
+merged onto `perf/feature-optimizations`. Two independent Opus 4.8
+adversarial reviews ran (merged batches; then W2/W7/W8); all four verified
+findings are fixed: recurrence end dates now store the final occurrence's
+END (backfill key bumped to v2 because v1 briefly shipped start-side
+values), review notify tools refresh the chat-ordering cache after direct
+message insertion, orphaned FSEvent monitors are stopped when a Notes
+activation pass aborts pre-commit, and the metadata-only `upsertMessages`
+contract is documented. Full macOS suite green; iOS build verified.
+Remaining: PR to main.
 
 Merge-time findings worth remembering:
 - codex's sandbox cannot run xcodebuild (CoreSimulatorService); every batch
