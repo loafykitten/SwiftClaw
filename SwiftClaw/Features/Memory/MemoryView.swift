@@ -18,6 +18,28 @@ nonisolated struct MemoryEntryRoute: Hashable {
     let entryID: UUID
 }
 
+/// Tag JSON is decoded once per repository mutation generation. All Memory
+/// writes share that signal, including writes originating outside this view.
+@MainActor
+private final class MemoryTagIndexCache {
+    private var generation = -1
+    private var cachedTags: [String] = []
+
+    func tags(
+        for generation: Int,
+        collections: [MemoryCollection],
+        repository: MemoryRepository
+    ) -> [String] {
+        guard generation != self.generation else { return cachedTags }
+        var tags = Set<String>()
+        for collection in collections { tags.formUnion(collection.tags) }
+        for entry in repository.allEntries() { tags.formUnion(entry.tags) }
+        cachedTags = tags.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        self.generation = generation
+        return cachedTags
+    }
+}
+
 /// The Memory root: macOS three-column (sidebar › entry list › detail), iOS
 /// stacked (landing › section list › entry detail) — pushed onto Workspace's
 /// ambient `NavigationStack` like the other features, per the
@@ -25,11 +47,11 @@ nonisolated struct MemoryEntryRoute: Hashable {
 struct MemoryView: View {
     @Environment(\.modelContext) private var modelContext
     @Query(sort: \MemoryCollection.createdAt) private var collections: [MemoryCollection]
-    @Query(sort: \MemoryEntry.updatedAt, order: .reverse) private var entries: [MemoryEntry]
 
     @State private var section: MemorySection? = .all
     @State private var selectedEntryID: UUID?
     @State private var isCreatingCollection = false
+    @State private var tagIndexCache = MemoryTagIndexCache()
 
     /// The shared repository (so mutations bump the prompt builder's
     /// generation) with a local fallback for previews, where `AppBootstrap`
@@ -38,27 +60,24 @@ struct MemoryView: View {
         MemoryFeatureModel.shared.repository ?? MemoryRepository(modelContext: modelContext)
     }
 
-    private var pinnedCollections: [MemoryCollection] {
-        collections.filter(\.isPinned)
-    }
-
-    private var unpinnedCollections: [MemoryCollection] {
-        // Inbox surfaces first among the unpinned collections.
-        collections.filter { !$0.isPinned }
-            .sorted { ($0.isInbox ? 0 : 1, $0.createdAt) < ($1.isInbox ? 0 : 1, $1.createdAt) }
-    }
-
-    /// Every distinct tag across collections and entries, for the sidebar's
-    /// tag shortcuts.
-    private var allTags: [String] {
-        var tags = Set<String>()
-        for collection in collections { tags.formUnion(collection.tags) }
-        for entry in entries { tags.formUnion(entry.tags) }
-        return tags.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-    }
-
     var body: some View {
-        platformBody
+        let repository = repository
+        let mutationGeneration = repository.mutationGeneration
+        let pinnedCollections = collections.filter(\.isPinned)
+        // Inbox surfaces first among the unpinned collections.
+        let unpinnedCollections = collections.filter { !$0.isPinned }
+            .sorted { ($0.isInbox ? 0 : 1, $0.createdAt) < ($1.isInbox ? 0 : 1, $1.createdAt) }
+        let allTags = tagIndexCache.tags(
+            for: mutationGeneration,
+            collections: collections,
+            repository: repository
+        )
+        return platformBody(
+            repository: repository,
+            pinnedCollections: pinnedCollections,
+            unpinnedCollections: unpinnedCollections,
+            allTags: allTags
+        )
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     Button {
@@ -81,18 +100,31 @@ struct MemoryView: View {
     // MARK: - macOS three-column layout
 
     #if os(macOS)
-    private var platformBody: some View {
+    private func platformBody(
+        repository: MemoryRepository,
+        pinnedCollections: [MemoryCollection],
+        unpinnedCollections: [MemoryCollection],
+        allTags: [String]
+    ) -> some View {
         HSplitView {
-            sidebar
+            sidebar(
+                pinnedCollections: pinnedCollections,
+                unpinnedCollections: unpinnedCollections,
+                allTags: allTags
+            )
                 .frame(minWidth: 210, idealWidth: 240, maxWidth: 300)
-            middleColumn
+            middleColumn(repository: repository)
                 .frame(minWidth: 320, idealWidth: 400)
-            detailColumn
+            detailColumn(repository: repository)
                 .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private var sidebar: some View {
+    private func sidebar(
+        pinnedCollections: [MemoryCollection],
+        unpinnedCollections: [MemoryCollection],
+        allTags: [String]
+    ) -> some View {
         List(selection: $section) {
             Section {
                 Label("All Memory", systemImage: "brain")
@@ -132,7 +164,7 @@ struct MemoryView: View {
     }
 
     @ViewBuilder
-    private var middleColumn: some View {
+    private func middleColumn(repository: MemoryRepository) -> some View {
         switch section {
         case .activity:
             MemoryActivityFeedView()
@@ -153,11 +185,11 @@ struct MemoryView: View {
     }
 
     @ViewBuilder
-    private var detailColumn: some View {
+    private func detailColumn(repository: MemoryRepository) -> some View {
         if section == .activity {
             emptyColumn("Memory changes are listed in the feed")
         } else if let selectedEntryID,
-                  let entry = entries.first(where: { $0.id == selectedEntryID }) {
+                  let entry = repository.entry(id: selectedEntryID) {
             MemoryEntryDetailView(entry: entry, repository: repository)
         } else {
             emptyColumn("Select a memory")
@@ -174,8 +206,17 @@ struct MemoryView: View {
     // MARK: - iOS stacked layout
 
     #else
-    private var platformBody: some View {
-        landingList
+    private func platformBody(
+        repository: MemoryRepository,
+        pinnedCollections: [MemoryCollection],
+        unpinnedCollections: [MemoryCollection],
+        allTags: [String]
+    ) -> some View {
+        landingList(
+            pinnedCollections: pinnedCollections,
+            unpinnedCollections: unpinnedCollections,
+            allTags: allTags
+        )
             .navigationDestination(for: MemorySection.self) { section in
                 if section == .activity {
                     MemoryActivityFeedView()
@@ -184,7 +225,7 @@ struct MemoryView: View {
                 }
             }
             .navigationDestination(for: MemoryEntryRoute.self) { route in
-                if let entry = entries.first(where: { $0.id == route.entryID }) {
+                if let entry = repository.entry(id: route.entryID) {
                     MemoryEntryDetailView(entry: entry, repository: repository)
                 } else {
                     ContentUnavailableView(
@@ -196,7 +237,11 @@ struct MemoryView: View {
             }
     }
 
-    private var landingList: some View {
+    private func landingList(
+        pinnedCollections: [MemoryCollection],
+        unpinnedCollections: [MemoryCollection],
+        allTags: [String]
+    ) -> some View {
         List {
             Section {
                 NavigationLink(value: MemorySection.all) {

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftData
 
 nonisolated enum MemoryError: LocalizedError {
@@ -39,6 +40,7 @@ nonisolated enum MemoryError: LocalizedError {
 /// Reads intended for the UI go through `@Query` in views; this repository
 /// serves mutations, tool calls, search, and the Workspace tile summary.
 @MainActor
+@Observable
 final class MemoryRepository {
     private static let logger = AppLog.make("memory")
 
@@ -211,9 +213,7 @@ final class MemoryRepository {
         // Cascade deletion is about to remove these entries; any fact
         // elsewhere that one of them superseded becomes current again
         // rather than staying stamped by (and hidden behind) a dead entry.
-        for entry in collection.entries {
-            clearSupersededStamps(pointingTo: entry.id)
-        }
+        clearSupersededStamps(pointingTo: Set(collection.entries.map(\.id)))
         modelContext.delete(collection)
         recordEvent(
             kind: .deleted,
@@ -383,10 +383,21 @@ final class MemoryRepository {
     /// Removing an entry (delete or undo) must not leave dangling
     /// `supersededByID` stamps: the fact it replaced becomes current again.
     private func clearSupersededStamps(pointingTo entryID: UUID) {
-        let predicate = #Predicate<MemoryEntry> { $0.supersededByID == entryID }
+        clearSupersededStamps(pointingTo: [entryID])
+    }
+
+    /// Collection deletion clears every affected stamp from one fetch rather
+    /// than issuing one fetch for every cascaded entry.
+    private func clearSupersededStamps(pointingTo entryIDs: Set<UUID>) {
+        guard !entryIDs.isEmpty else { return }
+        let predicate = #Predicate<MemoryEntry> { $0.supersededByID != nil }
         let stamped = (try? modelContext.fetch(FetchDescriptor(predicate: predicate))) ?? []
-        for entry in stamped {
+        let restoredAt = Date.now
+        for entry in stamped where entry.supersededByID.map(entryIDs.contains) == true {
             entry.supersededByID = nil
+            // Exposure fragments are keyed by the owning collection's
+            // timestamp, including when a deletion restores a fact elsewhere.
+            entry.collection?.updatedAt = restoredAt
         }
     }
 
@@ -495,13 +506,52 @@ final class MemoryRepository {
     /// `docs/MEMORY_PLAN.md`); this method is where a future index-backed
     /// swap would land. Superseded entries are included — search and the UI
     /// see everything; only prompt injection excludes them.
-    func search(_ text: String, filter: SearchFilter = SearchFilter()) -> [MemoryEntry] {
+    func search(
+        _ text: String,
+        filter: SearchFilter = SearchFilter(),
+        limit: Int? = nil
+    ) -> [MemoryEntry] {
+        if let limit, limit <= 0 { return [] }
         let query = SearchQuery.Compiled(text)
-        return allEntries().filter { entry in
-            guard matchesFilter(entry, filter: filter) else { return false }
-            guard query.isActive else { return true }
-            return query.matches(in: searchValues(for: entry))
+        guard let limit else {
+            return allEntries().filter { entry in
+                matchesSearch(entry, query: query, filter: filter)
+            }
         }
+
+        // Lexical and relationship filters cannot be expressed by one
+        // SwiftData predicate. Page newest-first until enough matches are
+        // found so bounded UI/tool searches avoid retaining the full store.
+        let batchSize = max(50, limit * 2)
+        var offset = 0
+        var matches: [MemoryEntry] = []
+        while matches.count < limit {
+            var descriptor = FetchDescriptor<MemoryEntry>(
+                sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+            )
+            descriptor.fetchLimit = batchSize
+            descriptor.fetchOffset = offset
+            let batch = (try? modelContext.fetch(descriptor)) ?? []
+            guard !batch.isEmpty else { break }
+            for entry in batch where matches.count < limit {
+                if matchesSearch(entry, query: query, filter: filter) {
+                    matches.append(entry)
+                }
+            }
+            guard batch.count == batchSize else { break }
+            offset += batch.count
+        }
+        return matches
+    }
+
+    private func matchesSearch(
+        _ entry: MemoryEntry,
+        query: SearchQuery.Compiled,
+        filter: SearchFilter
+    ) -> Bool {
+        guard matchesFilter(entry, filter: filter) else { return false }
+        guard query.isActive else { return true }
+        return query.matches(in: searchValues(for: entry))
     }
 
     private func matchesFilter(_ entry: MemoryEntry, filter: SearchFilter) -> Bool {

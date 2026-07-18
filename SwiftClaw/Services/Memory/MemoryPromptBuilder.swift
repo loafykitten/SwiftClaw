@@ -45,6 +45,39 @@ final class MemoryPromptBuilder {
     private let fullInjectionTokenLimit: Int
     private var cachedExposure: Exposure?
     private var cachedGeneration = -1
+    /// Each fragment remains valid until its collection's `updatedAt`
+    /// changes; repository mutations update that timestamp for entry and
+    /// collection edits. Aggregate measurement avoids per-fragment rounding.
+    private var collectionFragmentCache: [UUID: CachedCollectionFragment] = [:]
+    /// Recall snapshots are rebuilt only when the repository's shared
+    /// mutation signal changes, keeping SwiftData models out of scoring.
+    private var cachedRecallCandidates: [RecallCandidate] = []
+    private var cachedRecallGeneration = -1
+
+    private struct CachedCollectionFragment {
+        let updatedAt: Date
+        let text: String
+        let measurement: TokenEstimator.Measurement
+    }
+
+    private nonisolated struct RecallCandidate: Sendable {
+        let id: UUID
+        let handle: String
+        let body: String
+        let normalizedBody: String
+        let entryTags: [String]
+        let createdAt: Date
+        let updatedAt: Date
+        let collectionID: UUID
+        let collectionTitle: String
+        let normalizedCollectionTitle: String
+        let collectionTags: [String]
+    }
+
+    private nonisolated struct ScoredRecallCandidate: Sendable {
+        let candidate: RecallCandidate
+        let score: Double
+    }
 
     /// Deterministic, locale-independent entry dates.
     private static let dateFormatter: DateFormatter = {
@@ -70,15 +103,23 @@ final class MemoryPromptBuilder {
             return cachedExposure
         }
         let collections = orderedCollections()
-        let fullBlock = Self.fullStoreBlock(collections: collections)
-        let estimatedTokens = TokenEstimator.estimatedTokens(for: fullBlock)
-        let exposure: Exposure = estimatedTokens <= fullInjectionTokenLimit
-            ? Exposure(tier: .full, block: fullBlock, estimatedStoreTokens: estimatedTokens)
-            : Exposure(
+        let fragments = serializedFragments(for: collections)
+        let separatorMeasurement = TokenEstimator.measurement(for: "\n\n")
+        let measurement = fragments.reduce(TokenEstimator.measurement(for: Self.fullStorePrefix)) {
+            $0 + separatorMeasurement + $1.measurement
+        }
+        let estimatedTokens = measurement.estimatedTokens
+        let exposure: Exposure
+        if estimatedTokens <= fullInjectionTokenLimit {
+            let fullBlock = ([Self.fullStorePrefix] + fragments.map(\.text)).joined(separator: "\n\n")
+            exposure = Exposure(tier: .full, block: fullBlock, estimatedStoreTokens: estimatedTokens)
+        } else {
+            exposure = Exposure(
                 tier: .index,
-                block: Self.indexBlock(collections: collections),
+                block: Self.indexBlock(collections: collections, fragments: fragments),
                 estimatedStoreTokens: estimatedTokens
             )
+        }
         cachedExposure = exposure
         cachedGeneration = repository.mutationGeneration
         return exposure
@@ -113,22 +154,34 @@ final class MemoryPromptBuilder {
         them.
         """
 
-    private static func fullStoreBlock(collections: [MemoryCollection]) -> String {
-        var lines: [String] = [
-            "## Memory",
-            "",
-            """
-            Your persistent memory store, maintained with the user. Weave \
-            relevant facts in naturally. Entry handles (the 8-character \
-            codes) identify entries for supersede_memory; never show them \
-            to the user. \(untrustedContentNotice)
-            """,
-        ]
-        for collection in collections {
-            lines.append("")
-            lines.append(contentsOf: serialize(collection: collection))
+    private static let fullStorePrefix = [
+        "## Memory",
+        "",
+        """
+        Your persistent memory store, maintained with the user. Weave \
+        relevant facts in naturally. Entry handles (the 8-character \
+        codes) identify entries for supersede_memory; never show them \
+        to the user. \(untrustedContentNotice)
+        """,
+    ].joined(separator: "\n")
+
+    private func serializedFragments(for collections: [MemoryCollection]) -> [CachedCollectionFragment] {
+        let liveIDs = Set(collections.map(\.id))
+        collectionFragmentCache = collectionFragmentCache.filter { liveIDs.contains($0.key) }
+        return collections.map { collection in
+            if let cached = collectionFragmentCache[collection.id],
+               cached.updatedAt == collection.updatedAt {
+                return cached
+            }
+            let text = Self.serialize(collection: collection).joined(separator: "\n")
+            let fragment = CachedCollectionFragment(
+                updatedAt: collection.updatedAt,
+                text: text,
+                measurement: TokenEstimator.measurement(for: text)
+            )
+            collectionFragmentCache[collection.id] = fragment
+            return fragment
         }
-        return lines.joined(separator: "\n")
     }
 
     /// Internal (not private): `OpenMemoryCollectionTool` returns exactly
@@ -161,7 +214,10 @@ final class MemoryPromptBuilder {
         return "### \(sanitized(collection.title)) (\(collection.handle); \(attributes.joined(separator: "; ")))"
     }
 
-    private static func indexBlock(collections: [MemoryCollection]) -> String {
+    private static func indexBlock(
+        collections: [MemoryCollection],
+        fragments: [CachedCollectionFragment]
+    ) -> String {
         var lines: [String] = [
             "## Memory",
             "",
@@ -186,9 +242,9 @@ final class MemoryPromptBuilder {
             if !collection.tags.isEmpty { attributes.append("tags: \(collection.tags.map(sanitized).joined(separator: ", "))") }
             lines.append("- (\(collection.handle)) \(sanitized(collection.title)) (\(attributes.joined(separator: "; ")))")
         }
-        for collection in collections.filter(\.isPinned) {
+        for (collection, fragment) in zip(collections, fragments) where collection.isPinned {
             lines.append("")
-            lines.append(contentsOf: serialize(collection: collection))
+            lines.append(fragment.text)
         }
         return lines.joined(separator: "\n")
     }
@@ -203,34 +259,28 @@ final class MemoryPromptBuilder {
     /// skipped (already injected in full). Returns nil when nothing matches.
     func recallBlock(for userMessage: String, limit: Int = 20, now: Date = .now) -> String? {
         let terms = Self.recallTerms(from: userMessage)
-        guard !terms.isEmpty else { return nil }
+        guard !terms.isEmpty, limit > 0 else { return nil }
 
-        var scored: [(entry: MemoryEntry, score: Double)] = []
-        for entry in repository.allEntries() {
-            guard entry.supersededByID == nil,
-                  let collection = entry.collection,
-                  !collection.isPinned else { continue }
-            let score = Self.score(entry: entry, collection: collection, terms: terms, now: now)
+        let perCollectionCap = max(2, limit / 2)
+        var topByCollection: [UUID: [ScoredRecallCandidate]] = [:]
+        for candidate in recallCandidates() {
+            let score = Self.score(candidate: candidate, terms: terms, now: now)
             if score > 0 {
-                scored.append((entry, score))
+                Self.insert(
+                    ScoredRecallCandidate(candidate: candidate, score: score),
+                    into: &topByCollection[candidate.collectionID, default: []],
+                    limit: perCollectionCap
+                )
             }
         }
-        guard !scored.isEmpty else { return nil }
+        guard !topByCollection.isEmpty else { return nil }
 
-        // Relevance-ordered, with deterministic ties; collection diversity is
-        // preserved by capping any single collection at half the budget.
-        let ranked = scored.sorted {
-            if $0.score != $1.score { return $0.score > $1.score }
-            return $0.entry.id.uuidString < $1.entry.id.uuidString
-        }
-        let perCollectionCap = max(2, limit / 2)
-        var countsByCollection: [UUID: Int] = [:]
-        var selected: [MemoryEntry] = []
-        for candidate in ranked where selected.count < limit {
-            guard let collectionID = candidate.entry.collection?.id else { continue }
-            if countsByCollection[collectionID, default: 0] < perCollectionCap {
-                countsByCollection[collectionID, default: 0] += 1
-                selected.append(candidate.entry)
+        // Keeping only each collection's eligible prefix before the global
+        // top-K preserves the diversity cap without sorting every match.
+        var selected: [ScoredRecallCandidate] = []
+        for candidates in topByCollection.values {
+            for candidate in candidates {
+                Self.insert(candidate, into: &selected, limit: limit)
             }
         }
 
@@ -239,15 +289,15 @@ final class MemoryPromptBuilder {
             "",
             "Recalled for the latest message from the memory store (some may be irrelevant — judge for yourself). \(Self.untrustedContentNotice)",
         ]
-        let byCollection = Dictionary(grouping: selected) { $0.collection?.id ?? UUID() }
+        let rankedCandidates = selected.map(\.candidate)
+        let byCollection = Dictionary(grouping: rankedCandidates, by: \.collectionID)
         // Group under collection headings, ordered by each group's best hit.
         var seenCollections: Set<UUID> = []
-        for candidate in selected {
-            guard let collection = candidate.collection,
-                  seenCollections.insert(collection.id).inserted,
-                  let group = byCollection[collection.id] else { continue }
+        for candidate in rankedCandidates {
+            guard seenCollections.insert(candidate.collectionID).inserted,
+                  let group = byCollection[candidate.collectionID] else { continue }
             lines.append("")
-            lines.append("From \"\(Self.sanitized(collection.title))\":")
+            lines.append("From \"\(candidate.collectionTitle)\":")
             for entry in group {
                 lines.append("- (\(entry.handle)) \(Self.sanitized(entry.body)) [\(Self.dateFormatter.string(from: entry.createdAt))]")
             }
@@ -264,28 +314,68 @@ final class MemoryPromptBuilder {
             .filter { $0.count >= 3 }
     }
 
-    private static func score(
-        entry: MemoryEntry,
-        collection: MemoryCollection,
+    private func recallCandidates() -> [RecallCandidate] {
+        if cachedRecallGeneration == repository.mutationGeneration {
+            return cachedRecallCandidates
+        }
+        cachedRecallCandidates = repository.allEntries().compactMap { entry in
+            guard entry.supersededByID == nil,
+                  let collection = entry.collection,
+                  !collection.isPinned else { return nil }
+            return RecallCandidate(
+                id: entry.id,
+                handle: entry.handle,
+                body: entry.body,
+                normalizedBody: entry.body.lowercased(),
+                entryTags: entry.tags.map { $0.lowercased() },
+                createdAt: entry.createdAt,
+                updatedAt: entry.updatedAt,
+                collectionID: collection.id,
+                collectionTitle: Self.sanitized(collection.title),
+                normalizedCollectionTitle: collection.title.lowercased(),
+                collectionTags: collection.tags.map { $0.lowercased() }
+            )
+        }
+        cachedRecallGeneration = repository.mutationGeneration
+        return cachedRecallCandidates
+    }
+
+    private nonisolated static func insert(
+        _ candidate: ScoredRecallCandidate,
+        into ranked: inout [ScoredRecallCandidate],
+        limit: Int
+    ) {
+        let index = ranked.firstIndex { isRankedBefore(candidate, $0) } ?? ranked.endIndex
+        ranked.insert(candidate, at: index)
+        if ranked.count > limit {
+            ranked.removeLast()
+        }
+    }
+
+    private nonisolated static func isRankedBefore(
+        _ lhs: ScoredRecallCandidate,
+        _ rhs: ScoredRecallCandidate
+    ) -> Bool {
+        if lhs.score != rhs.score { return lhs.score > rhs.score }
+        return lhs.candidate.id.uuidString < rhs.candidate.id.uuidString
+    }
+
+    private nonisolated static func score(
+        candidate: RecallCandidate,
         terms: [String],
         now: Date
     ) -> Double {
-        let body = entry.body.lowercased()
-        let entryTags = entry.tags.map { $0.lowercased() }
-        let collectionText = collection.title.lowercased()
-        let collectionTags = collection.tags.map { $0.lowercased() }
-
         var score = 0.0
         for term in terms {
-            if body.contains(term) { score += 1.0 }
-            if entryTags.contains(where: { $0.contains(term) }) { score += 1.5 }
-            if collectionText.contains(term) { score += 0.75 }
-            if collectionTags.contains(where: { $0.contains(term) }) { score += 0.75 }
+            if candidate.normalizedBody.contains(term) { score += 1.0 }
+            if candidate.entryTags.contains(where: { $0.contains(term) }) { score += 1.5 }
+            if candidate.normalizedCollectionTitle.contains(term) { score += 0.75 }
+            if candidate.collectionTags.contains(where: { $0.contains(term) }) { score += 0.75 }
         }
         guard score > 0 else { return 0 }
         // Mild recency for mutable state: a fact touched this week nudges
         // ahead of an equally relevant stale one, nothing more.
-        if now.timeIntervalSince(entry.updatedAt) < 7 * 24 * 3600 {
+        if now.timeIntervalSince(candidate.updatedAt) < 7 * 24 * 3600 {
             score += 0.25
         }
         return score

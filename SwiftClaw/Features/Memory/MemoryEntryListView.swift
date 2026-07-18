@@ -5,15 +5,14 @@ import SwiftUI
 /// macOS, a pushed screen on iOS. Search goes through
 /// `MemoryRepository.search` (the same seam the `search_memory` tool will
 /// use) and is visibly labeled with what it covers ("Search All Memory" vs.
-/// the collection name); the `@Query` properties exist to re-render this
-/// view when the store changes underneath that snapshot search.
+/// the collection name). Repository observation re-runs snapshot search when
+/// a mutation lands through UI, chat tools, or a review service.
 struct MemoryEntryListView: View {
     let section: MemorySection
     let repository: MemoryRepository
     /// macOS selection binding; nil on iOS, where rows push instead.
     var selectedEntryID: Binding<UUID?>?
 
-    @Query(sort: \MemoryEntry.updatedAt, order: .reverse) private var entries: [MemoryEntry]
     @Query(sort: \MemoryCollection.createdAt) private var collections: [MemoryCollection]
 
     @State private var searchText = ""
@@ -46,7 +45,10 @@ struct MemoryEntryListView: View {
         aiCreatedOnly || accessLevelFilter != nil || scopeFilter != .any
     }
 
-    private var visibleEntries: [MemoryEntry] {
+    private func visibleEntries(mutationGeneration: Int) -> [MemoryEntry] {
+        // Reading the generation in `body` is the invalidation source; the
+        // value itself is only a cache key for repository-backed snapshots.
+        _ = mutationGeneration
         var filter = MemoryRepository.SearchFilter(
             accessLevel: accessLevelFilter,
             scope: scopeFilter,
@@ -55,12 +57,13 @@ struct MemoryEntryListView: View {
         if case .tag(let tag) = section {
             filter.tags = [tag]
         }
-        var results = repository.search(searchText, filter: filter)
+        let limit: Int? = if case .recent = section { Self.recentLimit } else { nil }
+        var results = repository.search(searchText, filter: filter, limit: limit)
         switch section {
         case .collection(let id):
             results = results.filter { $0.collection?.id == id }
         case .recent:
-            results = Array(results.prefix(Self.recentLimit))
+            break
         case .all, .tag, .activity:
             break
         }
@@ -68,9 +71,11 @@ struct MemoryEntryListView: View {
     }
 
     var body: some View {
+        let mutationGeneration = repository.mutationGeneration
+        let visibleEntries = visibleEntries(mutationGeneration: mutationGeneration)
         // Deliberately staged with intermediate `let`s — one flat modifier
         // chain here exceeded the type checker's budget.
-        let base = listContent
+        let base = listContent(visibleEntries: visibleEntries)
             .searchable(text: $searchText, prompt: searchPrompt)
             .navigationTitle(title)
             .toolbar { toolbarContent }
@@ -127,7 +132,7 @@ struct MemoryEntryListView: View {
             }
     }
 
-    private var listContent: some View {
+    private func listContent(visibleEntries: [MemoryEntry]) -> some View {
         List(selection: selectionBinding) {
             if let collection = currentCollection {
                 collectionHeader(collection)

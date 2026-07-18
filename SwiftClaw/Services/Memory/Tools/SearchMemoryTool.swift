@@ -17,13 +17,13 @@ struct SearchMemoryTool: Tool {
     /// precedent).
     struct Dependencies: Sendable {
         var isAvailable: @MainActor @Sendable () -> Bool
-        var search: @MainActor @Sendable (_ query: String) -> [MemorySearchHit]
+        var search: @MainActor @Sendable (_ query: String, _ limit: Int) -> [MemorySearchHit]
 
         static let live = Dependencies(
             isAvailable: { MemoryFeatureModel.shared.isAvailable },
-            search: { query in
+            search: { query, limit in
                 guard let repository = MemoryFeatureModel.shared.repository else { return [] }
-                return repository.search(query).map(MemorySearchHit.init)
+                return repository.search(query, limit: limit).map(MemorySearchHit.init)
             }
         )
     }
@@ -97,7 +97,7 @@ struct SearchMemoryTool: Tool {
         }
         let limit = min(max(arguments["limit"]?.intValue ?? Self.defaultLimit, 1), Self.maxLimit)
 
-        let hits = await dependencies.search(query).prefix(limit)
+        let hits = await dependencies.search(query, limit)
         guard !hits.isEmpty else {
             return "No memories match \"\(query)\"."
         }

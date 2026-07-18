@@ -10,16 +10,35 @@ import Foundation
 /// full-injection tier switch (flipping to the compact index early never
 /// blows the context; the reverse can).
 nonisolated enum TokenEstimator {
-    static func estimatedTokens(for text: String) -> Int {
+    struct Measurement: Sendable, Equatable {
         var asciiBytes = 0
         var nonASCIIScalars = 0
+
+        var estimatedTokens: Int {
+            (asciiBytes + 3) / 4 + nonASCIIScalars
+        }
+
+        static func + (lhs: Self, rhs: Self) -> Self {
+            Self(
+                asciiBytes: lhs.asciiBytes + rhs.asciiBytes,
+                nonASCIIScalars: lhs.nonASCIIScalars + rhs.nonASCIIScalars
+            )
+        }
+    }
+
+    static func estimatedTokens(for text: String) -> Int {
+        measurement(for: text).estimatedTokens
+    }
+
+    static func measurement(for text: String) -> Measurement {
+        var measurement = Measurement()
         for scalar in text.unicodeScalars {
             if scalar.isASCII {
-                asciiBytes += 1
+                measurement.asciiBytes += 1
             } else {
-                nonASCIIScalars += 1
+                measurement.nonASCIIScalars += 1
             }
         }
-        return (asciiBytes + 3) / 4 + nonASCIIScalars
+        return measurement
     }
 }

@@ -45,33 +45,65 @@ nonisolated enum MemoryActivityPresentation {
 /// resolutions. Snapshots in these rows are the record behind hard-delete
 /// undo — what the store said before each mutation.
 struct MemoryActivityFeedView: View {
-    @Query(sort: \MemoryActivityEvent.createdAt, order: .reverse)
-    private var events: [MemoryActivityEvent]
+    private static let pageSize = 50
+    @State private var windowLimit = pageSize
+
+    var body: some View {
+        MemoryActivityFeedWindow(
+            windowLimit: windowLimit,
+            loadEarlier: { windowLimit += Self.pageSize }
+        )
+    }
+}
+
+/// The descriptor retains only the visible recent window plus one sentinel
+/// row. Increasing the limit rebuilds the query for explicit pagination.
+private struct MemoryActivityFeedWindow: View {
+    let windowLimit: Int
+    let loadEarlier: () -> Void
+
+    @Query private var events: [MemoryActivityEvent]
     @Query private var collections: [MemoryCollection]
 
-    private var collectionTitles: [UUID: String] {
-        Dictionary(uniqueKeysWithValues: collections.map { ($0.id, $0.title) })
+    init(windowLimit: Int, loadEarlier: @escaping () -> Void) {
+        self.windowLimit = windowLimit
+        self.loadEarlier = loadEarlier
+        var descriptor = FetchDescriptor<MemoryActivityEvent>(
+            sortBy: [SortDescriptor(\MemoryActivityEvent.createdAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = windowLimit + 1
+        _events = Query(descriptor)
     }
 
     var body: some View {
+        let visibleEvents = Array(events.prefix(windowLimit))
+        let hasEarlier = events.count > windowLimit
+        let collectionTitles = Dictionary(uniqueKeysWithValues: collections.map { ($0.id, $0.title) })
         List {
-            if events.isEmpty {
+            if visibleEvents.isEmpty {
                 ContentUnavailableView(
                     "No Activity Yet",
                     systemImage: "clock.arrow.circlepath",
                     description: Text("Changes to memory — additions, edits, deletions — appear here.")
                 )
             } else {
-                ForEach(events) { event in
-                    row(for: event)
+                ForEach(visibleEvents) { event in
+                    row(for: event, collectionTitles: collectionTitles)
+                }
+                if hasEarlier {
+                    Button("Load Earlier", action: loadEarlier)
+                        .frame(maxWidth: .infinity)
                 }
             }
         }
         .navigationTitle("Activity")
     }
 
-    private func row(for event: MemoryActivityEvent) -> some View {
-        let title = headline(for: event)
+    private func row(
+        for event: MemoryActivityEvent,
+        collectionTitles: [UUID: String]
+    ) -> some View {
+        let title = headline(for: event, collectionTitles: collectionTitles)
         return HStack(alignment: .top, spacing: 10) {
             Image(systemName: MemoryActivityPresentation.systemImage(for: event.kind))
                 .foregroundStyle(.secondary)
@@ -95,7 +127,10 @@ struct MemoryActivityFeedView: View {
         .accessibilityLabel(accessibilityLabel(for: event, headline: title))
     }
 
-    private func headline(for event: MemoryActivityEvent) -> String {
+    private func headline(
+        for event: MemoryActivityEvent,
+        collectionTitles: [UUID: String]
+    ) -> String {
         // Collection-level rows (nil entryID: create/edit/delete/access
         // change of a collection) name the collection as the object —
         // "Created collection by you", with the title in the snapshot line —

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftData
 import Testing
 @testable import SwiftClaw
@@ -354,6 +355,35 @@ struct MemoryRepositoryTests {
         #expect(repository.search("Portland").map(\.id) == [old.id])
     }
 
+    @Test func boundedSearchPagesUntilItFindsEnoughMatches() throws {
+        let repository = try Self.makeRepository()
+        let collection = repository.createCollection(title: "Facts", createdBy: .user)
+        let baseline = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        for index in 0..<55 {
+            let entry = MemoryEntry(
+                body: "Unrelated \(index)",
+                createdBy: .user,
+                createdAt: baseline.addingTimeInterval(Double(index + 10)),
+                updatedAt: baseline.addingTimeInterval(Double(index + 10))
+            )
+            entry.collection = collection
+            repository.modelContext.insert(entry)
+        }
+        let olderMatch = MemoryEntry(
+            body: "Needle one",
+            createdBy: .user,
+            createdAt: baseline,
+            updatedAt: baseline
+        )
+        olderMatch.collection = collection
+        repository.modelContext.insert(olderMatch)
+        repository.save()
+
+        #expect(repository.search("needle", limit: 1).map(\.id) == [olderMatch.id])
+        #expect(repository.search("", limit: 3).count == 3)
+        #expect(repository.search("needle", limit: 0).isEmpty)
+    }
+
     // MARK: - Summary & generation
 
     @Test func summaryCountsActiveEntriesAndPendingProposals() throws {
@@ -388,6 +418,19 @@ struct MemoryRepositoryTests {
         repository.addEntry(body: "A fact", to: collection, createdBy: .user)
 
         #expect(repository.mutationGeneration == before + 2)
+    }
+
+    @Test func mutationGenerationIsObservable() async throws {
+        let repository = try Self.makeRepository()
+        await confirmation { didChange in
+            withObservationTracking {
+                _ = repository.mutationGeneration
+            } onChange: {
+                didChange()
+            }
+
+            _ = repository.createCollection(title: "Facts", createdBy: .user)
+        }
     }
 
     // MARK: - Helpers

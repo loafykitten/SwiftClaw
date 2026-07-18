@@ -29,6 +29,27 @@ struct MemoryPromptBuilderTests {
         #expect(afterMutation.block.contains("Hates red-eye flights"))
     }
 
+    @Test func fragmentCacheRefreshesCollectionWhenDeletionRestoresItsEntry() throws {
+        let repository = try Self.makeRepository()
+        let facts = repository.createCollection(title: "Facts", createdBy: .user)
+        let doomed = repository.createCollection(title: "Temporary", createdBy: .user)
+        let old = repository.addEntry(body: "Original fact", to: facts, createdBy: .user)
+        let replacement = try repository.supersedeEntry(
+            old,
+            withBody: "Replacement fact",
+            createdBy: .user
+        )
+        repository.moveEntry(replacement, to: doomed, actor: .user)
+        let builder = MemoryPromptBuilder(repository: repository)
+        #expect(!builder.exposure().block.contains("Original fact"))
+
+        try repository.deleteCollection(doomed, actor: .user)
+
+        let restored = builder.exposure().block
+        #expect(restored.contains("Original fact"))
+        #expect(!restored.contains("Replacement fact"))
+    }
+
     @Test func pinnedCollectionsSerializeFirstAndSupersededEntriesAreExcluded() throws {
         let repository = try Self.makeRepository()
         let unpinned = repository.createCollection(title: "AAA unpinned first by date", createdBy: .user)
@@ -70,6 +91,29 @@ struct MemoryPromptBuilderTests {
         #expect(fullTier.tier == .full)
     }
 
+    @Test func tierBoundaryMatchesExactFullSerializationMeasurement() throws {
+        let repository = try Self.makeRepository()
+        let collection = repository.createCollection(title: "Languages 🌍", createdBy: .user)
+        repository.addEntry(body: "Greets with こんにちは", to: collection, createdBy: .user)
+
+        let baseline = MemoryPromptBuilder(repository: repository).exposure()
+        let measuredTokens = TokenEstimator.estimatedTokens(for: baseline.block)
+        #expect(baseline.estimatedStoreTokens == measuredTokens)
+
+        let exactBoundary = MemoryPromptBuilder(
+            repository: repository,
+            fullInjectionTokenLimit: measuredTokens
+        ).exposure()
+        let belowBoundary = MemoryPromptBuilder(
+            repository: repository,
+            fullInjectionTokenLimit: measuredTokens - 1
+        ).exposure()
+        #expect(exactBoundary.tier == .full)
+        #expect(exactBoundary.block == baseline.block)
+        #expect(belowBoundary.tier == .index)
+        #expect(belowBoundary.estimatedStoreTokens == measuredTokens)
+    }
+
     @Test func recallRanksLexicalMatchesAndSkipsPinned() throws {
         let repository = try Self.makeRepository()
         let pinned = repository.createCollection(title: "Identity", isPinned: true, createdBy: .user)
@@ -91,6 +135,24 @@ struct MemoryPromptBuilderTests {
 
         #expect(builder.recallBlock(for: "zzzz qqqq") == nil)
         #expect(builder.recallBlock(for: "a an of") == nil)
+    }
+
+    @Test func recallCacheInvalidatesOnRepositoryMutation() throws {
+        let repository = try Self.makeRepository()
+        let collection = repository.createCollection(title: "Projects", createdBy: .user)
+        repository.addEntry(body: "Keeps weekly notes", to: collection, createdBy: .user)
+        let builder = MemoryPromptBuilder(repository: repository)
+
+        #expect(builder.recallBlock(for: "launch plan") == nil)
+        let launch = repository.addEntry(
+            body: "Launch plan uses staged rollout",
+            to: collection,
+            createdBy: .user
+        )
+
+        let recall = try #require(builder.recallBlock(for: "launch plan"))
+        #expect(recall.contains(launch.handle))
+        #expect(recall.contains("Launch plan uses staged rollout"))
     }
 
     @Test func tokenEstimatorIsConservativeForNonASCII() {
