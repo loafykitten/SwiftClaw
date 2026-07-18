@@ -108,7 +108,7 @@ struct MemoryReviewIntegrationTests {
 
     // MARK: - Review context (read recipe)
 
-    @Test func reviewContextIncludesPinnedAndFeatureScopedOnly() throws {
+    @Test func reviewContextIncludesEverythingExceptOtherFeatureScopes() throws {
         let fixture = try Self.makeFixture()
         let pinnedElsewhere = fixture.repository.createCollection(
             title: "Identity", scope: .calendar, isPinned: true, createdBy: .user
@@ -120,6 +120,8 @@ struct MemoryReviewIntegrationTests {
         fixture.repository.addEntry(body: "Deletes newsletters unread", to: emailScoped, createdBy: .ai)
         let globalUnpinned = fixture.repository.createCollection(title: "Dining", createdBy: .user)
         fixture.repository.addEntry(body: "Orders medium spice", to: globalUnpinned, createdBy: .user)
+        let inbox = fixture.repository.ensureInbox()
+        fixture.repository.addEntry(body: "Wants shipping notifications deleted", to: inbox, createdBy: .ai)
         let otherScoped = fixture.repository.createCollection(
             title: "Notes habits", scope: .notes, createdBy: .user
         )
@@ -132,8 +134,12 @@ struct MemoryReviewIntegrationTests {
         // Pinned rides into every review regardless of its own scope.
         #expect(block.contains("Works as a designer"))
         #expect(block.contains("Deletes newsletters unread"))
-        // Nothing else: not global-unpinned, not other-feature scopes.
-        #expect(!block.contains("Orders medium spice"))
+        // Global (unscoped) collections ride along too — chat-created
+        // memories usually land unscoped (often in the Inbox, which is
+        // unscopable), and the review must see them.
+        #expect(block.contains("Orders medium spice"))
+        #expect(block.contains("Wants shipping notifications deleted"))
+        // Only other-feature scopes stay out.
         #expect(!block.contains("Daily notes every morning"))
     }
 

@@ -106,6 +106,43 @@ struct EmailReviewNotifyToolTests {
         #expect(card.items[0].accountLabel == nil)
     }
 
+    /// A `flag` suggestion for an email that is already flagged is a no-op
+    /// the user reads as the review repeating itself — the tool must
+    /// downgrade it to `review` no matter what the model proposed.
+    @Test func executeDowngradesFlagActionForAlreadyFlaggedEmail() async throws {
+        let routerFixture = try Self.isolateRouterUnreadStore()
+        defer { Self.restoreRouter(routerFixture) }
+        let container = try Self.inMemoryContainer()
+        let setupContext = ModelContext(container)
+
+        let flagged = Self.email(
+            messageID: "<flagged@example.com>",
+            subject: "Already flagged"
+        )
+        flagged.isFlagged = true
+        setupContext.insert(flagged)
+        try setupContext.save()
+
+        let tool = EmailReviewNotifyTool(
+            modelContainer: container,
+            accountLabelProvider: { _ in nil }
+        )
+
+        _ = try await tool.execute(arguments: Self.arguments(
+            message: "One flagged item.",
+            emailID: flagged.id,
+            action: .flag,
+            summary: "Still needs attention"
+        ))
+
+        let readContext = ModelContext(container)
+        let chat = try #require(try readContext.fetch(FetchDescriptor<Chat>()).first)
+        let card = try #require(chat.sortedMessages.first?.reviewCard)
+        #expect(card.items.count == 1)
+        #expect(card.items[0].action == .review)
+        #expect(card.items[0].actionLabel == ReviewActionToken.review.displayName)
+    }
+
     @Test func executeIsIdempotentWithinARun() async throws {
         // M1 regression: an agentic loop can call notify_user_about_emails
         // more than once in its 8-round budget. The second call must be a

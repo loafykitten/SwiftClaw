@@ -53,11 +53,16 @@ struct ChatComposerView: View {
     }
 
     private var selectedReasoningEffort: ModelReasoningEffort {
-        if let chatReasoningEffort {
-            return chatReasoningEffort
+        let stored = chatReasoningEffort
+            ?? ModelReasoningEffort(rawValue: selectedReasoningEffortRaw)
+            ?? .off
+        // Reasoning models never run with reasoning off. A persisted `off`
+        // (pre-dating the menu dropping it, or from a non-reasoning
+        // selection) coerces to the model's default effort.
+        guard stored == .off, selectedModelSupportsReasoning else {
+            return stored
         }
-
-        return ModelReasoningEffort(rawValue: selectedReasoningEffortRaw) ?? .off
+        return reasoningDefaultForModelChange ?? .low
     }
 
     private var modelResolution: ComposerModelResolution {

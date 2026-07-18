@@ -389,7 +389,11 @@ enum ModelReasoningEffort: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
-    static let selectableCases: [Self] = [.off, .low, .medium, .high]
+    /// Efforts offered by the reasoning pickers. Those pickers only ever
+    /// apply to reasoning-capable models, so `off` is not offered — a
+    /// reasoning model always runs with reasoning on. `minimal` stays
+    /// excluded as well.
+    static let selectableCases: [Self] = [.low, .medium, .high]
 
     var displayName: String {
         switch self {
@@ -783,7 +787,13 @@ enum SettingsStorage {
 
     static func loadClawReasoningEffort(userDefaults: UserDefaults = .standard) -> ModelReasoningEffort {
         let raw = userDefaults.string(forKey: SettingsKeys.clawReasoningEffort)
-        return raw.flatMap(ModelReasoningEffort.init(rawValue:)) ?? defaultClawReasoningEffort
+        let stored = raw.flatMap(ModelReasoningEffort.init(rawValue:))
+        // The Claw model is reasoning-designated, so a persisted `off` (from
+        // before the pickers stopped offering it) coerces to the default.
+        guard let stored, stored.isReasoningEnabled else {
+            return defaultClawReasoningEffort
+        }
+        return stored
     }
 
     static let defaultChatContextTokenBudget = 200_000

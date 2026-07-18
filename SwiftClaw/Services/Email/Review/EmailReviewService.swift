@@ -371,8 +371,10 @@ final class EmailReviewService {
         in two months" and it's only been a few weeks), omit it for now rather than surfacing it every pass; \
         when that time has come, surface it. Then pick one action:
         - `reply` — the user clearly owes a response (a direct question or request awaiting their answer).
-        - `flag` — should be followed up on later (a deadline, an upcoming event, a commitment), or is \
-        already flagged and may still need attention.
+        - `flag` — not yet flagged, and should be followed up on later (a deadline, an upcoming event, a \
+        commitment). Never suggest `flag` for a thread whose data shows `isFlagged` true — it is already \
+        flagged, so re-flagging would do nothing; when it still needs attention, surface it as `review` \
+        (or `reply`/`delete`) instead.
         - `review` — needs the user's eyes or judgement. This is also your default: when a thread plausibly \
         matters but no sharper action clearly fits, surface it as `review` rather than dropping it.
         - `delete` — low-value mail the user is unlikely to miss: spam, junk, bulk promotions, automated \

@@ -7,10 +7,13 @@ import SwiftData
 /// fresh-context run.
 ///
 /// Read recipe (per `docs/features/MEMORY.md`): every pinned collection
-/// (regardless of scope) + collections scoped to the reviewed feature.
-/// Nothing else. The block ends with recent *declined* proposal texts for
-/// this feature — the injected text is the re-proposal dedup ("no" must not
-/// become a weekly question).
+/// (regardless of scope) + collections scoped to the reviewed feature +
+/// global (unscoped) collections, including the Inbox. Only collections
+/// scoped to a *different* feature are excluded — chat-created memories
+/// usually land unscoped (or in the Inbox, which is unscopable), and a
+/// missed relevant memory is worse than spent tokens. The block ends with
+/// recent *declined* proposal texts for this feature — the injected text is
+/// the re-proposal dedup ("no" must not become a weekly question).
 @MainActor
 enum MemoryReviewContextBuilder {
     static let declinedProposalLimit = 20
@@ -27,7 +30,8 @@ enum MemoryReviewContextBuilder {
         let all = repository.collections()
         let pinned = all.filter(\.isPinned)
         let scoped = all.filter { !$0.isPinned && $0.scope == feature }
-        let included = pinned + scoped
+        let global = all.filter { !$0.isPinned && $0.scope == nil }
+        let included = pinned + scoped + global
         let declined = declinedProposalTexts(for: feature, repository: repository)
         guard !included.isEmpty || !declined.isEmpty else { return nil }
 
@@ -36,7 +40,8 @@ enum MemoryReviewContextBuilder {
             "",
             """
             The user's persistent memory relevant to this review: pinned \
-            collections plus collections scoped to \(feature.displayName). \
+            collections, collections scoped to \(feature.displayName), and \
+            global collections. \
             Apply these facts; they already exist, so never re-propose them. \
             If this review reveals a durable pattern worth keeping, you may \
             use propose_memory (max \(ProposeMemoryTool.maxProposalsPerRun) \
