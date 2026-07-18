@@ -21,11 +21,17 @@ nonisolated struct ResearchEngine: Sendable {
     private static let maxAttempts = 3
     private static let surfaceResultCount = 8
     private static let threadResultCount = 4
+    /// Keeps each fetched source small enough for the Swift Model prompt while
+    /// preserving several paragraphs of useful context.
+    private static let pageTextCharacterLimit = 6_000
 
     private let configuration: ResearchConfiguration
+    private let pageFetcher: PageFetcher
+    private let contentExtractor = ContentExtractor()
 
-    init(configuration: ResearchConfiguration) {
+    init(configuration: ResearchConfiguration, pageFetcher: PageFetcher = PageFetcher()) {
         self.configuration = configuration
+        self.pageFetcher = pageFetcher
     }
 
     private struct DeadlineExceededError: LocalizedError, Sendable {
@@ -45,22 +51,25 @@ nonisolated struct ResearchEngine: Sendable {
             )
         }
 
-        let deadline = ContinuousClock.now + configuration.totalBudget
+        let startInstant = ContinuousClock.now
+        let deadline = startInstant + configuration.totalBudget
+        let budget = ResearchBudget(configuration: configuration, startInstant: startInstant)
         let subject = focus.map { "\(topic) — focus: \($0)" } ?? topic
 
         // 1. Surface search.
         let surfaceResults = try await searchWithRetries(
             query: topic,
             count: Self.surfaceResultCount,
-            deadline: deadline
+            deadline: deadline,
+            budget: budget
         )
 
         guard !surfaceResults.isEmpty else {
             return "The investigation found no web results for \"\(topic)\"."
         }
 
-        let catalog = SourceCatalog()
-        let surfaceLines = await numberedLines(for: surfaceResults, in: catalog)
+        let evidenceStore = EvidenceStore()
+        let surfaceLines = await numberedLines(for: surfaceResults, in: evidenceStore)
 
         // 2. Research Model plans the follow-up threads.
         let plan = await analysisPlan(
@@ -79,7 +88,8 @@ nonisolated struct ResearchEngine: Sendable {
         // 3. Sub-agents investigate each thread in parallel.
         let outcomes = await runThreads(
             plan.threads,
-            catalog: catalog,
+            evidenceStore: evidenceStore,
+            budget: budget,
             swiftModel: swiftModel,
             deadline: deadline
         )
@@ -94,7 +104,7 @@ nonisolated struct ResearchEngine: Sendable {
             deadline: deadline
         ) ?? mechanicalBody(overview: plan.overview, surfaceLines: surfaceLines, outcomes: outcomes)
 
-        let sources = await catalog.numberedList()
+        let sources = await evidenceStore.numberedList()
             .map { "\($0.index). \($0.title) — \($0.url)" }
             .joined(separator: "\n")
 
@@ -196,7 +206,8 @@ nonisolated struct ResearchEngine: Sendable {
 
     private func runThreads(
         _ threads: [ThreadPlan],
-        catalog: SourceCatalog,
+        evidenceStore: EvidenceStore,
+        budget: ResearchBudget,
         swiftModel: String,
         deadline: ContinuousClock.Instant
     ) async -> [ThreadOutcome] {
@@ -205,7 +216,8 @@ nonisolated struct ResearchEngine: Sendable {
                 group.addTask {
                     (index, await investigateThread(
                         thread,
-                        catalog: catalog,
+                        evidenceStore: evidenceStore,
+                        budget: budget,
                         swiftModel: swiftModel,
                         deadline: deadline
                     ))
@@ -223,7 +235,8 @@ nonisolated struct ResearchEngine: Sendable {
 
     private func investigateThread(
         _ thread: ThreadPlan,
-        catalog: SourceCatalog,
+        evidenceStore: EvidenceStore,
+        budget: ResearchBudget,
         swiftModel: String,
         deadline: ContinuousClock.Instant
     ) async -> ThreadOutcome {
@@ -240,7 +253,8 @@ nonisolated struct ResearchEngine: Sendable {
             results = try await searchWithRetries(
                 query: thread.query,
                 count: Self.threadResultCount,
-                deadline: deadline
+                deadline: deadline,
+                budget: budget
             )
             Self.logger.info("""
                 Sub-agent thread searched the web and found \
@@ -262,7 +276,19 @@ nonisolated struct ResearchEngine: Sendable {
             )
         }
 
-        let resultLines = await numberedLines(for: results, in: catalog)
+        if case .fetchPages(let maxBytesPerPage) = configuration.sourceMode {
+            return await investigateFetchedThread(
+                thread,
+                results: results,
+                evidenceStore: evidenceStore,
+                budget: budget,
+                swiftModel: swiftModel,
+                maxBytesPerPage: maxBytesPerPage,
+                deadline: deadline
+            )
+        }
+
+        let resultLines = await numberedLines(for: results, in: evidenceStore)
         let prompt = """
             You are a research sub-agent. Today's date is \
             \(Date.now.formatted(date: .long, time: .omitted)).
@@ -297,7 +323,7 @@ nonisolated struct ResearchEngine: Sendable {
                 note: nil
             )
         } catch {
-            let mentions = await catalog.indices(forURLs: results.map(\.url))
+            let mentions = await evidenceStore.indices(forURLs: results.map(\.url))
                 .map { "[\($0)]" }
                 .joined(separator: ", ")
 
@@ -306,6 +332,201 @@ nonisolated struct ResearchEngine: Sendable {
                 finding: "Sources \(mentions) were found but could not be analyzed.",
                 note: Self.failureNote(for: error)
             )
+        }
+    }
+
+    private struct FetchedThreadMaterial: Sendable {
+        let sourceIndex: Int
+        let url: String
+        let title: String
+        let text: String
+        let retrievedAt: Date
+        let isSnippetFallback: Bool
+        let fallbackReason: String?
+    }
+
+    private struct ThreadEvidenceResponse: Decodable, Sendable {
+        let finding: String
+        let evidence: [ProposedEvidence]
+    }
+
+    private struct ProposedEvidence: Decodable, Sendable {
+        let sourceIndex: Int
+        let quote: String
+        let claimSummary: String
+    }
+
+    private func investigateFetchedThread(
+        _ thread: ThreadPlan,
+        results: [BraveSearchClient.Result],
+        evidenceStore: EvidenceStore,
+        budget: ResearchBudget,
+        swiftModel: String,
+        maxBytesPerPage: Int,
+        deadline: ContinuousClock.Instant
+    ) async -> ThreadOutcome {
+        var materials = [FetchedThreadMaterial]()
+
+        for result in results.prefix(configuration.pagesPerThread) {
+            let sourceIndex = await evidenceStore.register(title: result.title, url: result.url)
+            let fallback: (String) -> FetchedThreadMaterial = { reason in
+                FetchedThreadMaterial(
+                    sourceIndex: sourceIndex,
+                    url: result.url,
+                    title: result.title,
+                    text: WebSearchFormatter.snippet(from: result.description, maxLength: 220),
+                    retrievedAt: .now,
+                    isSnippetFallback: true,
+                    fallbackReason: reason
+                )
+            }
+
+            guard let url = URL(string: result.url) else {
+                materials.append(fallback("the result URL was invalid"))
+                continue
+            }
+
+            guard await budget.leasePageFetch() else {
+                materials.append(fallback("the page-fetch budget or work window was exhausted"))
+                continue
+            }
+
+            do {
+                let page = try await pageFetcher.fetch(url: url, maxBytes: maxBytesPerPage)
+                let isHTML = page.mimeType == "text/html"
+                    || page.mimeType == "application/xhtml+xml"
+                let extractedText = isHTML
+                    ? contentExtractor.extractMainText(fromHTML: page.bodyText)
+                    : page.bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                guard !extractedText.isEmpty else {
+                    materials.append(fallback("the page contained no readable text"))
+                    continue
+                }
+
+                let extractedTitle = isHTML
+                    ? contentExtractor.extractTitle(fromHTML: page.bodyText)
+                    : nil
+                materials.append(FetchedThreadMaterial(
+                    sourceIndex: sourceIndex,
+                    url: page.finalURL.absoluteString,
+                    title: extractedTitle ?? result.title,
+                    text: String(extractedText.prefix(Self.pageTextCharacterLimit)),
+                    retrievedAt: .now,
+                    isSnippetFallback: false,
+                    fallbackReason: nil
+                ))
+            } catch {
+                Self.logger.info("Page fetch failed: \(String(describing: error))")
+                materials.append(fallback(error.localizedDescription))
+            }
+        }
+
+        let sourceMaterial = materials.map { material in
+            if material.isSnippetFallback {
+                return """
+                    [\(material.sourceIndex)] \(material.title)
+                    Snippet fallback (\(material.fallbackReason ?? "page unavailable")): \(material.text)
+                    """
+            }
+
+            return """
+                [\(material.sourceIndex)] \(material.title)
+                Page text:
+                \(material.text)
+                """
+        }
+        .joined(separator: "\n\n")
+
+        let prompt = """
+            You are a research sub-agent. Today's date is \
+            \(Date.now.formatted(date: .long, time: .omitted)).
+
+            # Purpose
+            Answer one focused research question using only the provided page \
+            text and clearly marked snippet fallbacks.
+
+            Question to answer: \(thread.question)
+
+            Source material (each begins with its source number in brackets):
+            \(sourceMaterial)
+
+            Respond ONLY with JSON in exactly this shape, with no markdown fences \
+            or commentary:
+            {"finding": "2-4 sentences with source citations like [3]", \
+            "evidence": [{"sourceIndex": 3, "quote": "verbatim sentence(s) from that source", \
+            "claimSummary": "what the quote supports"}]}
+
+            Use only the supplied material. Cite a source number after each claim. \
+            Every evidence quote must be copied verbatim from that source's Page \
+            text. Do not create evidence records from Snippet fallback material. \
+            If the material does not fully answer the question, say what is and \
+            is not established in finding.
+            """
+
+        do {
+            let response = try await withRetries(deadline: deadline, label: "extraction") {
+                try await completeWithDeadline(
+                    messages: [.user(prompt)],
+                    model: swiftModel,
+                    deadline: deadline
+                )
+            }
+
+            guard let decoded = Self.decodeJSON(ThreadEvidenceResponse.self, from: response) else {
+                throw EvidenceResponseError.invalidJSON
+            }
+
+            let fetchedByIndex = materials
+                .filter { !$0.isSnippetFallback }
+                .reduce(into: [Int: FetchedThreadMaterial]()) { result, material in
+                    result[material.sourceIndex] = material
+                }
+            for evidence in decoded.evidence {
+                guard let material = fetchedByIndex[evidence.sourceIndex],
+                      !evidence.quote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !evidence.claimSummary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      material.text.contains(evidence.quote) else {
+                    continue
+                }
+
+                await evidenceStore.addEvidence(
+                    sourceIndex: evidence.sourceIndex,
+                    url: material.url,
+                    title: material.title,
+                    quote: evidence.quote,
+                    claimSummary: evidence.claimSummary,
+                    retrievedAt: material.retrievedAt
+                )
+            }
+
+            let fallbackCount = materials.filter(\.isSnippetFallback).count
+            let note = fallbackCount == 0
+                ? nil
+                : "Partial — \(fallbackCount) page fetch(es) failed; search snippets were used instead"
+            return ThreadOutcome(
+                question: thread.question,
+                finding: decoded.finding.trimmingCharacters(in: .whitespacesAndNewlines),
+                note: note
+            )
+        } catch {
+            let mentions = await evidenceStore.indices(forURLs: results.map(\.url))
+                .map { "[\($0)]" }
+                .joined(separator: ", ")
+
+            return ThreadOutcome(
+                question: thread.question,
+                finding: "Sources \(mentions) were found but could not be analyzed.",
+                note: Self.failureNote(for: error)
+            )
+        }
+    }
+
+    private enum EvidenceResponseError: LocalizedError, Sendable {
+        case invalidJSON
+
+        var errorDescription: String? {
+            "The evidence response was not valid JSON."
         }
     }
 
@@ -419,9 +640,14 @@ nonisolated struct ResearchEngine: Sendable {
     private func searchWithRetries(
         query: String,
         count: Int,
-        deadline: ContinuousClock.Instant
+        deadline: ContinuousClock.Instant,
+        budget: ResearchBudget
     ) async throws -> [BraveSearchClient.Result] {
-        try await withRetries(deadline: deadline, label: "search") {
+        guard await budget.leaseSearchCall() else {
+            throw DeadlineExceededError()
+        }
+
+        return try await withRetries(deadline: deadline, label: "search") {
             try await BraveSearchClient.fromSettings().search(query: query, count: count)
         }
     }
@@ -540,12 +766,12 @@ nonisolated struct ResearchEngine: Sendable {
 
     private func numberedLines(
         for results: [BraveSearchClient.Result],
-        in catalog: SourceCatalog
+        in evidenceStore: EvidenceStore
     ) async -> [String] {
         var lines = [String]()
 
         for result in results {
-            let index = await catalog.register(title: result.title, url: result.url)
+            let index = await evidenceStore.register(title: result.title, url: result.url)
             var line = "[\(index)] \(result.title)"
 
             if let age = result.age, !age.isEmpty {
@@ -587,34 +813,5 @@ nonisolated struct ResearchEngine: Sendable {
 
         let json = String(response[start...end])
         return try? JSONDecoder().decode(type, from: Data(json.utf8))
-    }
-}
-
-/// Assigns stable citation numbers to source URLs across the surface pass and
-/// all concurrently running sub-agents, de-duplicating by URL.
-private actor SourceCatalog {
-    private var sources = [(title: String, url: String)]()
-    private var indexByURL = [String: Int]()
-
-    /// Registers a source and returns its 1-based citation number.
-    func register(title: String, url: String) -> Int {
-        if let existing = indexByURL[url] {
-            return existing
-        }
-
-        sources.append((title: title, url: url))
-        let index = sources.count
-        indexByURL[url] = index
-        return index
-    }
-
-    func indices(forURLs urls: [String]) -> [Int] {
-        urls.compactMap { indexByURL[$0] }.sorted()
-    }
-
-    func numberedList() -> [(index: Int, title: String, url: String)] {
-        sources.enumerated().map { offset, source in
-            (index: offset + 1, title: source.title, url: source.url)
-        }
     }
 }
