@@ -9,6 +9,7 @@ final class Chat {
     var reasoningEffortRaw: String?
     var createdAt: Date
     var updatedAt: Date
+    var latestVisibleMessageAt: Date?
     var isGenerating: Bool
     var isPinned: Bool = false
     var isArchived: Bool = false
@@ -34,6 +35,7 @@ final class Chat {
         reasoningEffort: ModelReasoningEffort = .off,
         createdAt: Date = .now,
         updatedAt: Date = .now,
+        latestVisibleMessageAt: Date? = nil,
         isGenerating: Bool = false,
         isPinned: Bool = false,
         isArchived: Bool = false,
@@ -46,6 +48,7 @@ final class Chat {
         self.reasoningEffortRaw = reasoningEffort.rawValue
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.latestVisibleMessageAt = latestVisibleMessageAt
         self.isGenerating = isGenerating
         self.isPinned = isPinned
         self.isArchived = isArchived
@@ -68,10 +71,19 @@ final class Chat {
     }
 
     var latestVisibleMessageDate: Date {
-        messages.lazy
+        if let latestVisibleMessageAt {
+            return latestVisibleMessageAt
+        }
+
+        let derived = messages.lazy
             .filter { $0.role != .system }
             .map(\.createdAt)
-            .max() ?? updatedAt
+            .max()
+        guard let derived else {
+            return updatedAt
+        }
+        latestVisibleMessageAt = derived
+        return derived
     }
 
     func appendMessage(
@@ -90,7 +102,31 @@ final class Chat {
         )
         message.chat = self
         messages.append(message)
+        noteMessageChanged(message)
         updatedAt = .now
+    }
+
+    /// Invalidation is explicit, not observed: property observers on @Model
+    /// stored properties are unreliable, and no production path mutates a
+    /// message's role/date or reparents it after creation (content edits
+    /// don't affect createdAt-based recency). `appendMessage` calls this;
+    /// any future mutation of a message's role, date, or chat must call
+    /// `refreshLatestVisibleMessageAt()` itself.
+    func noteMessageChanged(_ message: ChatMessage) {
+        if message.role == .system {
+            refreshLatestVisibleMessageAt()
+        } else if let latestVisibleMessageAt {
+            self.latestVisibleMessageAt = max(latestVisibleMessageAt, message.createdAt)
+        } else {
+            refreshLatestVisibleMessageAt()
+        }
+    }
+
+    func refreshLatestVisibleMessageAt() {
+        latestVisibleMessageAt = messages.lazy
+            .filter { $0.role != .system }
+            .map(\.createdAt)
+            .max()
     }
 }
 

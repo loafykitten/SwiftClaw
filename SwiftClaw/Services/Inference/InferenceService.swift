@@ -37,28 +37,25 @@ enum InferenceMessage: Sendable, Equatable {
     case user(String, imageAttachments: [ImageAttachmentRecord] = [])
     case assistant(String)
 
-    private static let logger = AppLog.make("InferenceMessage")
-
     var chatParam: ChatQuery.ChatCompletionMessageParam {
-        chatParam(includingImages: true)
+        get async {
+            await chatParam(includingImages: true)
+        }
     }
 
-    func chatParam(includingImages: Bool) -> ChatQuery.ChatCompletionMessageParam {
+    func chatParam(includingImages: Bool) async -> ChatQuery.ChatCompletionMessageParam {
         switch self {
         case .system(let content):
             return ChatQuery.ChatCompletionMessageParam.system(.init(content: .textContent(content)))
         case .user(let content, let imageAttachments):
-            let imageData: [Data] = includingImages ? imageAttachments.compactMap { attachment in
-                do {
-                    return try Data(contentsOf: attachment.fileURL)
-                } catch {
-                    Self.logger.warning("""
-                        Skipping unreadable image attachment \(attachment.filePath): \
-                        \(String(describing: error))
-                        """)
-                    return nil
+            var imageData: [Data] = []
+            if includingImages {
+                for attachment in imageAttachments {
+                    if let data = await InferenceImageDataCache.shared.data(for: attachment) {
+                        imageData.append(data)
+                    }
                 }
-            } : []
+            }
 
             guard !imageData.isEmpty else {
                 return ChatQuery.ChatCompletionMessageParam.user(.init(content: .string(content)))
@@ -75,6 +72,39 @@ enum InferenceMessage: Sendable, Equatable {
             return ChatQuery.ChatCompletionMessageParam.user(.init(content: .contentParts(parts)))
         case .assistant(let content):
             return ChatQuery.ChatCompletionMessageParam.assistant(.init(content: .textContent(content)))
+        }
+    }
+}
+
+private actor InferenceImageDataCache {
+    static let shared = InferenceImageDataCache()
+
+    private let capacity = 40
+    private var dataByAttachment: [ImageAttachmentRecord: Data] = [:]
+    private var insertionOrder: [ImageAttachmentRecord] = []
+
+    func data(for attachment: ImageAttachmentRecord) -> Data? {
+        // Chat image files are immutable. Exact record equality (including
+        // path, byte count, and creation date) invalidates relocated/replaced
+        // attachments, while the bounded FIFO keeps stale entries finite.
+        if let cached = dataByAttachment[attachment] {
+            return cached
+        }
+
+        do {
+            let data = try Data(contentsOf: attachment.fileURL)
+            dataByAttachment[attachment] = data
+            insertionOrder.append(attachment)
+            if insertionOrder.count > capacity {
+                dataByAttachment.removeValue(forKey: insertionOrder.removeFirst())
+            }
+            return data
+        } catch {
+            AppLog.make("InferenceMessage").warning("""
+                Skipping unreadable image attachment \(attachment.filePath): \
+                \(String(describing: error))
+                """)
+            return nil
         }
     }
 }
@@ -151,29 +181,38 @@ struct InferenceService: Sendable {
         temperature: Double? = nil,
         reasoningEffort: ModelReasoningEffort? = nil,
         systemPromptMode: InferenceSystemPromptMode = .prependPersona,
-        tools: [any Tool] = []
+        tools: [any Tool] = [],
+        contextTokenBudget: Int? = nil
     ) async throws -> String {
         let resolved = try resolve(modelSelection)
         let client = try resolved.provider.makeClient()
 
-        let supportsImages = resolved.capabilities.contains(.vision)
         let supportsTools = resolved.capabilities.contains(.tools)
         let effectiveReasoningEffort = Self.effectiveReasoningEffort(
             reasoningEffort,
             capabilities: resolved.capabilities
         )
 
-        let preparedMessages = Self.messagesByApplyingSystemPromptMode(
+        var preparedMessages = Self.messagesByApplyingSystemPromptMode(
             messages,
             systemPromptMode: systemPromptMode
         )
+        if let contextTokenBudget {
+            preparedMessages = Self.messagesTrimmedToTokenBudget(
+                preparedMessages,
+                budget: contextTokenBudget
+            )
+        }
         Self.logFormattedSystemPrompt(
             in: preparedMessages,
             providerID: resolved.provider.id,
             modelID: resolved.modelID
         )
 
-        var chatMessages = preparedMessages.map { $0.chatParam(includingImages: supportsImages) }
+        var chatMessages = await Self.chatParams(
+            for: preparedMessages,
+            capabilities: resolved.capabilities
+        )
         let toolParams = supportsTools && !tools.isEmpty ? try tools.map { try $0.chatToolParam() } : nil
         let maxRounds = 8
 
@@ -291,8 +330,6 @@ struct InferenceService: Sendable {
     ) throws -> AsyncThrowingStream<String, Error> {
         let resolved = try resolve(modelSelection)
         let client = try resolved.provider.makeClient()
-        let supportsImages = resolved.capabilities.contains(.vision)
-
         let preparedMessages = Self.messagesByApplyingSystemPromptMode(
             messages,
             systemPromptMode: systemPromptMode
@@ -303,15 +340,18 @@ struct InferenceService: Sendable {
             modelID: resolved.modelID
         )
 
-        let query = ChatQuery(
-            messages: preparedMessages.map { $0.chatParam(includingImages: supportsImages) },
-            model: resolved.modelID,
-            temperature: temperature
-        )
-
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    let chatMessages = await Self.chatParams(
+                        for: preparedMessages,
+                        capabilities: resolved.capabilities
+                    )
+                    let query = ChatQuery(
+                        messages: chatMessages,
+                        model: resolved.modelID,
+                        temperature: temperature
+                    )
                     for try await chunk in client.streamCompletion(query: query) {
                         if let delta = chunk.choices.first?.delta.content, !delta.isEmpty {
                             continuation.yield(delta)
@@ -338,6 +378,51 @@ struct InferenceService: Sendable {
         capabilities: Set<ModelCapability>
     ) -> ModelReasoningEffort? {
         capabilities.contains(.reasoning) ? reasoningEffort : nil
+    }
+
+    static func chatParams(
+        for messages: [InferenceMessage],
+        capabilities: Set<ModelCapability>
+    ) async -> [ChatQuery.ChatCompletionMessageParam] {
+        let includingImages = capabilities.contains(.vision)
+        var params: [ChatQuery.ChatCompletionMessageParam] = []
+        params.reserveCapacity(messages.count)
+        for message in messages {
+            params.append(await message.chatParam(includingImages: includingImages))
+        }
+        return params
+    }
+
+    static func messagesTrimmedToTokenBudget(
+        _ messages: [InferenceMessage],
+        budget: Int
+    ) -> [InferenceMessage] {
+        let systemMessages = messages.filter(\.isSystem)
+        let conversationalMessages = messages.filter { !$0.isSystem }
+        let remainingBudget = max(
+            0,
+            budget - systemMessages.reduce(0) { $0 + $1.estimatedTokens }
+        )
+        let turns = conversationalMessages.reduce(into: [[InferenceMessage]]()) { turns, message in
+            if message.isUser || turns.isEmpty {
+                turns.append([message])
+            } else {
+                turns[turns.index(before: turns.endIndex)].append(message)
+            }
+        }
+
+        var retainedTurns: [[InferenceMessage]] = []
+        var usedTokens = 0
+        for turn in turns.reversed() {
+            let turnTokens = turn.reduce(0) { $0 + $1.estimatedTokens }
+            if !retainedTurns.isEmpty, usedTokens + turnTokens > remainingBudget {
+                break
+            }
+            retainedTurns.append(turn)
+            usedTokens += turnTokens
+        }
+
+        return systemMessages + retainedTurns.reversed().flatMap { $0 }
     }
 
     static func messagesByApplyingSystemPromptMode(
@@ -422,6 +507,25 @@ struct InferenceService: Sendable {
             temperature: temperature,
             tools: tools
         )
+    }
+}
+
+private extension InferenceMessage {
+    var isSystem: Bool {
+        if case .system = self { return true }
+        return false
+    }
+
+    var isUser: Bool {
+        if case .user = self { return true }
+        return false
+    }
+
+    var estimatedTokens: Int {
+        switch self {
+        case .system(let content), .user(let content, _), .assistant(let content):
+            TokenEstimator.estimatedTokens(for: content)
+        }
     }
 }
 

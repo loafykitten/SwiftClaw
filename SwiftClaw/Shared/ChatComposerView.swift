@@ -12,7 +12,7 @@ struct ChatComposerView: View {
     var chatReasoningEffort: ModelReasoningEffort? = nil
     var onReasoningEffortChange: ((ModelReasoningEffort) -> Void)? = nil
 
-    var onSubmit: (ChatComposerSubmission) -> Bool
+    var onSubmit: (ChatComposerSubmission) async -> Bool
 
     @AppStorage(SettingsKeys.homeModel) private var selectedModel = ""
     @AppStorage(SettingsKeys.homeReasoningEffort)
@@ -29,6 +29,7 @@ struct ChatComposerView: View {
     @State private var availableModels = SettingsStorage.loadAvailableModels()
     @State private var isInvestigationEnabled = false
     @State private var isInvestigationAvailable = InvestigateTool().isConfigured
+    @State private var isSubmitting = false
     @FocusState private var isMessageFieldFocused: Bool
 
     init(
@@ -37,7 +38,7 @@ struct ChatComposerView: View {
         allowsImageAttachments: Bool = true,
         chatReasoningEffort: ModelReasoningEffort? = nil,
         onReasoningEffortChange: ((ModelReasoningEffort) -> Void)? = nil,
-        onSubmit: @escaping (ChatComposerSubmission) -> Bool
+        onSubmit: @escaping (ChatComposerSubmission) async -> Bool
     ) {
         self.isBusy = isBusy
         self.submissionError = submissionError
@@ -112,11 +113,11 @@ struct ChatComposerView: View {
     }
 
     private var modelSelectionDisabled: Bool {
-        availableModels.isEmpty || isBusy
+        availableModels.isEmpty || isBusy || isSubmitting
     }
 
     private var composerControlsDisabled: Bool {
-        availableModels.isEmpty || isBusy || effectiveModel == nil
+        availableModels.isEmpty || isBusy || isSubmitting || effectiveModel == nil
     }
 
     private var canImportImageAttachments: Bool {
@@ -202,7 +203,9 @@ struct ChatComposerView: View {
         .onAppear(perform: refreshModels)
         .onDisappear {
             setInvestigation(false)
-            attachmentController.clearDraftAttachments()
+            if !isSubmitting {
+                attachmentController.clearDraftAttachments()
+            }
         }
         .onChange(of: allowsImageAttachments) { _, allowsImageAttachments in
             if !allowsImageAttachments {
@@ -417,7 +420,7 @@ struct ChatComposerView: View {
 
     private func submitMessage() {
         let input = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !input.isEmpty, let model = effectiveModel, !isBusy else {
+        guard !input.isEmpty, let model = effectiveModel, !isBusy, !isSubmitting else {
             return
         }
 
@@ -433,10 +436,14 @@ struct ChatComposerView: View {
             supportsImages: selectedModelSupportsVision
         )
 
-        if onSubmit(submission) {
-            messageText = ""
-            attachmentController.releaseSubmittedAttachments()
-            setInvestigation(false)
+        isSubmitting = true
+        Task {
+            if await onSubmit(submission) {
+                messageText = ""
+                attachmentController.releaseSubmittedAttachments()
+                setInvestigation(false)
+            }
+            isSubmitting = false
         }
     }
 }

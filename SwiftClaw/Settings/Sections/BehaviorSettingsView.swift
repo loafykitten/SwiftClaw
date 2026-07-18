@@ -6,6 +6,8 @@ struct BehaviorSettingsView: View {
     @AppStorage(SettingsKeys.clawModel) private var clawModel = ""
     @AppStorage(SettingsKeys.clawReasoningEffort)
     private var clawReasoningEffortRaw = SettingsStorage.defaultClawReasoningEffort.rawValue
+    @AppStorage(SettingsKeys.chatContextTokenBudget)
+    private var chatContextTokenBudget = SettingsStorage.defaultChatContextTokenBudget
     @AppStorage(SettingsKeys.deepResearchModel) private var deepResearchModel = ""
 
     /// Non-reasoning models offered for the Swift (lightweight/title-gen) picker.
@@ -50,6 +52,21 @@ struct BehaviorSettingsView: View {
                 ModelSelectionRow(selection: $deepResearchModel, models: availableModels)
             } header: {
                 ModelSectionHeader(title: "Research Model", subtitle: "Investigation, Deep Research tasks")
+            }
+
+            Section {
+                Stepper(
+                    value: $chatContextTokenBudget,
+                    in: SettingsStorage.chatContextTokenBudgetRange,
+                    step: 10_000
+                ) {
+                    LabeledContent("Token Budget") {
+                        Text(chatContextTokenBudget.formatted())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                ModelSectionHeader(title: "Chat Context", subtitle: "Oldest turns are dropped first")
             }
         }
         .formStyle(.grouped)

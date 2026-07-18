@@ -155,6 +155,28 @@ struct SettingsStorageTests {
         #expect(SettingsStorage.loadClawReasoningEffort(userDefaults: fixture.defaults) == .medium)
     }
 
+    @Test func chatContextTokenBudgetUsesDefaultStoredAndClampedValues() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        #expect(SettingsStorage.loadChatContextTokenBudget(userDefaults: fixture.defaults) == 200_000)
+
+        fixture.defaults.set(350_000, forKey: SettingsKeys.chatContextTokenBudget)
+        #expect(SettingsStorage.loadChatContextTokenBudget(userDefaults: fixture.defaults) == 350_000)
+
+        fixture.defaults.set(1, forKey: SettingsKeys.chatContextTokenBudget)
+        #expect(
+            SettingsStorage.loadChatContextTokenBudget(userDefaults: fixture.defaults)
+                == SettingsStorage.chatContextTokenBudgetRange.lowerBound
+        )
+
+        fixture.defaults.set(2_000_000, forKey: SettingsKeys.chatContextTokenBudget)
+        #expect(
+            SettingsStorage.loadChatContextTokenBudget(userDefaults: fixture.defaults)
+                == SettingsStorage.chatContextTokenBudgetRange.upperBound
+        )
+    }
+
     @Test func availableModelsPartitionsByReasoningCapability() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }

@@ -1,13 +1,61 @@
 import Foundation
 
-enum ChatMarkdownBlock {
+enum ChatMarkdownBlock: Sendable, Equatable {
     case heading(level: Int, text: String)
     case paragraph(String)
     case quote(String)
 }
 
+struct ChatMarkdownPresentation: Sendable, Equatable {
+    let blocks: [ChatMarkdownBlock]
+    let citations: [Int: URL]
+}
+
+@MainActor
+final class ChatMarkdownPresentationCache {
+    static let shared = ChatMarkdownPresentationCache()
+
+    private final class Entry {
+        let presentation: ChatMarkdownPresentation
+
+        init(_ presentation: ChatMarkdownPresentation) {
+            self.presentation = presentation
+        }
+    }
+
+    private let cache = NSCache<NSString, Entry>()
+
+    private init() {
+        cache.countLimit = 100
+    }
+
+    func presentation(for content: String) -> ChatMarkdownPresentation {
+        // Exact source equality is the invalidation key; any content edit is
+        // a cache miss, and NSCache bounds retained transcript presentations.
+        let key = content as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached.presentation
+        }
+        let presentation = ChatMarkdownBlockParser.presentation(from: content)
+        cache.setObject(Entry(presentation), forKey: key)
+        return presentation
+    }
+}
+
 enum ChatMarkdownBlockParser {
+    static func presentation(from content: String) -> ChatMarkdownPresentation {
+        let lines = content.components(separatedBy: .newlines)
+        return ChatMarkdownPresentation(
+            blocks: blocks(from: content, lines: lines),
+            citations: citationLinks(from: lines)
+        )
+    }
+
     static func blocks(from content: String) -> [ChatMarkdownBlock] {
+        blocks(from: content, lines: content.components(separatedBy: .newlines))
+    }
+
+    private static func blocks(from content: String, lines: [String]) -> [ChatMarkdownBlock] {
         var blocks: [ChatMarkdownBlock] = []
         var paragraphLines: [String] = []
         var quoteLines: [String] = []
@@ -30,7 +78,7 @@ enum ChatMarkdownBlockParser {
             quoteLines.removeAll()
         }
 
-        for line in content.components(separatedBy: .newlines) {
+        for line in lines {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             if trimmed.isEmpty {
@@ -64,7 +112,11 @@ enum ChatMarkdownBlockParser {
 
     /// Builds a source-number -> URL map from the final Sources section only.
     static func citationLinks(from content: String) -> [Int: URL] {
-        guard let sourceLines = finalSourcesSectionLines(from: content) else {
+        citationLinks(from: content.components(separatedBy: .newlines))
+    }
+
+    private static func citationLinks(from lines: [String]) -> [Int: URL] {
+        guard let sourceLines = finalSourcesSectionLines(from: lines) else {
             return [:]
         }
 
@@ -81,8 +133,7 @@ enum ChatMarkdownBlockParser {
         return links
     }
 
-    private static func finalSourcesSectionLines(from content: String) -> ArraySlice<String>? {
-        let lines = content.components(separatedBy: .newlines)
+    private static func finalSourcesSectionLines(from lines: [String]) -> ArraySlice<String>? {
         guard let sourcesIndex = lines.indices.last(where: { isSourcesSectionTitle(lines[$0]) }) else {
             return nil
         }

@@ -10,6 +10,7 @@ struct ChatMarkdownView: View {
     let quoteAccent: Color
     let linkAccent: Color
     let maximumContentWidth: CGFloat
+    private let presentation: ChatMarkdownPresentation
 
     init(
         content: String,
@@ -25,19 +26,11 @@ struct ChatMarkdownView: View {
         self.quoteAccent = quoteAccent
         self.linkAccent = linkAccent
         self.maximumContentWidth = maximumContentWidth
-    }
-
-    private var blocks: [ChatMarkdownBlock] {
-        ChatMarkdownBlockParser.blocks(from: content)
-    }
-
-    /// Source numbers mapped to URLs from the final Sources section.
-    private var citations: [Int: URL] {
-        ChatMarkdownBlockParser.citationLinks(from: content)
+        self.presentation = ChatMarkdownPresentationCache.shared.presentation(for: content)
     }
 
     var body: some View {
-        let renderedBlocks = blocks
+        let renderedBlocks = presentation.blocks
 
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(renderedBlocks.enumerated()), id: \.offset) { index, block in
@@ -143,7 +136,7 @@ struct ChatMarkdownView: View {
     /// Uses AppKit for linked text so selectable links still get the pointing-hand cursor.
     @ViewBuilder
     private func inlineText(_ text: String, style: BlockStyle) -> some View {
-        let runs = ChatInlineMarkdownParser.runs(from: text, citations: citations)
+        let runs = ChatInlineMarkdownParser.runs(from: text, citations: presentation.citations)
 
         #if os(macOS)
         if runs.contains(where: { $0.link != nil }) {

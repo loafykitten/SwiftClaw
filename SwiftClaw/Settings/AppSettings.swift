@@ -108,6 +108,7 @@ nonisolated extension SettingsKeys {
     static let swiftModel = "settings.behaviors.swiftModel"
     static let clawModel = "settings.behaviors.clawModel"
     static let clawReasoningEffort = "settings.behaviors.clawReasoningEffort"
+    static let chatContextTokenBudget = "settings.behaviors.chatContextTokenBudget"
     static let deepResearchModel = "settings.behaviors.deepResearchModel"
     static let homeModel = "settings.home.model"
     static let homeReasoningEffort = "settings.home.reasoningEffort"
@@ -783,6 +784,18 @@ enum SettingsStorage {
     static func loadClawReasoningEffort(userDefaults: UserDefaults = .standard) -> ModelReasoningEffort {
         let raw = userDefaults.string(forKey: SettingsKeys.clawReasoningEffort)
         return raw.flatMap(ModelReasoningEffort.init(rawValue:)) ?? defaultClawReasoningEffort
+    }
+
+    static let defaultChatContextTokenBudget = 200_000
+    static let chatContextTokenBudgetRange = 10_000...1_000_000
+
+    static func loadChatContextTokenBudget(userDefaults: UserDefaults = .standard) -> Int {
+        guard userDefaults.object(forKey: SettingsKeys.chatContextTokenBudget) != nil else {
+            return defaultChatContextTokenBudget
+        }
+        return chatContextTokenBudgetRange.clamping(
+            userDefaults.integer(forKey: SettingsKeys.chatContextTokenBudget)
+        )
     }
 
     /// Default reasoning effort the chat composer applies when the model

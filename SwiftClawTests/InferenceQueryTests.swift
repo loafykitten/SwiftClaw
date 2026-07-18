@@ -59,6 +59,57 @@ struct InferenceQueryTests {
         )
     }
 
+    @Test func contextBudgetKeepsSystemContentAndNewestCompleteTurns() {
+        let oldUser = String(repeating: "a", count: 20)
+        let oldAssistant = String(repeating: "b", count: 20)
+        let messages: [InferenceMessage] = [
+            .system("system"),
+            .user(oldUser),
+            .assistant(oldAssistant),
+            .user("new question"),
+        ]
+
+        let trimmed = InferenceService.messagesTrimmedToTokenBudget(messages, budget: 6)
+
+        #expect(trimmed == [.system("system"), .user("new question")])
+    }
+
+    @Test func contextBudgetRetainsNewestTurnWhenItAloneExceedsBudget() {
+        let trimmed = InferenceService.messagesTrimmedToTokenBudget(
+            [.system("large system"), .user("the current user request")],
+            budget: 1
+        )
+
+        #expect(trimmed == [.system("large system"), .user("the current user request")])
+    }
+
+    @Test func inferenceLayerOmitsImagePayloadsWithoutVisionCapability() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swiftclaw-inference-image-\(UUID().uuidString).jpg")
+        try Data([0x01, 0x02, 0x03]).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let attachment = ImageAttachmentRecord(
+            filePath: url.path,
+            byteCount: 3,
+            pixelWidth: 1,
+            pixelHeight: 1
+        )
+
+        let textOnlyParams = await InferenceService.chatParams(
+            for: [.user("hello", imageAttachments: [attachment])],
+            capabilities: [.tools]
+        )
+        let visionParams = await InferenceService.chatParams(
+            for: [.user("hello", imageAttachments: [attachment])],
+            capabilities: [.vision]
+        )
+        let textOnlyJSON = String(decoding: try JSONEncoder().encode(textOnlyParams), as: UTF8.self)
+        let visionJSON = String(decoding: try JSONEncoder().encode(visionParams), as: UTF8.self)
+
+        #expect(!textOnlyJSON.contains("image_url"))
+        #expect(visionJSON.contains("image_url"))
+    }
+
     @Test func prependsPersonaPromptToFeatureSystemPrompts() {
         let messages = InferenceService.messagesByApplyingSystemPromptMode(
             [

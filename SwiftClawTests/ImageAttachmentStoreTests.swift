@@ -37,6 +37,22 @@ struct ImageAttachmentStoreTests {
         #expect(FileManager.default.fileExists(atPath: finalized[0].filePath))
     }
 
+    @Test func asynchronouslyFinalizesDraftImagesIntoChatFolder() async throws {
+        let fixture = try StoreFixture()
+        defer { fixture.cleanup() }
+        let chatID = UUID()
+        let draftRecords = try fixture.store.importImages(
+            [Self.image(width: 120, height: 80)],
+            existingAttachments: []
+        )
+
+        let finalized = try await fixture.store.finalizeDraftAttachmentsAsync(draftRecords, for: chatID)
+
+        #expect(finalized.count == 1)
+        #expect(finalized[0].filePath.contains(chatID.uuidString))
+        #expect(FileManager.default.fileExists(atPath: finalized[0].filePath))
+    }
+
     @Test func deletesImagesForChat() throws {
         let fixture = try StoreFixture()
         defer { fixture.cleanup() }
@@ -123,7 +139,7 @@ struct ImageAttachmentStoreTests {
         }
     }
 
-    @Test func missingImageFilesDoNotBreakInferenceMessageSetup() throws {
+    @Test func missingImageFilesDoNotBreakInferenceMessageSetup() async throws {
         let missing = ImageAttachmentRecord(
             filePath: "/tmp/swiftclaw-missing-\(UUID().uuidString).jpg",
             byteCount: 10,
@@ -131,7 +147,7 @@ struct ImageAttachmentStoreTests {
             pixelHeight: 10
         )
 
-        _ = InferenceMessage.user("hello", imageAttachments: [missing]).chatParam
+        _ = await InferenceMessage.user("hello", imageAttachments: [missing]).chatParam
     }
 
     @Test func importsDroppedImageData() async throws {

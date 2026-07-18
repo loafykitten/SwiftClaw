@@ -1,6 +1,6 @@
 import Foundation
 
-struct ImageAttachmentRecord: Codable, Hashable, Identifiable, Sendable {
+nonisolated struct ImageAttachmentRecord: Codable, Hashable, Identifiable, Sendable {
     let id: UUID
     var filePath: String
     var byteCount: Int
@@ -8,7 +8,7 @@ struct ImageAttachmentRecord: Codable, Hashable, Identifiable, Sendable {
     var pixelHeight: Int
     var createdAt: Date
 
-    init(
+    nonisolated init(
         id: UUID = UUID(),
         filePath: String,
         byteCount: Int,
@@ -24,19 +24,19 @@ struct ImageAttachmentRecord: Codable, Hashable, Identifiable, Sendable {
         self.createdAt = createdAt
     }
 
-    var fileURL: URL {
+    nonisolated var fileURL: URL {
         URL(fileURLWithPath: filePath)
     }
 
-    var fileName: String {
+    nonisolated var fileName: String {
         "\(id.uuidString).jpg"
     }
 
-    var pixelSizeLabel: String {
+    nonisolated var pixelSizeLabel: String {
         "\(pixelWidth)x\(pixelHeight)"
     }
 
-    func relocated(to url: URL, byteCount: Int? = nil) -> ImageAttachmentRecord {
+    nonisolated func relocated(to url: URL, byteCount: Int? = nil) -> ImageAttachmentRecord {
         ImageAttachmentRecord(
             id: id,
             filePath: url.path,
@@ -47,4 +47,3 @@ struct ImageAttachmentRecord: Codable, Hashable, Identifiable, Sendable {
         )
     }
 }
-

@@ -160,6 +160,20 @@ final class ImageAttachmentStore {
         }
     }
 
+    func finalizeDraftAttachmentsAsync(
+        _ attachments: [ImageAttachmentRecord],
+        for chatID: UUID
+    ) async throws -> [ImageAttachmentRecord] {
+        guard !attachments.isEmpty else {
+            return []
+        }
+
+        let directory = chatDirectory(for: chatID)
+        return try await Task.detached(priority: .userInitiated) {
+            try Self.finalizeAttachments(attachments, in: directory)
+        }.value
+    }
+
     func deleteDraftAttachments(_ attachments: [ImageAttachmentRecord]) {
         for attachment in attachments where isDraftAttachment(attachment) {
             try? fileManager.removeItem(at: attachment.fileURL)
@@ -284,6 +298,42 @@ final class ImageAttachmentStore {
         }
 
         return size.intValue
+    }
+
+    private nonisolated static func finalizeAttachments(
+        _ attachments: [ImageAttachmentRecord],
+        in directory: URL
+    ) throws -> [ImageAttachmentRecord] {
+        let fileManager = FileManager.default
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        var finalized: [ImageAttachmentRecord] = []
+        do {
+            for attachment in attachments {
+                let sourceURL = attachment.fileURL
+                guard fileManager.fileExists(atPath: sourceURL.path) else {
+                    throw ImageAttachmentError.missingFile
+                }
+
+                let destinationURL = directory.appendingPathComponent(attachment.fileName)
+                if fileManager.fileExists(atPath: destinationURL.path) {
+                    try fileManager.removeItem(at: destinationURL)
+                }
+                try fileManager.copyItem(at: sourceURL, to: destinationURL)
+                let attributes = try? fileManager.attributesOfItem(atPath: destinationURL.path)
+                let byteCount = (attributes?[.size] as? NSNumber)?.intValue
+                finalized.append(attachment.relocated(
+                    to: destinationURL,
+                    byteCount: byteCount ?? attachment.byteCount
+                ))
+            }
+            return finalized
+        } catch {
+            for attachment in finalized {
+                try? fileManager.removeItem(at: attachment.fileURL)
+            }
+            throw error
+        }
     }
 
     private static func defaultRootDirectory(fileManager: FileManager) -> URL {

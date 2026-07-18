@@ -674,6 +674,13 @@ private enum ChatTranscriptItem: Identifiable {
     }
 }
 
+private struct ChatTranscriptScrollTrigger: Equatable {
+    let lastMessageID: UUID?
+    let lastContentLength: Int
+    let isGenerating: Bool
+    let errorMessage: String?
+}
+
 private struct ChatDaySeparator: View {
     let date: Date
 
@@ -709,17 +716,7 @@ private struct ChatTranscriptView: View {
     @State private var presentedError: PresentedAppError?
     @State private var scrollTask: Task<Void, Never>?
 
-    private var scrollTrigger: String {
-        let messages = chat.visibleMessages
-            .map { "\($0.id.uuidString):\($0.content.count):\($0.imageAttachments.count)" }
-            .joined(separator: "|")
-        let error = chat.errorMessage ?? ""
-
-        return "\(chat.id.uuidString)|\(messages)|\(chat.isGenerating)|\(error.count)"
-    }
-
-    private var transcriptItems: [ChatTranscriptItem] {
-        let messages = chat.visibleMessages
+    private func transcriptItems(from messages: [ChatMessage]) -> [ChatTranscriptItem] {
         var separatorDays = ChatDaySeparatorFormatter
             .separatorDays(for: messages.map(\.createdAt))
             .makeIterator()
@@ -749,6 +746,16 @@ private struct ChatTranscriptView: View {
     }
 
     var body: some View {
+        let messages = chat.visibleMessages
+        let transcriptItems = transcriptItems(from: messages)
+        let lastMessage = messages.last
+        let scrollTrigger = ChatTranscriptScrollTrigger(
+            lastMessageID: lastMessage?.id,
+            lastContentLength: lastMessage?.content.count ?? 0,
+            isGenerating: chat.isGenerating,
+            errorMessage: chat.errorMessage
+        )
+
         VStack(spacing: 0) {
             // In compact widths the navigation bar carries the title, model,
             // and title actions, so the inline header would be redundant.
@@ -815,7 +822,7 @@ private struct ChatTranscriptView: View {
                                 try? modelContext.save()
                             }
                         ) { submission in
-                            submitMessage(submission)
+                            await submitMessage(submission)
                         }
                         .padding(.horizontal, composerHorizontalPadding)
                         .padding(.bottom, 20)
@@ -860,26 +867,28 @@ private struct ChatTranscriptView: View {
         )
     }
 
-    private func submitMessage(_ submission: ChatComposerSubmission) -> Bool {
+    private func submitMessage(_ submission: ChatComposerSubmission) async -> Bool {
         let input = submission.text
         guard !input.isEmpty, !chat.isGenerating, !chat.isArchived else {
             return false
         }
 
+        chat.isGenerating = true
+
         let finalizedAttachments: [ImageAttachmentRecord]
         do {
-            finalizedAttachments = try ImageAttachmentStore.shared.finalizeDraftAttachments(
+            finalizedAttachments = try await ImageAttachmentStore.shared.finalizeDraftAttachmentsAsync(
                 submission.imageAttachments,
                 for: chat.id
             )
         } catch {
+            chat.isGenerating = false
             presentSubmissionError(.attachmentFinalizationFailed(error))
             return false
         }
 
         chat.modelSelection = submission.model
         chat.errorMessage = nil
-        chat.isGenerating = true
         chat.appendMessage(
             role: .user,
             content: input,

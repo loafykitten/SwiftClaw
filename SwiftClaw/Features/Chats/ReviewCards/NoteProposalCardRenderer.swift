@@ -1,6 +1,16 @@
 import SwiftUI
 import SwiftData
 
+private struct NoteProposalDiffRequest: Equatable, Sendable {
+    let oldText: String
+    let newText: String
+}
+
+private struct NoteProposalDiffTaskID: Equatable {
+    let isExpanded: Bool
+    let request: NoteProposalDiffRequest
+}
+
 /// Note-proposal review-card renderer. Used by `ReviewCardRendererRegistry`
 /// when a `ChatMessage` carries a `ReviewCardPayload` of type
 /// `.noteProposal` — one card per `NoteEditProposal` (see
@@ -20,6 +30,7 @@ struct NoteProposalCardRenderer: View {
     @State private var proposal: NoteEditProposal?
     @State private var currentContent: String?
     @State private var isDiffExpanded = false
+    @State private var diffLines: [DiffLine]?
     @State private var isPerformingAction = false
 
     private var itemID: UUID? {
@@ -94,29 +105,48 @@ struct NoteProposalCardRenderer: View {
 
     @ViewBuilder
     private func diffDisclosure(for proposal: NoteEditProposal) -> some View {
+        let request = diffRequest(for: proposal)
         DisclosureGroup(isExpanded: $isDiffExpanded) {
-            NoteProposalDiffView(lines: diffLines(for: proposal))
-                .padding(.top, 4)
+            Group {
+                if let diffLines {
+                    NoteProposalDiffView(lines: diffLines)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+            .padding(.top, 4)
         } label: {
             Text(isDiffExpanded ? "Hide changes" : "Show changes")
                 .font(.caption)
         }
+        .task(id: NoteProposalDiffTaskID(isExpanded: isDiffExpanded, request: request)) {
+            diffLines = nil
+            guard isDiffExpanded else { return }
+            let lines = await Task.detached(priority: .userInitiated) {
+                DiffEngine.diff(from: request.oldText, to: request.newText)
+            }.value
+            guard !Task.isCancelled,
+                  isDiffExpanded,
+                  diffRequest(for: proposal) == request else { return }
+            diffLines = lines
+        }
     }
 
-    private func diffLines(for proposal: NoteEditProposal) -> [DiffLine] {
+    private func diffRequest(for proposal: NoteEditProposal) -> NoteProposalDiffRequest {
         let base = currentContent ?? ""
         switch proposal.kind {
         case .create:
-            return DiffEngine.diff(from: "", to: proposal.proposedContent ?? "")
+            return NoteProposalDiffRequest(oldText: "", newText: proposal.proposedContent ?? "")
         case .edit:
-            return DiffEngine.diff(from: base, to: proposal.proposedContent ?? base)
+            return NoteProposalDiffRequest(oldText: base, newText: proposal.proposedContent ?? base)
         case .append:
             let appendText = proposal.appendText ?? ""
             let appended = proposal.proposedContent
                 ?? (base.isEmpty ? appendText : base + "\n" + appendText)
-            return DiffEngine.diff(from: base, to: appended)
+            return NoteProposalDiffRequest(oldText: base, newText: appended)
         case .rename:
-            return []
+            return NoteProposalDiffRequest(oldText: "", newText: "")
         }
     }
 
@@ -245,14 +275,21 @@ private struct NoteProposalDiffView: View {
     let lines: [DiffLine]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
+        Group {
             if lines.isEmpty {
                 Text("No changes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else if lines.count > 200 {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        diffRows
+                    }
+                }
+                .frame(maxHeight: 360)
             } else {
-                ForEach(lines) { line in
-                    row(for: line)
+                VStack(alignment: .leading, spacing: 1) {
+                    diffRows
                 }
             }
         }
@@ -260,6 +297,13 @@ private struct NoteProposalDiffView: View {
         .background {
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color.secondary.opacity(0.06))
+        }
+    }
+
+    @ViewBuilder
+    private var diffRows: some View {
+        ForEach(lines) { line in
+            row(for: line)
         }
     }
 

@@ -45,6 +45,7 @@ enum ChatCompletionService {
         let capabilities = SettingsStorage.capabilities(for: chat.modelSelection)
         let canUseTools = capabilities.contains(.tools)
         let canUseImages = supportsImages && capabilities.contains(.vision)
+        let sortedMessages = chat.sortedMessages
         let effectiveReasoningEffort = InferenceService.effectiveReasoningEffort(
             reasoningEffort,
             capabilities: capabilities
@@ -58,17 +59,17 @@ enum ChatCompletionService {
         // lose its email context + tools and the assistant would deny having
         // any email access at all.
         let isEmailReviewChat = chat.isEmailReviewChat
-        let reviewCardPayloads = chat.sortedMessages.compactMap(\.reviewCard)
         let emailReviewContext: String? = isEmailReviewChat
             ? EmailReviewFollowUpContextBuilder.makeContext(
-                for: reviewCardPayloads,
+                for: sortedMessages.compactMap(\.reviewCard),
                 in: modelContext
               )
             : nil
 
-        var messages = chat.sortedMessages.compactMap {
-            $0.inferenceMessage(includingImages: canUseImages)
-        }
+        var messages = persistedInferenceMessages(
+            from: sortedMessages,
+            includingImages: canUseImages
+        )
 
         // Memory store injection — appended before the per-turn transient
         // hints below so the (deterministic, mutation-cached) block sits as
@@ -80,7 +81,7 @@ enum ChatCompletionService {
             let exposure = promptBuilder.exposure()
             messages.append(.system(exposure.block))
             if exposure.tier == .index,
-               let latestUserMessage = chat.sortedMessages.last(where: { $0.role == .user })?.content,
+               let latestUserMessage = sortedMessages.last(where: { $0.role == .user })?.content,
                let recall = promptBuilder.recallBlock(for: latestUserMessage) {
                 messages.append(.system(recall))
             }
@@ -150,7 +151,8 @@ enum ChatCompletionService {
                 messages: messages,
                 model: chat.modelSelection,
                 reasoningEffort: effectiveReasoningEffort,
-                tools: tools
+                tools: tools,
+                contextTokenBudget: SettingsStorage.loadChatContextTokenBudget()
             )
 
             guard !Task.isCancelled else { return }
@@ -184,6 +186,18 @@ enum ChatCompletionService {
             }
         } catch {
             chat.errorMessage = "Couldn't save the assistant response."
+        }
+    }
+
+    static func persistedInferenceMessages(
+        from sortedMessages: [ChatMessage],
+        includingImages: Bool
+    ) -> [InferenceMessage] {
+        let latestUserMessageID = sortedMessages.last(where: { $0.role == .user })?.id
+        return sortedMessages.compactMap { message in
+            message.inferenceMessage(
+                includingImages: includingImages && message.id == latestUserMessageID
+            )
         }
     }
 }

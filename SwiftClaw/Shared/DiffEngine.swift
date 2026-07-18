@@ -18,7 +18,7 @@ nonisolated struct DiffLine: Sendable, Equatable, Identifiable {
 /// Deterministic line-level diff (Myers' O(ND) algorithm) between two texts,
 /// split on `"\n"`. Shared outside `Notes` (cross-feature: a future
 /// email-draft proposal card reuses it unchanged) — pure and dependency-free.
-enum DiffEngine {
+nonisolated enum DiffEngine {
     static func diff(from oldText: String, to newText: String) -> [DiffLine] {
         let oldLines = lines(of: oldText)
         let newLines = lines(of: newText)
