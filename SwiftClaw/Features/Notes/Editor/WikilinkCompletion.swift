@@ -37,10 +37,10 @@ enum WikilinkCompletion {
         let match: FuzzyMatcher.Match
     }
 
-    /// Scans `text` backward from `cursorLocation` (a UTF-16 offset, matching
-    /// `NSTextView.selectedRange().location`) for an unclosed `[[`. Returns
-    /// `nil` when the cursor isn't inside one — including when a `]]`,
-    /// newline, `|`, or `#` already appears between the `[[` and the cursor.
+    /// Searches the current line before `cursorLocation` (a UTF-16 offset,
+    /// matching `NSTextView.selectedRange().location`) for an unclosed `[[`.
+    /// Returns `nil` when the cursor isn't inside one — including when a
+    /// `]]`, newline, `|`, or `#` already appears between the `[[` and the cursor.
     /// A later `]]` in the same target also suppresses completion unless it is
     /// immediately at the caret: replacing only the prefix of a closed target
     /// would otherwise leave its suffix behind.
@@ -48,17 +48,19 @@ enum WikilinkCompletion {
         let nsText = text as NSString
         guard cursorLocation >= 0, cursorLocation <= nsText.length else { return nil }
 
-        var openLocation: Int?
-        var searchEnd = cursorLocation
-        while searchEnd >= 2 {
-            let candidateRange = NSRange(location: searchEnd - 2, length: 2)
-            if nsText.substring(with: candidateRange) == "[[" {
-                openLocation = searchEnd
-                break
-            }
-            searchEnd -= 1
-        }
-        guard let openLocation else { return nil }
+        let precedingNewline = nsText.range(
+            of: "\n",
+            options: .backwards,
+            range: NSRange(location: 0, length: cursorLocation)
+        )
+        let lineStart = precedingNewline.location == NSNotFound ? 0 : NSMaxRange(precedingNewline)
+        let opener = nsText.range(
+            of: "[[",
+            options: .backwards,
+            range: NSRange(location: lineStart, length: cursorLocation - lineStart)
+        )
+        guard opener.location != NSNotFound else { return nil }
+        let openLocation = NSMaxRange(opener)
 
         let queryRange = NSRange(location: openLocation, length: cursorLocation - openLocation)
         let query = nsText.substring(with: queryRange)
@@ -68,7 +70,8 @@ enum WikilinkCompletion {
         while trailingLocation < nsText.length {
             let remainingLength = nsText.length - trailingLocation
             if remainingLength >= 2,
-               nsText.substring(with: NSRange(location: trailingLocation, length: 2)) == "]]" {
+               nsText.substring(with: NSRange(location: trailingLocation, length: 2)) == "]]"
+            {
                 let hasTrailingClosingBrackets = trailingLocation == cursorLocation
                 guard hasTrailingClosingBrackets else { return nil }
                 return Trigger(queryRange: queryRange, query: query, hasTrailingClosingBrackets: true)

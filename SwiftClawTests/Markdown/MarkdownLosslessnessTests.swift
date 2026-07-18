@@ -209,6 +209,39 @@ struct MarkdownLosslessnessTests {
         #expect(colorAfter == Self.probeTheme.textColor)
     }
 
+    @Test func insertingFencesAcrossLinesStylesOnlyTheirEnclosedContent() {
+        let text = "before\nafter\n"
+        let (textStorage, highlighter) = makeStyledTextStorage(text, themeProvider: { Self.probeTheme })
+        _ = highlighter
+
+        let insertion = (text as NSString).range(of: "after").location
+        textStorage.replaceCharacters(
+            in: NSRange(location: insertion, length: 0),
+            with: "```\ncode\n```\n"
+        )
+
+        let codeLocation = (textStorage.string as NSString).range(of: "code").location
+        let afterLocation = (textStorage.string as NSString).range(of: "after").location
+        #expect((textStorage.attribute(.foregroundColor, at: codeLocation, effectiveRange: nil) as? NSColor) == Self.probeTheme.secondaryColor)
+        #expect((textStorage.attribute(.foregroundColor, at: afterLocation, effectiveRange: nil) as? NSColor) == Self.probeTheme.textColor)
+        #expect(textStorage.string == "before\n```\ncode\n```\nafter\n")
+    }
+
+    @Test func deletingAFenceLineAndItsNewlinePropagatesStateAcrossFollowingLines() {
+        let text = "before\n```\ncode\n```\nafter\n"
+        let (textStorage, highlighter) = makeStyledTextStorage(text, themeProvider: { Self.probeTheme })
+        _ = highlighter
+
+        let openingFence = (text as NSString).range(of: "```\n")
+        textStorage.replaceCharacters(in: openingFence, with: "")
+
+        let codeLocation = (textStorage.string as NSString).range(of: "code").location
+        let afterLocation = (textStorage.string as NSString).range(of: "after").location
+        #expect((textStorage.attribute(.foregroundColor, at: codeLocation, effectiveRange: nil) as? NSColor) == Self.probeTheme.textColor)
+        #expect((textStorage.attribute(.foregroundColor, at: afterLocation, effectiveRange: nil) as? NSColor) == Self.probeTheme.secondaryColor)
+        #expect(textStorage.string == "before\ncode\n```\nafter\n")
+    }
+
     @Test func stylingRemainsEnabledAtExactUTF8ByteLimit() {
         let prefix = "# Heading\n"
         let padding = String(
@@ -273,6 +306,26 @@ struct MarkdownLosslessnessTests {
 
         #expect(Data(textStorage.string.utf8) == Data(expected.utf8))
         #expect((textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == Self.probeTheme.headingColor)
+    }
+
+    @Test func editingAcrossUTF8LimitSwitchesLargeDocumentModeInBothDirections() {
+        let prefix = "# Heading\n"
+        let padding = String(
+            repeating: "a",
+            count: MarkdownSourceHighlighter.maximumStyledUTF8ByteCount - prefix.utf8.count
+        )
+        let original = prefix + padding
+        let (textStorage, highlighter) = makeStyledTextStorage(original, themeProvider: { Self.probeTheme })
+        _ = highlighter
+        #expect((textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == Self.probeTheme.headingColor)
+
+        let insertion = textStorage.length
+        textStorage.replaceCharacters(in: NSRange(location: insertion, length: 0), with: "é")
+        #expect((textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == Self.probeTheme.textColor)
+
+        textStorage.replaceCharacters(in: NSRange(location: insertion, length: 1), with: "")
+        #expect((textStorage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor) == Self.probeTheme.headingColor)
+        #expect(Data(textStorage.string.utf8) == Data(original.utf8))
     }
 }
 #endif

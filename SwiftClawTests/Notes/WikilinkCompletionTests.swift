@@ -33,6 +33,21 @@ struct WikilinkCompletionTests {
         #expect(trigger?.query == "Pl")
     }
 
+    @Test func triggerSearchIsScopedToTheCurrentLine() {
+        let previousLineOnly = "[[Previous\nPlain text"
+        #expect(
+            WikilinkCompletion.trigger(
+                in: previousLineOnly,
+                cursorLocation: (previousLineOnly as NSString).length
+            ) == nil
+        )
+
+        let currentLine = "[[Previous\nPlain [[Current"
+        let trigger = WikilinkCompletion.trigger(in: currentLine, cursorLocation: (currentLine as NSString).length)
+        #expect(trigger?.query == "Current")
+        #expect(trigger?.queryRange.location == ("[[Previous\nPlain [[" as NSString).length)
+    }
+
     @Test func doesNotTriggerWithoutAnOpenBracketPair() {
         let text = "Just plain text"
         #expect(WikilinkCompletion.trigger(in: text, cursorLocation: (text as NSString).length) == nil)

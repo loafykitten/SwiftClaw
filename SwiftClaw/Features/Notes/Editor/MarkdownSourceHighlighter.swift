@@ -12,10 +12,9 @@ private nonisolated struct MainActorTextStorage: @unchecked Sendable {
 
 /// Restyles the editor's `NSTextStorage` as markdown source, attributes
 /// only — it never inserts, deletes, or replaces a single character.
-/// Ordinary edits restyle just the touched paragraph; edits that touch a
-/// fence delimiter line (```` ``` ````/`~~~`) restyle from that point to the
-/// end of the document, since toggling fence state changes how every
-/// following line should look. Styling correctness is intentionally
+/// Ordinary edits restyle just the touched lines; edits that change fence
+/// state (```` ``` ````/`~~~`) widen the range until the cached state
+/// converges again. Styling correctness is intentionally
 /// approximate (best-effort regex-driven detection of headings, emphasis,
 /// code, links/wikilinks, quotes/callouts, lists, front matter) — content
 /// losslessness is what's non-negotiable, enforced by the `DEBUG` assertion
@@ -29,6 +28,14 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
 
     private var isStyling = false
     private var isInLargeDocumentMode = false
+    private var utf8ByteCount = 0
+    private var cachedUTF16Length = 0
+    private var utf8ExtraOneByteLocations = IndexSet()
+    private var utf8ExtraTwoByteLocations = IndexSet()
+    private var utf8ExtraThreeByteLocations = IndexSet()
+    private var utf8MinusOneByteLocations = IndexSet()
+    private var lineStarts = [0]
+    private var hasStructuralCache = false
     private var fenceState = FenceStateMachine()
     private let themeProvider: () -> MarkdownEditorTheme
 
@@ -50,11 +57,21 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
     ) {
         let mainActorTextStorage = MainActorTextStorage(value: textStorage)
         MainActor.assumeIsolated {
-            self.restyle(mainActorTextStorage.value, editedMask: editedMask, editedRange: editedRange)
+            self.restyle(
+                mainActorTextStorage.value,
+                editedMask: editedMask,
+                editedRange: editedRange,
+                changeInLength: delta
+            )
         }
     }
 
-    private func restyle(_ textStorage: NSTextStorage, editedMask: NSTextStorageEditActions, editedRange: NSRange) {
+    private func restyle(
+        _ textStorage: NSTextStorage,
+        editedMask: NSTextStorageEditActions,
+        editedRange: NSRange,
+        changeInLength delta: Int
+    ) {
         // Attribute-only mutations below re-enter `didProcessEditing` with
         // `.editedAttributes` (not `.editedCharacters`); `isStyling` guards
         // against acting on our own re-entrant calls, and the character-only
@@ -68,7 +85,8 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
         #endif
 
         let nsString = textStorage.string as NSString
-        let exceedsStylingLimit = textStorage.string.utf8.count > Self.maximumStyledUTF8ByteCount
+        updateUTF8Cache(nsString: nsString, editedRange: editedRange, changeInLength: delta)
+        let exceedsStylingLimit = utf8ByteCount > Self.maximumStyledUTF8ByteCount
         if exceedsStylingLimit {
             let theme = themeProvider()
             if !isInLargeDocumentMode {
@@ -78,7 +96,7 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
                     [.font: theme.bodyFont, .foregroundColor: theme.textColor],
                     range: NSRange(location: 0, length: nsString.length)
                 )
-                fenceState = FenceStateMachine()
+                invalidateStructuralCache()
                 isInLargeDocumentMode = true
             } else if nsString.length > 0 {
                 // Newly typed text can inherit syntax attributes from its
@@ -92,20 +110,20 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
 
         let wasInLargeDocumentMode = isInLargeDocumentMode
         isInLargeDocumentMode = false
-        let previousFenceStates = fenceState.insideFenceAtLineStart
-        fenceState.recompute(for: textStorage.string)
-        let frontMatterLineCount = Self.frontMatterLineCount(in: textStorage.string, nsString: nsString)
-
-        let paragraphRange = wasInLargeDocumentMode
-            ? NSRange(location: 0, length: nsString.length)
-            : nsString.paragraphRange(for: editedRange)
-        let editedLineIndex = Self.lineNumber(in: nsString, at: paragraphRange.location)
-        let styleRange = Self.rangeToRestyle(
-            nsString: nsString,
-            paragraphRange: paragraphRange,
-            editedLineIndex: editedLineIndex,
-            fenceState: fenceState,
-            previousFenceStates: previousFenceStates
+        let styleRange: NSRange
+        if wasInLargeDocumentMode || !hasStructuralCache {
+            rebuildStructuralCache(nsString: nsString)
+            styleRange = NSRange(location: 0, length: nsString.length)
+        } else {
+            styleRange = updateStructuralCache(
+                nsString: nsString,
+                editedRange: editedRange,
+                changeInLength: delta
+            )
+        }
+        let frontMatterLineCount = Self.frontMatterLineCount(
+            in: textStorage.string,
+            lineStarts: lineStarts
         )
         guard styleRange.location != NSNotFound, styleRange.length > 0 || nsString.length == 0 else { return }
 
@@ -125,51 +143,244 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
         #endif
     }
 
-    /// Widens the paragraph-scoped range to the rest of the document when a
-    /// fence delimiter line falls inside it — a toggled fence changes
-    /// styling for everything after it, not just the edited paragraph.
-    ///
-    /// Checking only whether the *post-edit* line still reads as a fence
-    /// delimiter isn't enough: deleting a marker character from an opening
-    /// or closing fence (e.g. ` ``` ` → ` `` `) makes the edited line stop
-    /// matching `isFenceDelimiter`, even though the fence parity for every
-    /// following line just changed. So this also compares the per-line fence
-    /// state recomputed for the new text against the state from before the
-    /// edit, from the edited line onward, and conservatively widens whenever
-    /// they diverge (including when the line count itself changed).
-    private static func rangeToRestyle(
-        nsString: NSString,
-        paragraphRange: NSRange,
-        editedLineIndex: Int,
-        fenceState: FenceStateMachine,
-        previousFenceStates: [Bool]
-    ) -> NSRange {
-        let toEndOfDocument = NSRange(location: paragraphRange.location, length: nsString.length - paragraphRange.location)
+    /// The byte-width cache is invalidated by every character edit via the
+    /// delegate's edited range and length delta. It makes threshold checks
+    /// proportional to the replacement instead of the whole document.
+    private func updateUTF8Cache(nsString: NSString, editedRange: NSRange, changeInLength delta: Int) {
+        let oldDocumentLength = nsString.length - delta
+        let oldEditedLength = editedRange.length - delta
+        let oldEditedRange = NSRange(location: editedRange.location, length: oldEditedLength)
+        let cacheMatchesOldDocument = oldDocumentLength >= 0
+            && oldEditedLength >= 0
+            && NSMaxRange(oldEditedRange) <= oldDocumentLength
+            && NSMaxRange(editedRange) <= nsString.length
+            && cachedUTF16Length == oldDocumentLength
 
-        let line = nsString.substring(with: paragraphRange).trimmingCharacters(in: .whitespacesAndNewlines)
-        if FenceStateMachine.isFenceDelimiter(line) { return toEndOfDocument }
-
-        let newStates = fenceState.insideFenceAtLineStart
-        if previousFenceStates.count != newStates.count { return toEndOfDocument }
-        for index in editedLineIndex..<newStates.count where previousFenceStates[index] != newStates[index] {
-            return toEndOfDocument
+        guard cacheMatchesOldDocument else {
+            rebuildUTF8Cache(nsString)
+            invalidateStructuralCache()
+            return
         }
 
-        return paragraphRange
+        let replacementMetrics = Self.utf8Metrics(in: nsString.substring(with: editedRange))
+        guard replacementMetrics.utf16Length == editedRange.length else {
+            rebuildUTF8Cache(nsString)
+            invalidateStructuralCache()
+            return
+        }
+
+        let oldRange = oldEditedRange.location..<NSMaxRange(oldEditedRange)
+        let removedByteCount = oldEditedLength
+            + utf8ExtraOneByteLocations.intersection(IndexSet(integersIn: oldRange)).count
+            + 2 * utf8ExtraTwoByteLocations.intersection(IndexSet(integersIn: oldRange)).count
+            + 3 * utf8ExtraThreeByteLocations.intersection(IndexSet(integersIn: oldRange)).count
+            - utf8MinusOneByteLocations.intersection(IndexSet(integersIn: oldRange)).count
+        updateUTF8Locations(
+            replacing: oldRange,
+            changeInLength: delta,
+            replacementMetrics: replacementMetrics
+        )
+        utf8ByteCount += replacementMetrics.byteCount - removedByteCount
+        cachedUTF16Length = nsString.length
     }
 
-    private static func frontMatterLineCount(in source: String, nsString: NSString) -> Int {
+    private func rebuildUTF8Cache(_ nsString: NSString) {
+        let metrics = Self.utf8Metrics(in: nsString as String)
+        cachedUTF16Length = metrics.utf16Length
+        utf8ByteCount = metrics.byteCount
+        utf8ExtraOneByteLocations = IndexSet(metrics.extraOneByteLocations)
+        utf8ExtraTwoByteLocations = IndexSet(metrics.extraTwoByteLocations)
+        utf8ExtraThreeByteLocations = IndexSet(metrics.extraThreeByteLocations)
+        utf8MinusOneByteLocations = IndexSet(metrics.minusOneByteLocations)
+    }
+
+    private func updateUTF8Locations(
+        replacing oldRange: Range<Int>,
+        changeInLength delta: Int,
+        replacementMetrics: UTF8Metrics
+    ) {
+        func update(_ locations: inout IndexSet, inserting replacementLocations: [Int]) {
+            locations.remove(integersIn: oldRange)
+            let shiftedLocations = NSMutableIndexSet(indexSet: locations)
+            shiftedLocations.shiftIndexesStarting(at: oldRange.upperBound, by: delta)
+            locations = shiftedLocations as IndexSet
+            for location in replacementLocations {
+                locations.insert(oldRange.lowerBound + location)
+            }
+        }
+
+        update(&utf8ExtraOneByteLocations, inserting: replacementMetrics.extraOneByteLocations)
+        update(&utf8ExtraTwoByteLocations, inserting: replacementMetrics.extraTwoByteLocations)
+        update(&utf8ExtraThreeByteLocations, inserting: replacementMetrics.extraThreeByteLocations)
+        update(&utf8MinusOneByteLocations, inserting: replacementMetrics.minusOneByteLocations)
+    }
+
+    private struct UTF8Metrics {
+        var utf16Length = 0
+        var byteCount = 0
+        var extraOneByteLocations: [Int] = []
+        var extraTwoByteLocations: [Int] = []
+        var extraThreeByteLocations: [Int] = []
+        var minusOneByteLocations: [Int] = []
+    }
+
+    private static func utf8Metrics(in text: String) -> UTF8Metrics {
+        let codeUnits = Array(text.utf16)
+        var metrics = UTF8Metrics(utf16Length: codeUnits.count)
+        var index = 0
+        while index < codeUnits.count {
+            let codeUnit = codeUnits[index]
+            if (0xD800...0xDBFF).contains(codeUnit),
+               index + 1 < codeUnits.count,
+               (0xDC00...0xDFFF).contains(codeUnits[index + 1]) {
+                metrics.byteCount += 4
+                metrics.extraThreeByteLocations.append(index)
+                metrics.minusOneByteLocations.append(index + 1)
+                index += 2
+            } else {
+                if codeUnit <= 0x7F {
+                    metrics.byteCount += 1
+                } else if codeUnit <= 0x7FF {
+                    metrics.byteCount += 2
+                    metrics.extraOneByteLocations.append(index)
+                } else {
+                    metrics.byteCount += 3
+                    metrics.extraTwoByteLocations.append(index)
+                }
+                index += 1
+            }
+        }
+        return metrics
+    }
+
+    /// Line starts and fence contexts are invalidated by the same character
+    /// edit signal. Large-document mode drops them because it never performs
+    /// syntax styling; crossing back below the limit rebuilds them once.
+    private func invalidateStructuralCache() {
+        lineStarts = [0]
+        fenceState = FenceStateMachine()
+        hasStructuralCache = false
+    }
+
+    private func rebuildStructuralCache(nsString: NSString) {
+        lineStarts = Self.computeLineStarts(in: nsString)
+        fenceState.recompute(in: nsString, lineStarts: lineStarts)
+        hasStructuralCache = true
+    }
+
+    private func updateStructuralCache(
+        nsString: NSString,
+        editedRange: NSRange,
+        changeInLength delta: Int
+    ) -> NSRange {
+        let oldDocumentLength = nsString.length - delta
+        let oldEditedLength = editedRange.length - delta
+        guard oldDocumentLength >= 0, oldEditedLength >= 0 else {
+            rebuildStructuralCache(nsString: nsString)
+            return NSRange(location: 0, length: nsString.length)
+        }
+
+        let oldFirstLine = Self.lineIndex(at: editedRange.location, lineStarts: lineStarts)
+        let oldLastLine = Self.lineIndex(
+            at: min(editedRange.location + oldEditedLength, oldDocumentLength),
+            lineStarts: lineStarts
+        )
+        let oldChangedLines = oldFirstLine..<(oldLastLine + 1)
+
+        updateLineStarts(
+            nsString: nsString,
+            editedRange: editedRange,
+            oldEditedLength: oldEditedLength,
+            changeInLength: delta
+        )
+
+        let newFirstLine = Self.lineIndex(at: editedRange.location, lineStarts: lineStarts)
+        let newLastLine = Self.lineIndex(
+            at: min(NSMaxRange(editedRange), nsString.length),
+            lineStarts: lineStarts
+        )
+        let newChangedLines = newFirstLine..<(newLastLine + 1)
+        let lastAffectedLine = fenceState.update(
+            in: nsString,
+            lineStarts: lineStarts,
+            replacing: oldChangedLines,
+            with: newChangedLines
+        )
+        let upperLine = max(newLastLine, lastAffectedLine)
+        let upperBound = upperLine + 1 < lineStarts.count ? lineStarts[upperLine + 1] : nsString.length
+        return NSRange(location: lineStarts[newFirstLine], length: upperBound - lineStarts[newFirstLine])
+    }
+
+    private func updateLineStarts(
+        nsString: NSString,
+        editedRange: NSRange,
+        oldEditedLength: Int,
+        changeInLength delta: Int
+    ) {
+        let oldEnd = editedRange.location + oldEditedLength
+        let removalStart = Self.upperBound(of: editedRange.location, in: lineStarts)
+        let removalEnd = Self.upperBound(of: oldEnd, in: lineStarts)
+        lineStarts.removeSubrange(removalStart..<removalEnd)
+
+        for index in removalStart..<lineStarts.count where lineStarts[index] > oldEnd {
+            lineStarts[index] += delta
+        }
+
+        var insertedStarts: [Int] = []
+        var searchLocation = editedRange.location
+        let editedEnd = NSMaxRange(editedRange)
+        while searchLocation < editedEnd {
+            let newline = nsString.range(
+                of: "\n",
+                options: [],
+                range: NSRange(location: searchLocation, length: editedEnd - searchLocation)
+            )
+            guard newline.location != NSNotFound else { break }
+            insertedStarts.append(NSMaxRange(newline))
+            searchLocation = NSMaxRange(newline)
+        }
+        lineStarts.insert(contentsOf: insertedStarts, at: removalStart)
+    }
+
+    private static func computeLineStarts(in nsString: NSString) -> [Int] {
+        var starts = [0]
+        var searchLocation = 0
+        while searchLocation < nsString.length {
+            let newline = nsString.range(
+                of: "\n",
+                options: [],
+                range: NSRange(location: searchLocation, length: nsString.length - searchLocation)
+            )
+            guard newline.location != NSNotFound else { break }
+            starts.append(NSMaxRange(newline))
+            searchLocation = NSMaxRange(newline)
+        }
+        return starts
+    }
+
+    private static func lineIndex(at location: Int, lineStarts: [Int]) -> Int {
+        max(0, upperBound(of: location, in: lineStarts) - 1)
+    }
+
+    private static func upperBound(of value: Int, in values: [Int]) -> Int {
+        var lower = 0
+        var upper = values.count
+        while lower < upper {
+            let middle = lower + (upper - lower) / 2
+            if values[middle] <= value {
+                lower = middle + 1
+            } else {
+                upper = middle
+            }
+        }
+        return lower
+    }
+
+    private static func frontMatterLineCount(in source: String, lineStarts: [Int]) -> Int {
         guard let frontMatter = FrontMatterBlock(source: source) else { return 0 }
         let upperBound = frontMatter.range.upperBound
         let location = source.utf16.distance(from: source.startIndex, to: upperBound)
-        return lineNumber(in: nsString, at: location)
-    }
-
-    private static func lineNumber(in nsString: NSString, at location: Int) -> Int {
-        guard location > 0, location <= nsString.length else { return 0 }
-        var count = 0
-        nsString.substring(to: location).unicodeScalars.forEach { if $0 == "\n" { count += 1 } }
-        return count
+        return lineIndex(at: location, lineStarts: lineStarts)
     }
 
     private func styleLines(
@@ -179,7 +390,7 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
         frontMatterLineCount: Int,
         theme: MarkdownEditorTheme
     ) {
-        var lineIndex = Self.lineNumber(in: nsString, at: range.location)
+        var lineIndex = Self.lineIndex(at: range.location, lineStarts: lineStarts)
         nsString.enumerateSubstrings(in: range, options: [.byLines]) { substring, _, enclosingRange, _ in
             guard let substring else { return }
             if lineIndex < frontMatterLineCount {
@@ -267,44 +478,129 @@ final class MarkdownSourceHighlighter: NSObject, NSTextStorageDelegate {
     }
 }
 
-/// Tracks, for every line in the document, whether it starts inside an
-/// open fenced code block (```` ``` ```` or `~~~`). Recomputed from scratch
-/// on every edit — an O(document length) string scan with no attribute
-/// writes — so a fence opened or closed earlier in the document is always
-/// reflected correctly, even when the current edit lands on a later line.
+/// Tracks the complete fence context at each line start. The highlighter
+/// replaces signatures only for lines touched by an edit, then carries the
+/// resulting context forward until it matches the cached suffix again.
 struct FenceStateMachine {
-    private(set) var insideFenceAtLineStart: [Bool] = []
+    private struct FenceContext: Equatable {
+        var marker: Character?
+        var runLength = 0
+
+        static let outside = FenceContext(marker: nil, runLength: 0)
+    }
+
+    private struct LineSignature {
+        let opener: (marker: Character, runLength: Int)?
+        let closer: (marker: Character, runLength: Int)?
+    }
+
+    private var contexts: [FenceContext] = []
+    private var signatures: [LineSignature] = []
+
+    var insideFenceAtLineStart: [Bool] {
+        contexts.map { $0.marker != nil }
+    }
 
     mutating func recompute(for text: String) {
-        var states: [Bool] = []
-        var inFence = false
-        var fenceMarker: Character?
-        var fenceRunLength = 0
-        text.enumerateLines { line, _ in
-            states.append(inFence)
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if !inFence, let opener = Self.fenceOpener(of: trimmed) {
-                inFence = true
-                fenceMarker = opener.marker
-                fenceRunLength = opener.runLength
-            } else if inFence, let marker = fenceMarker,
-                      let closer = Self.fenceCloser(of: trimmed),
-                      closer.marker == marker, closer.runLength >= fenceRunLength {
-                inFence = false
-                fenceMarker = nil
-                fenceRunLength = 0
-            }
+        let nsString = text as NSString
+        var lineStarts = [0]
+        var searchLocation = 0
+        while searchLocation < nsString.length {
+            let newline = nsString.range(
+                of: "\n",
+                options: [],
+                range: NSRange(location: searchLocation, length: nsString.length - searchLocation)
+            )
+            guard newline.location != NSNotFound else { break }
+            lineStarts.append(NSMaxRange(newline))
+            searchLocation = NSMaxRange(newline)
         }
-        insideFenceAtLineStart = states
+        recompute(in: nsString, lineStarts: lineStarts)
+    }
+
+    mutating func recompute(in text: NSString, lineStarts: [Int]) {
+        signatures = lineStarts.indices.map { Self.signature(in: text, line: $0, lineStarts: lineStarts) }
+        contexts = Array(repeating: .outside, count: signatures.count)
+        var context = FenceContext.outside
+        for index in signatures.indices {
+            contexts[index] = context
+            context = Self.context(after: signatures[index], startingWith: context)
+        }
+    }
+
+    /// Returns the last line whose styling may have changed. Cached suffix
+    /// contexts are preserved when line counts shift, so equality at the
+    /// first unchanged line proves all following contexts are unchanged too.
+    mutating func update(
+        in text: NSString,
+        lineStarts: [Int],
+        replacing oldLines: Range<Int>,
+        with newLines: Range<Int>
+    ) -> Int {
+        guard oldLines.lowerBound >= 0,
+              oldLines.upperBound <= signatures.count,
+              newLines.lowerBound == oldLines.lowerBound,
+              newLines.upperBound <= lineStarts.count
+        else {
+            recompute(in: text, lineStarts: lineStarts)
+            return max(0, lineStarts.count - 1)
+        }
+
+        let replacements = newLines.map { Self.signature(in: text, line: $0, lineStarts: lineStarts) }
+        signatures.replaceSubrange(oldLines, with: replacements)
+        contexts.replaceSubrange(
+            oldLines,
+            with: Array(repeating: FenceContext.outside, count: replacements.count)
+        )
+        guard signatures.count == lineStarts.count, contexts.count == lineStarts.count else {
+            recompute(in: text, lineStarts: lineStarts)
+            return max(0, lineStarts.count - 1)
+        }
+
+        let firstLine = newLines.lowerBound
+        var context = firstLine == 0
+            ? FenceContext.outside
+            : Self.context(after: signatures[firstLine - 1], startingWith: contexts[firstLine - 1])
+        var lastAffectedLine = max(firstLine, newLines.upperBound - 1)
+
+        for index in firstLine..<signatures.count {
+            if index >= newLines.upperBound, contexts[index] == context {
+                break
+            }
+            contexts[index] = context
+            lastAffectedLine = index
+            context = Self.context(after: signatures[index], startingWith: context)
+        }
+        return lastAffectedLine
     }
 
     func isInsideFence(atLine line: Int) -> Bool {
-        guard line >= 0, line < insideFenceAtLineStart.count else { return false }
-        return insideFenceAtLineStart[line]
+        guard line >= 0, line < contexts.count else { return false }
+        return contexts[line].marker != nil
     }
 
     static func isFenceDelimiter(_ trimmedLine: String) -> Bool {
         fenceOpener(of: trimmedLine) != nil
+    }
+
+    private static func signature(in text: NSString, line: Int, lineStarts: [Int]) -> LineSignature {
+        let start = lineStarts[line]
+        let end = line + 1 < lineStarts.count ? lineStarts[line + 1] : text.length
+        let lineText = text.substring(with: NSRange(location: start, length: end - start))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return LineSignature(opener: fenceOpener(of: lineText), closer: fenceCloser(of: lineText))
+    }
+
+    private static func context(after line: LineSignature, startingWith context: FenceContext) -> FenceContext {
+        if let marker = context.marker {
+            guard let closer = line.closer,
+                  closer.marker == marker,
+                  closer.runLength >= context.runLength
+            else { return context }
+            return .outside
+        }
+        guard let opener = line.opener else { return context }
+        return FenceContext(marker: opener.marker, runLength: opener.runLength)
     }
 
     /// A fence marker line's character and how many consecutive marker
