@@ -60,15 +60,26 @@ final class AppleCalendarImporter {
         range: DateInterval = AppleCalendarImporter.defaultRange(),
         repository: CalendarRepository
     ) -> Summary {
-        var summary = Summary()
-        let sourceCalendars = store.calendars(for: .event).filter { identifiers.contains($0.calendarIdentifier) }
+        let summary = repository.performImport {
+            var summary = Summary()
+            let sourceCalendars = store.calendars(for: .event).filter {
+                identifiers.contains($0.calendarIdentifier)
+            }
 
-        for source in sourceCalendars {
-            let target = upsertCalendar(from: source, repository: repository)
-            summary.calendarCount += 1
-            importEvents(from: source, into: target, range: range, repository: repository, summary: &summary)
+            for source in sourceCalendars {
+                let target = upsertCalendar(from: source, repository: repository)
+                summary.calendarCount += 1
+                importEvents(
+                    from: source,
+                    into: target,
+                    range: range,
+                    repository: repository,
+                    summary: &summary
+                )
+            }
+            repository.dedupeAfterRemoteMerge()
+            return summary
         }
-        repository.dedupeAfterRemoteMerge()
         Self.logger.info("""
             apple import: \(summary.calendarCount, privacy: .public) calendars, \
             \(summary.eventCount, privacy: .public) events, \

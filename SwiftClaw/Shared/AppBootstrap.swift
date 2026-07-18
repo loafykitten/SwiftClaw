@@ -24,6 +24,8 @@ final class AppBootstrap {
         EmailAccountStore.shared.migrateLegacyIfNeeded()
         EmailRepository(modelContext: ModelContext(modelContainer))
             .backfillFolderRolesIfNeeded(accounts: EmailAccountStore.shared.accounts)
+        CalendarRepository(modelContext: ModelContext(modelContainer))
+            .backfillRecurrenceEndDatesIfNeeded()
 
         // Reconcile the persisted unread-chat set with the store: a chat
         // removed without passing through the router (store reset, migration

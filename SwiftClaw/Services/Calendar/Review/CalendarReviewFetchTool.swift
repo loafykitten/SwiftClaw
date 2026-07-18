@@ -71,8 +71,14 @@ final class CalendarReviewFetchTool: Tool {
             let calendarNames: [UUID: String] = Dictionary(
                 uniqueKeysWithValues: repository.calendars().map { ($0.id, $0.name) }
             )
+            var eventsByID: [UUID: CalendarEvent] = [:]
+            for event in repository.events(withIDs: masterIDs) {
+                if eventsByID[event.id] == nil {
+                    eventsByID[event.id] = event
+                }
+            }
             let lines = occurrences.map { occurrence -> String in
-                let event = repository.event(withID: occurrence.eventID)
+                let event = eventsByID[occurrence.eventID]
                 var parts = [
                     "eventGUID: \(occurrence.eventID.uuidString)",
                     "title: \(occurrence.title)",

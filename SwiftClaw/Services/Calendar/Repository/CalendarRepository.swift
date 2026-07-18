@@ -14,6 +14,11 @@ final class CalendarRepository {
 
     let modelContext: ModelContext
 
+    /// Imports preload external identities once and defer persistence so a
+    /// large calendar produces one fetch, save, and store-change notification.
+    private var importedEventsByExternalIdentifier: [String: CalendarEvent]?
+    private var importBatchNeedsSave = false
+
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
     }
@@ -96,6 +101,9 @@ final class CalendarRepository {
     }
 
     func event(withExternalIdentifier externalIdentifier: String) -> CalendarEvent? {
+        if let importedEventsByExternalIdentifier {
+            return importedEventsByExternalIdentifier[externalIdentifier]
+        }
         var descriptor = FetchDescriptor<CalendarEvent>(
             predicate: #Predicate { $0.externalIdentifier == externalIdentifier },
             sortBy: [SortDescriptor(\.createdAt)]
@@ -106,6 +114,7 @@ final class CalendarRepository {
 
     @discardableResult
     func insert(_ event: CalendarEvent) -> CalendarEvent {
+        refreshRecurrenceEnd(of: event)
         modelContext.insert(event)
         save()
         return event
@@ -115,6 +124,7 @@ final class CalendarRepository {
     /// directly to the model).
     func noteUpdated(_ event: CalendarEvent) {
         event.modifiedAt = .now
+        refreshRecurrenceEnd(of: event)
         save()
     }
 
@@ -145,7 +155,7 @@ final class CalendarRepository {
         let recurringPredicate = #Predicate<CalendarEvent> {
             $0.recurrenceRuleString != nil
                 && $0.startDate < windowEnd
-                && ($0.recurrenceEndDate ?? distantFuture) > windowStart
+                && ($0.recurrenceEndDate ?? distantFuture) >= windowStart
         }
 
         let plain = (try? modelContext.fetch(FetchDescriptor(predicate: plainPredicate))) ?? []
@@ -231,22 +241,86 @@ final class CalendarRepository {
     }
 
     /// Re-derives `recurrenceEndDate` from the rule; call whenever the rule
-    /// string is (re)assigned. COUNT ends can't be cheaply bounded without
-    /// expansion, so they conservatively keep `nil` (always fetched) — COUNT
-    /// series are finite anyway, so expansion stays cheap.
+    /// string, start, duration, or time zone changes. COUNT uses the canonical
+    /// expander so BY-parts and DST behavior cannot drift from rendering.
     func refreshRecurrenceEnd(of event: CalendarEvent) {
         guard let rule = event.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)) else {
             event.recurrenceEndDate = nil
             return
         }
-        if case .untilDate(let until) = rule.end {
+        switch rule.end {
+        case .untilDate(let until):
             event.recurrenceEndDate = until
-        } else {
+        case .occurrenceCount(let count):
+            let starts = RecurrenceExpander.occurrenceStarts(
+                rule: rule,
+                eventStart: event.startDate,
+                duration: event.duration,
+                window: DateInterval(
+                    start: event.startDate.addingTimeInterval(-1),
+                    end: .distantFuture
+                ),
+                timeZone: event.timeZone,
+                cap: count
+            )
+            event.recurrenceEndDate = starts.last
+        case nil:
             event.recurrenceEndDate = nil
         }
     }
 
+    /// One-time migration for rows written before COUNT end dates were
+    /// persisted. A failed fetch leaves the flag unset so the next launch
+    /// retries instead of permanently leaving old rows unbounded.
+    @discardableResult
+    func backfillRecurrenceEndDatesIfNeeded(userDefaults: UserDefaults = .standard) -> Int {
+        let key = "calendar.recurrenceEndDate.backfilled.v1"
+        guard !userDefaults.bool(forKey: key) else { return 0 }
+        guard let events = try? modelContext.fetch(FetchDescriptor<CalendarEvent>()) else { return 0 }
+
+        var changed = 0
+        for event in events where event.recurrenceRuleString != nil {
+            let previous = event.recurrenceEndDate
+            refreshRecurrenceEnd(of: event)
+            if event.recurrenceEndDate != previous {
+                changed += 1
+            }
+        }
+        if changed > 0 {
+            save()
+        }
+        userDefaults.set(true, forKey: key)
+        return changed
+    }
+
     // MARK: - Import support
+
+    /// Runs an import as one persistence transaction. The cache is invalidated
+    /// when the batch ends; all later lookups return to live SwiftData fetches.
+    func performImport<Result>(_ body: () -> Result) -> Result {
+        guard importedEventsByExternalIdentifier == nil else { return body() }
+
+        let descriptor = FetchDescriptor<CalendarEvent>(sortBy: [SortDescriptor(\.createdAt)])
+        let existing = (try? modelContext.fetch(descriptor)) ?? []
+        var byExternalIdentifier: [String: CalendarEvent] = [:]
+        for event in existing {
+            if let externalIdentifier = event.externalIdentifier,
+               byExternalIdentifier[externalIdentifier] == nil
+            {
+                byExternalIdentifier[externalIdentifier] = event
+            }
+        }
+        importedEventsByExternalIdentifier = byExternalIdentifier
+        importBatchNeedsSave = false
+        defer {
+            importedEventsByExternalIdentifier = nil
+            if importBatchNeedsSave {
+                importBatchNeedsSave = false
+                persist()
+            }
+        }
+        return body()
+    }
 
     /// Upsert keyed on `externalIdentifier` — re-imports update in place
     /// instead of duplicating. Returns the persisted event.
@@ -265,6 +339,7 @@ final class CalendarRepository {
         apply(event)
         event.modifiedAt = .now
         refreshRecurrenceEnd(of: event)
+        importedEventsByExternalIdentifier?[externalIdentifier] = event
         save()
         return event
     }
@@ -347,6 +422,14 @@ final class CalendarRepository {
     // MARK: - Persistence
 
     private func save() {
+        if importedEventsByExternalIdentifier != nil {
+            importBatchNeedsSave = true
+            return
+        }
+        persist()
+    }
+
+    private func persist() {
         do {
             try modelContext.save()
             NotificationCenter.default.post(name: .calendarStoreDidChange, object: nil)

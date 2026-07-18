@@ -72,7 +72,6 @@ nonisolated struct CalendarEventDraft {
         event.alarms = alarms
         if !event.isOverride {
             event.recurrenceRuleString = rule?.rruleString
-            repository.refreshRecurrenceEnd(of: event)
         }
         if let calendarID {
             event.calendar = repository.calendar(withID: calendarID)

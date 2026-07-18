@@ -22,11 +22,22 @@ final class CalendarOverlayProvider {
 
     @ObservationIgnored private var store: EKEventStore?
     @ObservationIgnored private var changeObserver: (any NSObjectProtocol)?
+    /// Cache invalidation is keyed by the requested interval plus
+    /// `changeVersion`, which advances on activation and EventKit changes.
+    @ObservationIgnored private var cachedKey: CacheKey?
+    @ObservationIgnored private var cachedOccurrences: [EventOccurrence] = []
+
+    private struct CacheKey: Equatable {
+        let window: DateInterval
+        let changeVersion: Int
+    }
 
     private init() {}
 
     /// Called when the overlay toggle turns on; requests access lazily.
     func activate() async {
+        invalidateCache()
+        changeVersion &+= 1
         guard store == nil else { return }
         let store = EKEventStore()
         self.store = store
@@ -43,6 +54,7 @@ final class CalendarOverlayProvider {
             queue: nil
         ) { _ in
             Task { @MainActor in
+                CalendarOverlayProvider.shared.invalidateCache()
                 CalendarOverlayProvider.shared.changeVersion += 1
             }
         }
@@ -55,18 +67,23 @@ final class CalendarOverlayProvider {
         changeObserver = nil
         store = nil
         hasAccess = false
+        invalidateCache()
     }
 
     /// Apple Calendar occurrences intersecting `window`, as display-only
     /// values. Empty when the overlay is off or access wasn't granted.
     func occurrences(in window: DateInterval) -> [EventOccurrence] {
         guard hasAccess, let store else { return [] }
+        let key = CacheKey(window: window, changeVersion: changeVersion)
+        if cachedKey == key {
+            return cachedOccurrences
+        }
         let predicate = store.predicateForEvents(
             withStart: window.start,
             end: window.end,
             calendars: nil
         )
-        return store.events(matching: predicate).compactMap { event in
+        let occurrences = store.events(matching: predicate).compactMap { event -> EventOccurrence? in
             guard let start = event.startDate, let end = event.endDate else { return nil }
             return EventOccurrence(
                 // Stable per EK occurrence: hash the event identifier into a
@@ -83,6 +100,14 @@ final class CalendarOverlayProvider {
                 isOverride: false
             )
         }
+        cachedKey = key
+        cachedOccurrences = occurrences
+        return occurrences
+    }
+
+    private func invalidateCache() {
+        cachedKey = nil
+        cachedOccurrences = []
     }
 
     private static func stableID(for event: EKEvent, start: Date) -> UUID {

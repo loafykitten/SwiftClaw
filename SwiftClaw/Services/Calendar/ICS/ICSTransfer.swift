@@ -36,7 +36,26 @@ enum ICSImporter {
         into calendar: UserCalendar,
         repository: CalendarRepository
     ) -> Int {
-        let parsed = ICSParser.parse(text)
+        importEvents(ICSParser.parse(text), into: calendar, repository: repository)
+    }
+
+    @discardableResult
+    static func importEvents(
+        _ parsed: [ICSEventRepresentation],
+        into calendar: UserCalendar,
+        repository: CalendarRepository
+    ) -> Int {
+        repository.performImport {
+            apply(parsed, into: calendar, repository: repository)
+        }
+        return parsed.count
+    }
+
+    private static func apply(
+        _ parsed: [ICSEventRepresentation],
+        into calendar: UserCalendar,
+        repository: CalendarRepository
+    ) {
         // Masters before overrides: a RECURRENCE-ID VEVENT shares its
         // master's UID, and the override needs the master row to link to
         // regardless of file order.
@@ -68,7 +87,6 @@ enum ICSImporter {
                 repository.saveChanges()
             }
         }
-        return parsed.count
     }
 
     private static func apply(

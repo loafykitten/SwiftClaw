@@ -44,6 +44,8 @@ struct CalendarMonthGridView: View {
     }
 
     var body: some View {
+        let occurrencesByDay = occurrencesByDay
+        let remindersByDay = remindersByDay
         VStack(spacing: 0) {
             weekdayHeader
             Divider()
@@ -55,7 +57,11 @@ struct CalendarMonthGridView: View {
                     ForEach(0..<rowCount, id: \.self) { row in
                         HStack(spacing: 0) {
                             ForEach(days[(row * 7)..<((row + 1) * 7)]) { day in
-                                dayCell(day)
+                                dayCell(
+                                    day,
+                                    occurrences: occurrencesByDay[day.date] ?? [],
+                                    reminders: remindersByDay[day.date] ?? []
+                                )
                                     .frame(maxWidth: .infinity)
                                     .frame(height: cellHeight)
                                     .overlay(alignment: .trailing) { Divider() }
@@ -81,9 +87,11 @@ struct CalendarMonthGridView: View {
     }
 
     @ViewBuilder
-    private func dayCell(_ day: CalendarMonthMath.Day) -> some View {
-        let dayOccurrences = occurrencesByDay[day.date] ?? []
-        let dayReminders = remindersByDay[day.date] ?? []
+    private func dayCell(
+        _ day: CalendarMonthMath.Day,
+        occurrences dayOccurrences: [EventOccurrence],
+        reminders dayReminders: [ReminderCalendarItem]
+    ) -> some View {
         // Events and reminders share the cell's chip budget; events lead
         // because they structure the day.
         let reminderSlots = max(0, Self.maxChipsPerCell - dayOccurrences.count)

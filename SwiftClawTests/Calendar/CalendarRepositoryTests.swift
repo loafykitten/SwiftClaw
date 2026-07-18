@@ -11,9 +11,15 @@ struct CalendarRepositoryTests {
         return try ModelContainer(for: schema, configurations: [configuration])
     }
 
-    private static func date(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 0) -> Date {
+    private static func date(
+        _ year: Int,
+        _ month: Int,
+        _ day: Int,
+        _ hour: Int = 0,
+        timeZoneIdentifier: String = "UTC"
+    ) -> Date {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(identifier: "UTC")!
+        calendar.timeZone = TimeZone(identifier: timeZoneIdentifier)!
         return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
     }
 
@@ -176,6 +182,72 @@ struct CalendarRepositoryTests {
         _ = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
         repository.deleteEventSeries(master)
         #expect(repository.occurrences(in: Self.june).isEmpty)
+    }
+
+    @Test func countRecurrenceEndUsesCanonicalExpansionAcrossDST() throws {
+        let repository = CalendarRepository(modelContext: ModelContext(try Self.inMemoryContainer()))
+        let start = Self.date(2026, 3, 1, 9, timeZoneIdentifier: "America/Chicago")
+        let event = repository.insert(CalendarEvent(
+            title: "Sunday meeting",
+            startDate: start,
+            endDate: start.addingTimeInterval(3600),
+            timeZoneIdentifier: "America/Chicago",
+            recurrenceRuleString: "FREQ=WEEKLY;BYDAY=SU;COUNT=3",
+            calendar: repository.defaultCalendar()
+        ))
+
+        let finalStart = Self.date(2026, 3, 15, 9, timeZoneIdentifier: "America/Chicago")
+        #expect(event.recurrenceEndDate == finalStart)
+
+        let finalDay = DateInterval(
+            start: Self.date(2026, 3, 15, timeZoneIdentifier: "America/Chicago"),
+            end: Self.date(2026, 3, 16, timeZoneIdentifier: "America/Chicago")
+        )
+        #expect(repository.occurrences(in: finalDay).map(\.start) == [finalStart])
+        let later = DateInterval(
+            start: Self.date(2026, 3, 16, timeZoneIdentifier: "America/Chicago"),
+            end: Self.date(2026, 3, 17, timeZoneIdentifier: "America/Chicago")
+        )
+        #expect(repository.occurrences(in: later).isEmpty)
+    }
+
+    @Test func backfillPersistsCountEndDatesOnce() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let context = ModelContext(try Self.inMemoryContainer())
+        let repository = CalendarRepository(modelContext: context)
+        let event = CalendarEvent(
+            title: "Legacy series",
+            startDate: Self.date(2026, 6, 1, 9),
+            endDate: Self.date(2026, 6, 1, 10),
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY;COUNT=4",
+            calendar: repository.defaultCalendar()
+        )
+        context.insert(event)
+        try context.save()
+        #expect(event.recurrenceEndDate == nil)
+
+        #expect(repository.backfillRecurrenceEndDatesIfNeeded(userDefaults: fixture.defaults) == 1)
+        #expect(event.recurrenceEndDate == Self.date(2026, 6, 4, 9))
+        #expect(repository.backfillRecurrenceEndDatesIfNeeded(userDefaults: fixture.defaults) == 0)
+    }
+
+    @Test func countFinalOccurrenceAtWindowStartRemainsVisible() throws {
+        let repository = CalendarRepository(modelContext: ModelContext(try Self.inMemoryContainer()))
+        let event = repository.insert(CalendarEvent(
+            title: "Three-day series",
+            startDate: Self.date(2026, 6, 1),
+            endDate: Self.date(2026, 6, 2),
+            isAllDay: true,
+            recurrenceRuleString: "FREQ=DAILY;COUNT=3",
+            calendar: repository.defaultCalendar()
+        ))
+        let finalStart = Self.date(2026, 6, 3)
+        #expect(event.recurrenceEndDate == finalStart)
+
+        let finalDay = DateInterval(start: finalStart, end: Self.date(2026, 6, 4))
+        #expect(repository.occurrences(in: finalDay).map(\.start) == [finalStart])
     }
 
     // MARK: - Import support

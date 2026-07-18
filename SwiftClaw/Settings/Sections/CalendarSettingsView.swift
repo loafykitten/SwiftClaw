@@ -151,14 +151,22 @@ struct CalendarSettingsView: View {
 
     private func handleICSImport(_ result: Result<URL, Error>) {
         guard case .success(let url) = result else { return }
-        let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-            icsStatusMessage = "Couldn't read that file."
-            return
+        Task {
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let parsed = try await Task.detached(priority: .userInitiated) {
+                    let text = try String(contentsOf: url, encoding: .utf8)
+                    return ICSParser.parse(text)
+                }.value
+                let target = repository.defaultCalendar(
+                    preferredID: SettingsStorage.loadCalendarDefaultCalendarID()
+                )
+                let count = ICSImporter.importEvents(parsed, into: target, repository: repository)
+                icsStatusMessage = "Imported \(count) event\(count == 1 ? "" : "s") into “\(target.name)”."
+            } catch {
+                icsStatusMessage = "Couldn't read that file."
+            }
         }
-        let target = repository.defaultCalendar(preferredID: SettingsStorage.loadCalendarDefaultCalendarID())
-        let count = ICSImporter.importEvents(from: text, into: target, repository: repository)
-        icsStatusMessage = "Imported \(count) event\(count == 1 ? "" : "s") into “\(target.name)”."
     }
 }

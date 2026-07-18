@@ -13,6 +13,16 @@ struct CalendarEventEditorSheet: View {
 
     @State private var draft = CalendarEventDraft(newAt: .now, calendarID: nil)
     @State private var hasLoaded = false
+    @State private var allowsRecurrence: Bool
+
+    init(request: CalendarEditorRequest) {
+        self.request = request
+        if case .editOccurrence = request {
+            _allowsRecurrence = State(initialValue: false)
+        } else {
+            _allowsRecurrence = State(initialValue: true)
+        }
+    }
 
     private var repository: CalendarRepository {
         CalendarRepository(modelContext: modelContext)
@@ -23,16 +33,6 @@ struct CalendarEventEditorSheet: View {
         case .new, .newTimed, .quickEntry: "New Event"
         case .editEvent: "Edit Event"
         case .editOccurrence: "Edit This Event"
-        }
-    }
-
-    /// Recurrence is editable for new events and whole series — not for a
-    /// single detached occurrence.
-    private var allowsRecurrence: Bool {
-        switch request {
-        case .new, .newTimed, .quickEntry: true
-        case .editEvent(let id): !(repository.event(withID: id)?.isOverride ?? false)
-        case .editOccurrence: false
         }
     }
 
@@ -135,6 +135,7 @@ struct CalendarEventEditorSheet: View {
             self.draft = draft
         case .editEvent(let id):
             if let event = repository.event(withID: id) {
+                allowsRecurrence = !event.isOverride
                 draft = CalendarEventDraft(from: event)
             }
         case .editOccurrence(let masterID, let occurrenceStart):

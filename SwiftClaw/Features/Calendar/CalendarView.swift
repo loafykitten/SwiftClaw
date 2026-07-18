@@ -15,12 +15,6 @@ struct CalendarView: View {
     }
 
     @Environment(\.modelContext) private var modelContext
-    @Query private var events: [CalendarEvent]
-    @Query(sort: \UserCalendar.sortOrder) private var calendars: [UserCalendar]
-    /// Masters and one-offs only — chips never render completion-log history,
-    /// which grows unbounded (one row per completed recurring occurrence).
-    @Query(filter: #Predicate<Reminder> { $0.parentReminderID == nil })
-    private var reminders: [Reminder]
 
     @State private var displayMode: DisplayMode = .month
     @State private var anchorDate: Date = .now
@@ -47,6 +41,7 @@ struct CalendarView: View {
     }
 
     var body: some View {
+        let window = visibleInterval
         VStack(spacing: 0) {
             quickEntryBar
             Divider()
@@ -54,7 +49,34 @@ struct CalendarView: View {
             // sits open: reminder chips cross into overdue (and roll forward
             // at midnight) without waiting for a store change to re-render.
             TimelineView(.everyMinute) { timeline in
-                content(now: timeline.date)
+                CalendarWindowContent(
+                    window: window,
+                    displayMode: displayMode,
+                    monthAnchor: anchorDate,
+                    timelineDays: timelineDays,
+                    calendar: calendar,
+                    now: timeline.date,
+                    isOverlayEnabled: isOverlayEnabled,
+                    showsReminders: isRemindersEnabled && isShowingReminders,
+                    onSelectDay: { day in
+                        anchorDate = day
+                        displayMode = .day
+                    },
+                    onCreateAllDay: { day in
+                        editorRequest = .new(start: day, isAllDay: true)
+                    },
+                    onSelectOccurrence: requestEdit,
+                    onDeleteOccurrence: requestDelete,
+                    onCreateTimed: { start, end in
+                        editorRequest = .newTimed(start: start, end: end)
+                    },
+                    onMove: moveOccurrence,
+                    onResize: resizeOccurrence,
+                    onSelectReminder: openReminder,
+                    onCompleteReminder: completeReminder
+                )
+                // SwiftData query predicates are fixed at initialization.
+                .id(CalendarVisibleWindowID(window: window))
             }
         }
             .toolbar { toolbarContent }
@@ -132,71 +154,6 @@ struct CalendarView: View {
                     }
                 }
             }
-    }
-
-    // MARK: - Content
-
-    @ViewBuilder
-    private func content(now: Date) -> some View {
-        // Reading `changeVersion` makes the body re-evaluate when the Apple
-        // Calendar database changes while the overlay is on.
-        let overlayVersion = CalendarOverlayProvider.shared.changeVersion
-        let _ = overlayVersion
-        let native = CalendarOccurrenceBuilder.occurrences(from: events, in: visibleInterval)
-        let occurrences: [EventOccurrence] = isOverlayEnabled
-            ? (native + CalendarOverlayProvider.shared.occurrences(in: visibleInterval))
-                .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
-            : native
-        let reminderItems: [ReminderCalendarItem] = isRemindersEnabled && isShowingReminders
-            ? ReminderCalendarItemBuilder.items(from: reminders, in: visibleInterval, now: now, calendar: calendar)
-            : []
-        switch displayMode {
-        case .month:
-            CalendarMonthGridView(
-                monthAnchor: anchorDate,
-                occurrences: occurrences,
-                calendar: calendar,
-                onSelectDay: { day in
-                    anchorDate = day
-                    displayMode = .day
-                },
-                onCreate: { day in
-                    editorRequest = .new(start: day, isAllDay: true)
-                },
-                onSelectOccurrence: requestEdit,
-                onDeleteOccurrence: requestDelete,
-                reminderItems: reminderItems,
-                onSelectReminder: openReminder,
-                onCompleteReminder: completeReminder
-            )
-        case .week, .day:
-            CalendarTimelineView(
-                days: timelineDays,
-                occurrences: occurrences,
-                calendar: calendar,
-                recurringEventIDs: recurringEventIDs,
-                onSelectOccurrence: requestEdit,
-                onDeleteOccurrence: requestDelete,
-                onCreate: { start, end in
-                    editorRequest = .newTimed(start: start, end: end)
-                },
-                onMove: moveOccurrence,
-                onResize: resizeOccurrence,
-                reminderItems: reminderItems,
-                onSelectReminder: openReminder,
-                onCompleteReminder: completeReminder
-            )
-        case .agenda:
-            CalendarAgendaListView(
-                occurrences: occurrences,
-                calendar: calendar,
-                onSelectOccurrence: requestEdit,
-                onDeleteOccurrence: requestDelete,
-                reminderItems: reminderItems,
-                onSelectReminder: openReminder,
-                onCompleteReminder: completeReminder
-            )
-        }
     }
 
     // MARK: - Toolbar
@@ -368,18 +325,6 @@ struct CalendarView: View {
         }
     }
 
-    /// Occurrences that must not be dragged in the timeline: recurring
-    /// masters (scope must come from the editor) and read-only overlay events.
-    private var recurringEventIDs: Set<UUID> {
-        var ids = Set(events.filter(\.isRecurring).map(\.id))
-        if isOverlayEnabled {
-            ids.formUnion(
-                CalendarOverlayProvider.shared.occurrences(in: visibleInterval).map(\.eventID)
-            )
-        }
-        return ids
-    }
-
     private var periodTitle: String {
         switch displayMode {
         case .month:
@@ -477,6 +422,236 @@ struct CalendarView: View {
         // The chip's dueDate is the occurrence it rendered; a stale
         // double-click must not consume the next occurrence too.
         reminderRepository.complete(reminder, expectedOccurrence: item.due)
+    }
+}
+
+private struct CalendarVisibleWindowID: Hashable {
+    let start: Date
+    let end: Date
+
+    init(window: DateInterval) {
+        start = window.start
+        end = window.end
+    }
+}
+
+/// Owns the fixed-at-init SwiftData predicates for one visible window.
+private struct CalendarWindowContent: View {
+    let window: DateInterval
+    let displayMode: CalendarView.DisplayMode
+    let monthAnchor: Date
+    let timelineDays: [Date]
+    let calendar: Calendar
+    let now: Date
+    let isOverlayEnabled: Bool
+    let showsReminders: Bool
+    let onSelectDay: (Date) -> Void
+    let onCreateAllDay: (Date) -> Void
+    let onSelectOccurrence: (EventOccurrence) -> Void
+    let onDeleteOccurrence: (EventOccurrence) -> Void
+    let onCreateTimed: (Date, Date) -> Void
+    let onMove: (EventOccurrence, Date) -> Void
+    let onResize: (EventOccurrence, Date) -> Void
+    let onSelectReminder: (ReminderCalendarItem) -> Void
+    let onCompleteReminder: (ReminderCalendarItem) -> Void
+
+    @Query private var plainEvents: [CalendarEvent]
+    @Query private var recurringEvents: [CalendarEvent]
+    /// Masters and one-offs only — completion-log history grows unbounded.
+    @Query private var reminders: [Reminder]
+    @State private var occurrenceCache = CalendarOccurrenceCache()
+
+    init(
+        window: DateInterval,
+        displayMode: CalendarView.DisplayMode,
+        monthAnchor: Date,
+        timelineDays: [Date],
+        calendar: Calendar,
+        now: Date,
+        isOverlayEnabled: Bool,
+        showsReminders: Bool,
+        onSelectDay: @escaping (Date) -> Void,
+        onCreateAllDay: @escaping (Date) -> Void,
+        onSelectOccurrence: @escaping (EventOccurrence) -> Void,
+        onDeleteOccurrence: @escaping (EventOccurrence) -> Void,
+        onCreateTimed: @escaping (Date, Date) -> Void,
+        onMove: @escaping (EventOccurrence, Date) -> Void,
+        onResize: @escaping (EventOccurrence, Date) -> Void,
+        onSelectReminder: @escaping (ReminderCalendarItem) -> Void,
+        onCompleteReminder: @escaping (ReminderCalendarItem) -> Void
+    ) {
+        self.window = window
+        self.displayMode = displayMode
+        self.monthAnchor = monthAnchor
+        self.timelineDays = timelineDays
+        self.calendar = calendar
+        self.now = now
+        self.isOverlayEnabled = isOverlayEnabled
+        self.showsReminders = showsReminders
+        self.onSelectDay = onSelectDay
+        self.onCreateAllDay = onCreateAllDay
+        self.onSelectOccurrence = onSelectOccurrence
+        self.onDeleteOccurrence = onDeleteOccurrence
+        self.onCreateTimed = onCreateTimed
+        self.onMove = onMove
+        self.onResize = onResize
+        self.onSelectReminder = onSelectReminder
+        self.onCompleteReminder = onCompleteReminder
+
+        let windowStart = window.start
+        let windowEnd = window.end
+        let distantFuture = Date.distantFuture
+        _plainEvents = Query(filter: #Predicate<CalendarEvent> {
+            $0.recurrenceRuleString == nil
+                && $0.startDate < windowEnd
+                && $0.endDate > windowStart
+        })
+        _recurringEvents = Query(filter: #Predicate<CalendarEvent> {
+            $0.recurrenceRuleString != nil
+                && $0.startDate < windowEnd
+                && ($0.recurrenceEndDate ?? distantFuture) >= windowStart
+        })
+        _reminders = Query(filter: #Predicate<Reminder> {
+            $0.parentReminderID == nil
+                && $0.completedAt == nil
+                && ($0.dueDate ?? distantFuture) < windowEnd
+        })
+    }
+
+    var body: some View {
+        // Observation of the version refreshes this child after EventKit
+        // changes; the provider serves the matching interval from its cache.
+        let overlayVersion = isOverlayEnabled
+            ? CalendarOverlayProvider.shared.changeVersion
+            : 0
+        let overlay = isOverlayEnabled
+            ? CalendarOverlayProvider.shared.occurrences(in: window)
+            : []
+        let _ = overlayVersion
+        let occurrences = occurrenceCache.occurrences(
+            from: plainEvents + recurringEvents,
+            overlay: overlay,
+            in: window
+        )
+        let reminderItems = showsReminders
+            ? ReminderCalendarItemBuilder.items(
+                from: reminders,
+                in: window,
+                now: now,
+                calendar: calendar
+            )
+            : []
+        let recurringEventIDs = Set(recurringEvents.map(\.id))
+            .union(overlay.map(\.eventID))
+
+        switch displayMode {
+        case .month:
+            CalendarMonthGridView(
+                monthAnchor: monthAnchor,
+                occurrences: occurrences,
+                calendar: calendar,
+                onSelectDay: onSelectDay,
+                onCreate: onCreateAllDay,
+                onSelectOccurrence: onSelectOccurrence,
+                onDeleteOccurrence: onDeleteOccurrence,
+                reminderItems: reminderItems,
+                onSelectReminder: onSelectReminder,
+                onCompleteReminder: onCompleteReminder
+            )
+        case .week, .day:
+            CalendarTimelineView(
+                days: timelineDays,
+                occurrences: occurrences,
+                calendar: calendar,
+                recurringEventIDs: recurringEventIDs,
+                onSelectOccurrence: onSelectOccurrence,
+                onDeleteOccurrence: onDeleteOccurrence,
+                onCreate: onCreateTimed,
+                onMove: onMove,
+                onResize: onResize,
+                reminderItems: reminderItems,
+                onSelectReminder: onSelectReminder,
+                onCompleteReminder: onCompleteReminder
+            )
+        case .agenda:
+            CalendarAgendaListView(
+                occurrences: occurrences,
+                calendar: calendar,
+                onSelectOccurrence: onSelectOccurrence,
+                onDeleteOccurrence: onDeleteOccurrence,
+                reminderItems: reminderItems,
+                onSelectReminder: onSelectReminder,
+                onCompleteReminder: onCompleteReminder
+            )
+        }
+    }
+}
+
+@MainActor
+private final class CalendarOccurrenceCache {
+    private struct Key: Equatable {
+        let window: DateInterval
+        let events: [EventContent]
+        let overlay: [EventOccurrence]
+    }
+
+    private struct EventContent: Equatable {
+        let id: UUID
+        let title: String
+        let startDate: Date
+        let endDate: Date
+        let isAllDay: Bool
+        let timeZoneIdentifier: String?
+        let recurrenceRuleString: String?
+        let recurrenceEndDate: Date?
+        let exceptionDatesData: Data?
+        let parentEventID: UUID?
+        let sourceRawValue: String
+        let createdAt: Date
+        let calendarID: UUID?
+        let calendarIsVisible: Bool?
+        let calendarColorHex: String?
+
+        init(event: CalendarEvent) {
+            id = event.id
+            title = event.title
+            startDate = event.startDate
+            endDate = event.endDate
+            isAllDay = event.isAllDay
+            timeZoneIdentifier = event.timeZoneIdentifier
+            recurrenceRuleString = event.recurrenceRuleString
+            recurrenceEndDate = event.recurrenceEndDate
+            exceptionDatesData = event.exceptionDatesData
+            parentEventID = event.parentEventID
+            sourceRawValue = event.sourceRawValue
+            createdAt = event.createdAt
+            calendarID = event.calendar?.id
+            calendarIsVisible = event.calendar?.isVisible
+            calendarColorHex = event.calendar?.colorHex
+        }
+    }
+
+    private var key: Key?
+    private var value: [EventOccurrence] = []
+
+    /// Expansion invalidates only when the visible interval or rendered row
+    /// content changes; minute ticks and unrelated review stamps reuse it.
+    func occurrences(
+        from events: [CalendarEvent],
+        overlay: [EventOccurrence],
+        in window: DateInterval
+    ) -> [EventOccurrence] {
+        let nextKey = Key(
+            window: window,
+            events: events.map(EventContent.init),
+            overlay: overlay
+        )
+        guard key != nextKey else { return value }
+
+        key = nextKey
+        value = (CalendarOccurrenceBuilder.occurrences(from: events, in: window) + overlay)
+            .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
+        return value
     }
 }
 

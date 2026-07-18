@@ -170,8 +170,14 @@ final class CalendarAlertScheduler {
                 by: \.eventID
             )
             : [:]
+        var storedEventsByID: [UUID: CalendarEvent] = [:]
+        for event in repository.events(withIDs: Array(eventsByID.keys)) {
+            if storedEventsByID[event.id] == nil {
+                storedEventsByID[event.id] = event
+            }
+        }
         for (eventID, occurrences) in eventsByID {
-            guard let event = repository.event(withID: eventID) else { continue }
+            guard let event = storedEventsByID[eventID] else { continue }
             let alarms = event.alarms
             guard !alarms.isEmpty else { continue }
             for occurrence in occurrences {

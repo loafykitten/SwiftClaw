@@ -51,8 +51,63 @@ struct CalendarTimelineView: View {
     }
 
     @State private var dragState: DragState?
+    @State private var layoutCache = LayoutCache()
+
+    /// Frame invalidation is keyed to occurrence content, visible days, and
+    /// the calendar fields that define day boundaries. Drag state is excluded.
+    private final class LayoutCache {
+        private struct Key: Equatable {
+            let days: [Date]
+            let occurrences: [EventOccurrence]
+            let calendarIdentifier: Calendar.Identifier
+            let timeZoneIdentifier: String
+            let localeIdentifier: String?
+            let firstWeekday: Int
+            let minimumDaysInFirstWeek: Int
+        }
+
+        private var key: Key?
+        private var value: [Date: [CalendarTimelineLayoutEngine.Frame]] = [:]
+
+        func frames(
+            days: [Date],
+            occurrences: [EventOccurrence],
+            calendar: Calendar
+        ) -> [Date: [CalendarTimelineLayoutEngine.Frame]] {
+            let nextKey = Key(
+                days: days,
+                occurrences: occurrences,
+                calendarIdentifier: calendar.identifier,
+                timeZoneIdentifier: calendar.timeZone.identifier,
+                localeIdentifier: calendar.locale?.identifier,
+                firstWeekday: calendar.firstWeekday,
+                minimumDaysInFirstWeek: calendar.minimumDaysInFirstWeek
+            )
+            guard key != nextKey else { return value }
+
+            key = nextKey
+            value = Dictionary(uniqueKeysWithValues: days.map { day in
+                let interval = calendar.dateInterval(of: .day, for: day)
+                    ?? DateInterval(start: day, duration: 24 * 3600)
+                return (
+                    day,
+                    CalendarTimelineLayoutEngine.frames(
+                        for: occurrences,
+                        day: interval,
+                        calendar: calendar
+                    )
+                )
+            })
+            return value
+        }
+    }
 
     var body: some View {
+        let framesByDay = layoutCache.frames(
+            days: days,
+            occurrences: occurrences,
+            calendar: calendar
+        )
         VStack(spacing: 0) {
             headerRow
             allDayRow
@@ -60,7 +115,7 @@ struct CalendarTimelineView: View {
             GeometryReader { geometry in
                 ScrollViewReader { proxy in
                     ScrollView {
-                        timelineGrid
+                        timelineGrid(framesByDay: framesByDay)
                             .frame(height: hourHeight * 24)
                     }
                     .onAppear {
@@ -143,11 +198,13 @@ struct CalendarTimelineView: View {
 
     // MARK: - Grid
 
-    private var timelineGrid: some View {
+    private func timelineGrid(
+        framesByDay: [Date: [CalendarTimelineLayoutEngine.Frame]]
+    ) -> some View {
         HStack(alignment: .top, spacing: 0) {
             hourGutter
             ForEach(days, id: \.self) { day in
-                dayColumn(day)
+                dayColumn(day, frames: framesByDay[day] ?? [])
                     .frame(maxWidth: .infinity)
                     .overlay(alignment: .leading) { Divider() }
             }
@@ -178,16 +235,11 @@ struct CalendarTimelineView: View {
         return date.formatted(.dateTime.hour())
     }
 
-    private func dayColumn(_ day: Date) -> some View {
-        // Same DST-safe interval as the all-day row above.
-        let dayInterval = calendar.dateInterval(of: .day, for: day)
-            ?? DateInterval(start: day, duration: 24 * 3600)
-        let frames = CalendarTimelineLayoutEngine.frames(
-            for: occurrences,
-            day: dayInterval,
-            calendar: calendar
-        )
-        return GeometryReader { geometry in
+    private func dayColumn(
+        _ day: Date,
+        frames: [CalendarTimelineLayoutEngine.Frame]
+    ) -> some View {
+        GeometryReader { geometry in
             let width = geometry.size.width
             ZStack(alignment: .topLeading) {
                 gridLines
