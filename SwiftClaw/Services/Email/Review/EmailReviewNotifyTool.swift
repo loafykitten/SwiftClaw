@@ -277,6 +277,7 @@ final class EmailReviewNotifyTool: Tool {
         summaryMessage.chat = chat
         context.insert(summaryMessage)
 
+        chat.refreshLatestVisibleMessageAt()
         chat.updatedAt = .now
 
         do {
@@ -344,6 +345,7 @@ final class EmailReviewNotifyTool: Tool {
             context.insert(summaryMessage)
         }
 
+        chat.refreshLatestVisibleMessageAt()
         chat.updatedAt = .now
 
         do {

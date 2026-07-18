@@ -107,6 +107,7 @@ final class NotesReviewNotifyTool: Tool {
             card.chat = chat; context.insert(card)
             let summary = ChatMessage(role: .assistant, content: message, sortIndex: next + 1)
             summary.chat = chat; context.insert(summary)
+            chat.refreshLatestVisibleMessageAt()
             chat.updatedAt = .now
             do { try dependencies.save(context) }
             catch { context.rollback(); Self.logger.error("failed to save Notes review: \(String(describing: error))"); return .failed }

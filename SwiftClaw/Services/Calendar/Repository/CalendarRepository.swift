@@ -280,7 +280,9 @@ final class CalendarRepository {
     /// retries instead of permanently leaving old rows unbounded.
     @discardableResult
     func backfillRecurrenceEndDatesIfNeeded(userDefaults: UserDefaults = .standard) -> Int {
-        let key = "calendar.recurrenceEndDate.backfilled.v1"
+        // v2: v1 briefly shipped start-side end dates; the bump recomputes
+        // them as end-of-final-occurrence for stores that already migrated.
+        let key = "calendar.recurrenceEndDate.backfilled.v2"
         guard !userDefaults.bool(forKey: key) else { return 0 }
         guard let events = try? modelContext.fetch(FetchDescriptor<CalendarEvent>()) else { return 0 }
 

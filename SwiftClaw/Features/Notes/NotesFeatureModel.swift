@@ -420,6 +420,16 @@ final class NotesFeatureModel {
         // load are buffered as events instead of disappearing in a prime
         // window.
         let monitoring = watchStream(root: root, location: location)
+        // The monitor started above is orphaned if this pass aborts before
+        // `reconciler.start` takes ownership of the stream — a concurrent
+        // teardown can't stop a monitor it never saw committed.
+        func abortMonitoring() {
+            #if os(macOS)
+            monitor?.stop()
+            monitor = nil
+            #endif
+            monitoringScope = nil
+        }
         await repository.reload()
         if let error = repository.lastError {
             Self.logger.error("reload reported \(String(describing: error))")
@@ -430,7 +440,12 @@ final class NotesFeatureModel {
         // pass starts overwriting `self`'s vault/repository/indexer, so a
         // stale pass can never resurrect state a reset/switch already tore
         // down or is about to replace.
-        try checkConfigurationCurrent(generation: generation)
+        do {
+            try checkConfigurationCurrent(generation: generation)
+        } catch {
+            abortMonitoring()
+            throw error
+        }
 
         let reconciler = VaultReconciler(stateProvider: { [vault] in
             try await Self.vaultEntries(vault: vault)
@@ -438,24 +453,35 @@ final class NotesFeatureModel {
 
         let embeddingProvider: TextEmbeddingProvider? = SettingsStorage.isNotesEmbeddingsEnabled(userDefaults: userDefaults)
             ? NLSentenceEmbeddingProvider() : nil
-        let indexer = try NotesIndexer.makeAtVaultIndexDirectory(
-            configurationStore.indexDirectory(),
-            embeddingProvider: embeddingProvider,
-            fileManager: fileManager,
-            noteReader: { [weak self] path in
-                guard let self else { throw NotesError.underlying("The vault isn't configured.") }
-                return try await self.indexerNoteReader(path)
-            },
-            catalogProvider: { [weak self] in
-                await self?.indexerCatalogProvider() ?? []
-            }
-        )
+        let indexer: NotesIndexer
+        do {
+            indexer = try NotesIndexer.makeAtVaultIndexDirectory(
+                configurationStore.indexDirectory(),
+                embeddingProvider: embeddingProvider,
+                fileManager: fileManager,
+                noteReader: { [weak self] path in
+                    guard let self else { throw NotesError.underlying("The vault isn't configured.") }
+                    return try await self.indexerNoteReader(path)
+                },
+                catalogProvider: { [weak self] in
+                    await self?.indexerCatalogProvider() ?? []
+                }
+            )
+        } catch {
+            abortMonitoring()
+            throw error
+        }
 
         // Re-verified again immediately before committing — construction
         // above (reconciler/embeddingProvider/indexer) is synchronous, but
         // this keeps the guard directly adjacent to the assignments it
         // protects rather than relying on the check above still applying.
-        try checkConfigurationCurrent(generation: generation)
+        do {
+            try checkConfigurationCurrent(generation: generation)
+        } catch {
+            abortMonitoring()
+            throw error
+        }
 
         self.vault = vault
         self.repository = repository

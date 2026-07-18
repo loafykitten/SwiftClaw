@@ -67,6 +67,12 @@ struct HomeView: View {
                             .contentTransition(.opacity)
                             .animation(.easeInOut(duration: 0.4), value: generatedContent.blurb)
                     }
+                    // The trigger uses the clock-based fallback phase while
+                    // the cache key inside the view model uses the daylight-
+                    // derived phase. Around sunset-dependent boundaries the
+                    // greeting can lag one phase until the next visit — an
+                    // accepted approximation; re-keying on the real phase
+                    // would need the async context before the task fires.
                     .task(id: HomeContentRefreshID(
                         phase: HomeDayPhase.cachePhase(now: timeline.date),
                         persona: personaCacheKey,

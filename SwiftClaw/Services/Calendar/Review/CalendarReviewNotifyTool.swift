@@ -214,6 +214,7 @@ final class CalendarReviewNotifyTool: Tool {
         summaryMessage.chat = chat
         context.insert(summaryMessage)
 
+        chat.refreshLatestVisibleMessageAt()
         chat.updatedAt = .now
 
         do {
@@ -255,6 +256,7 @@ final class CalendarReviewNotifyTool: Tool {
         let summaryMessage = ChatMessage(role: .assistant, content: message, sortIndex: nextIndex + 1)
         summaryMessage.chat = chat
         context.insert(summaryMessage)
+        chat.refreshLatestVisibleMessageAt()
         chat.updatedAt = .now
         do {
             try context.save()

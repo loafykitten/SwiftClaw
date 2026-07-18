@@ -196,6 +196,7 @@ final class ReminderReviewNotifyTool: Tool {
         summaryMessage.chat = chat
         context.insert(summaryMessage)
 
+        chat.refreshLatestVisibleMessageAt()
         chat.updatedAt = .now
 
         do {
@@ -237,6 +238,7 @@ final class ReminderReviewNotifyTool: Tool {
         let summaryMessage = ChatMessage(role: .assistant, content: message, sortIndex: nextIndex + 1)
         summaryMessage.chat = chat
         context.insert(summaryMessage)
+        chat.refreshLatestVisibleMessageAt()
         chat.updatedAt = .now
         do {
             try context.save()
