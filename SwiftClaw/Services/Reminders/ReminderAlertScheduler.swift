@@ -157,7 +157,12 @@ final class ReminderAlertScheduler {
         var desired: [DesiredAlert] = []
         if alertsEnabledProvider() {
             let allDayMinutes = allDayAlertMinutesProvider()
-            for reminder in repository.pendingReminders() {
+            // Bound materialization at the horizon while retaining undated and
+            // overdue candidates; fire-date rules below decide what is booked.
+            for reminder in repository.pendingReminders(
+                dueBefore: fireWindow.end,
+                includeUndated: true
+            ) {
                 guard let dueDate = reminder.dueDate else { continue }
                 let fireDate = Self.fireDate(
                     forDueDate: dueDate,

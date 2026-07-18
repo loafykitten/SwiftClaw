@@ -12,7 +12,10 @@ struct RemindersView: View {
     var onFocusHandled: () -> Void = {}
 
     @Environment(\.modelContext) private var modelContext
-    @Query private var reminders: [Reminder]
+    @Query(filter: #Predicate<Reminder> {
+        $0.completedAt == nil && $0.parentReminderID == nil
+    })
+    private var pendingReminders: [Reminder]
     @Query(sort: \ReminderList.sortOrder) private var lists: [ReminderList]
 
     @State private var selection: ReminderListDetailView.Selection? = .smart(.today)
@@ -63,40 +66,30 @@ struct RemindersView: View {
     }
 
     private func panes(now: Date) -> some View {
-        HStack(spacing: 0) {
-            sidebar(now: now)
+        let visiblePending = pendingReminders.filter(\.isInVisibleList)
+        let sidebarSnapshot = SidebarSnapshot(reminders: visiblePending, now: now)
+        return HStack(spacing: 0) {
+            sidebar(snapshot: sidebarSnapshot)
                 .frame(width: 210)
             Divider()
-            detail(now: now)
+            detail(now: now, visiblePending: visiblePending)
         }
     }
 
     // MARK: - Sidebar
 
-    private func sidebar(now: Date) -> some View {
-        // One pass over the store per render for every badge; the row
-        // builders must not re-filter per row.
-        let active = activeReminders
-        let smartCounts = Dictionary(
-            uniqueKeysWithValues: ReminderSmartList.allCases.map { smart in
-                (smart, smart == .completed ? 0 : smart.filter(active, now: now).count)
-            }
-        )
-        let listCounts: [UUID: Int] = active.reduce(into: [:]) { counts, reminder in
-            guard !reminder.isCompleted, let listID = reminder.list?.id else { return }
-            counts[listID, default: 0] += 1
-        }
-        return List(selection: $selection) {
+    private func sidebar(snapshot: SidebarSnapshot) -> some View {
+        List(selection: $selection) {
             Section {
                 ForEach(ReminderSmartList.allCases) { smart in
-                    smartRow(smart, count: smartCounts[smart] ?? 0)
+                    smartRow(smart, count: snapshot.smartCounts[smart] ?? 0)
                         .tag(ReminderListDetailView.Selection.smart(smart))
                 }
             }
 
             Section("My Lists") {
                 ForEach(visibleLists) { list in
-                    listRow(list, count: listCounts[list.id] ?? 0)
+                    listRow(list, count: snapshot.listCounts[list.id] ?? 0)
                         .tag(ReminderListDetailView.Selection.list(list.id))
                 }
             }
@@ -149,7 +142,7 @@ struct RemindersView: View {
     // MARK: - Detail
 
     @ViewBuilder
-    private func detail(now: Date) -> some View {
+    private func detail(now: Date, visiblePending: [Reminder]) -> some View {
         if let selection {
             VStack(alignment: .leading, spacing: 0) {
                 Text(detailTitle(for: selection))
@@ -162,7 +155,7 @@ struct RemindersView: View {
 
                 ReminderListDetailView(
                     selection: selection,
-                    reminders: visibleReminders,
+                    pendingReminders: visiblePending,
                     lists: lists,
                     now: now,
                     onEdit: { editorRequest = .edit(id: $0.id) }
@@ -283,18 +276,6 @@ struct RemindersView: View {
 
     // MARK: - Derived
 
-    /// Everything shown outside a specific list view: hidden lists are
-    /// excluded here so smart views, badges, and history match the calendar
-    /// chips' visibility semantics.
-    private var visibleReminders: [Reminder] {
-        reminders.filter(\.isInVisibleList)
-    }
-
-    /// Rows that can appear in pending views (masters and one-offs).
-    private var activeReminders: [Reminder] {
-        visibleReminders.filter { !$0.isCompletionLog }
-    }
-
     private var visibleLists: [ReminderList] {
         lists.filter(\.isVisible)
     }
@@ -346,13 +327,31 @@ struct RemindersView: View {
         guard let focusReminderID else { return }
         defer { onFocusHandled() }
         // Unfiltered lookup: hidden-list reminders still fire alerts.
-        guard let reminder = reminders.first(where: {
-            $0.id == focusReminderID && !$0.isCompletionLog
-        }) else { return }
+        guard let reminder = repository.reminder(withID: focusReminderID),
+              !reminder.isCompletionLog
+        else { return }
         if let list = reminder.list, list.isVisible {
             selection = .list(list.id)
         } else {
             editorRequest = .edit(id: reminder.id)
+        }
+    }
+
+    private struct SidebarSnapshot {
+        var smartCounts: [ReminderSmartList: Int] = [:]
+        var listCounts: [UUID: Int] = [:]
+
+        init(reminders: [Reminder], now: Date) {
+            for reminder in reminders {
+                if let listID = reminder.list?.id {
+                    listCounts[listID, default: 0] += 1
+                }
+                for smart in ReminderSmartList.allCases where smart != .completed {
+                    if smart.contains(reminder, now: now) {
+                        smartCounts[smart, default: 0] += 1
+                    }
+                }
+            }
         }
     }
 }

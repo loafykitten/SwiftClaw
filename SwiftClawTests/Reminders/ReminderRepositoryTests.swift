@@ -77,6 +77,56 @@ struct ReminderRepositoryTests {
         #expect(repository.pendingReminders().isEmpty)
     }
 
+    @Test func pendingFetchAppliesWindowLimitAndKeepsOverdueAndUndated() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let overdue = repository.insert(Reminder(title: "Overdue", dueDate: Self.date(2026, 6, 1)))
+        let soon = repository.insert(Reminder(title: "Soon", dueDate: Self.date(2026, 6, 2)))
+        _ = repository.insert(Reminder(title: "Far", dueDate: Self.date(2026, 7, 1)))
+        let inbox = repository.insert(Reminder(title: "Inbox"))
+        let completed = repository.insert(Reminder(title: "Completed", dueDate: Self.date(2026, 6, 2)))
+        repository.complete(completed)
+        let log = Reminder(title: "History", dueDate: Self.date(2026, 6, 2), completedAt: .now)
+        log.parentReminderID = UUID()
+        repository.insert(log)
+
+        let candidates = repository.pendingReminders(
+            dueBefore: Self.date(2026, 6, 3),
+            includeUndated: true
+        )
+        #expect(candidates.map(\.id) == [overdue.id, soon.id, inbox.id])
+        #expect(repository.pendingReminders(
+            dueBefore: Self.date(2026, 6, 3),
+            includeUndated: true,
+            limit: 2
+        ).map(\.id) == [overdue.id, soon.id])
+        #expect(repository.pendingReminders(
+            dueBefore: Self.date(2026, 6, 3),
+            includeUndated: false
+        ).map(\.id) == [overdue.id, soon.id])
+    }
+
+    @Test func completedHistoryDescriptorsKeepOneOffsAndScopeLists() throws {
+        let context = try ModelContext(Self.inMemoryContainer())
+        let repository = ReminderRepository(modelContext: context)
+        let firstList = repository.createList(name: "First")
+        let secondList = repository.createList(name: "Second")
+        let oneOff = repository.insert(Reminder(title: "Completed one-off"), into: firstList)
+        repository.complete(oneOff)
+        let other = repository.insert(Reminder(title: "Other list"), into: secondList)
+        repository.complete(other)
+
+        let listHistory = try context.fetch(ReminderListDetailView.completedHistoryDescriptor(
+            for: .list(firstList.id)
+        ))
+        #expect(listHistory.map(\.id) == [oneOff.id])
+        #expect(listHistory.first?.parentReminderID == nil)
+
+        let completedHistory = try context.fetch(ReminderListDetailView.completedHistoryDescriptor(
+            for: .smart(.completed)
+        ))
+        #expect(Set(completedHistory.map(\.id)) == Set([oneOff.id, other.id]))
+    }
+
     // MARK: - Completion
 
     @Test func completeAndUncompletePlainReminderRoundTrips() throws {
@@ -306,6 +356,7 @@ struct ReminderRepositoryTests {
         repository.complete(master, at: Self.date(2026, 6, 2, 10))
         let logs = repository.completionLog(of: master)
         #expect(logs.count == 2)
+        #expect(repository.latestCompletionLogIDs(for: [master.id]) == [logs[1].id])
         let ruleBefore = master.recurrenceRuleString
         let dueBefore = master.dueDate
 

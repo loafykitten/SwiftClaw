@@ -49,6 +49,41 @@ struct AppleRemindersImporterTests {
         #expect(reminders.allSatisfy { $0.source == .appleImport })
     }
 
+    @Test func duplicateIdentityWithinOneBatchUpdatesOneRow() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let list = repository.createList(name: "Imported")
+        var summary = AppleRemindersImporter.Summary()
+
+        AppleRemindersImporter.importSnapshots([
+            Self.snapshot(externalIdentifier: "ek-same", title: "First"),
+            Self.snapshot(externalIdentifier: "ek-same", title: "Last"),
+        ], into: list, repository: repository, summary: &summary)
+
+        let reminders = repository.reminders(in: list)
+        #expect(reminders.count == 1)
+        #expect(reminders.first?.title == "Last")
+        #expect(summary.reminderCount == 2)
+    }
+
+    @Test func largeBatchCommitsAcrossChunkBoundary() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let list = repository.createList(name: "Imported")
+        var summary = AppleRemindersImporter.Summary()
+        let snapshots = (0 ... 400).map {
+            Self.snapshot(externalIdentifier: "ek-\($0)", title: "Reminder \($0)")
+        }
+
+        AppleRemindersImporter.importSnapshots(
+            snapshots,
+            into: list,
+            repository: repository,
+            summary: &summary
+        )
+
+        #expect(repository.reminders(in: list).count == 401)
+        #expect(summary.reminderCount == 401)
+    }
+
     @Test func dueDateMappingFlowsThroughToTheModel() throws {
         let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
         let list = repository.createList(name: "Imported")

@@ -11,6 +11,17 @@ import SwiftData
 @MainActor
 final class ReminderRepository {
     private static let logger = AppLog.make("reminders.repository")
+    private static let importChunkSize = 400
+
+    struct ImportedReminderIdentity {
+        let externalIdentifier: String
+        let fallbackExternalIdentifier: String?
+
+        init(externalIdentifier: String, fallbackExternalIdentifier: String? = nil) {
+            self.externalIdentifier = externalIdentifier
+            self.fallbackExternalIdentifier = fallbackExternalIdentifier
+        }
+    }
 
     let modelContext: ModelContext
 
@@ -105,6 +116,14 @@ final class ReminderRepository {
         return (try? modelContext.fetch(descriptor))?.first
     }
 
+    func reminders(withIDs ids: Set<UUID>) -> [Reminder] {
+        guard !ids.isEmpty else { return [] }
+        let descriptor = FetchDescriptor<Reminder>(
+            predicate: #Predicate { ids.contains($0.id) }
+        )
+        return (try? modelContext.fetch(descriptor)) ?? []
+    }
+
     @discardableResult
     func insert(_ reminder: Reminder, into list: ReminderList? = nil) -> Reminder {
         if let list {
@@ -131,8 +150,59 @@ final class ReminderRepository {
 
     // MARK: - Smart Views
 
-    func pendingReminders() -> [Reminder] {
-        allReminders().filter { !$0.isCompleted && !$0.isCompletionLog }
+    /// Pending masters and one-offs, bounded in the store before models are
+    /// materialized. Dated rows lead in due order; optional undated rows trail
+    /// oldest-first, matching review-tool ordering.
+    func pendingReminders(
+        dueBefore: Date? = nil,
+        includeUndated: Bool = true,
+        limit: Int? = nil
+    ) -> [Reminder] {
+        if let limit, limit <= 0 { return [] }
+
+        var datedDescriptor: FetchDescriptor<Reminder>
+        if let dueBefore {
+            let distantFuture = Date.distantFuture
+            datedDescriptor = FetchDescriptor(
+                predicate: #Predicate {
+                    $0.completedAt == nil
+                        && $0.parentReminderID == nil
+                        && $0.dueDate != nil
+                        && ($0.dueDate ?? distantFuture) <= dueBefore
+                },
+                sortBy: [SortDescriptor(\.dueDate), SortDescriptor(\.createdAt)]
+            )
+        } else {
+            datedDescriptor = FetchDescriptor(
+                predicate: #Predicate {
+                    $0.completedAt == nil
+                        && $0.parentReminderID == nil
+                        && $0.dueDate != nil
+                },
+                sortBy: [SortDescriptor(\.dueDate), SortDescriptor(\.createdAt)]
+            )
+        }
+        if let limit {
+            datedDescriptor.fetchLimit = limit
+        }
+        var result = (try? modelContext.fetch(datedDescriptor)) ?? []
+
+        guard includeUndated, limit.map({ result.count < $0 }) ?? true else {
+            return result
+        }
+        var undatedDescriptor = FetchDescriptor<Reminder>(
+            predicate: #Predicate {
+                $0.completedAt == nil
+                    && $0.parentReminderID == nil
+                    && $0.dueDate == nil
+            },
+            sortBy: [SortDescriptor(\.createdAt)]
+        )
+        if let limit {
+            undatedDescriptor.fetchLimit = limit - result.count
+        }
+        result.append(contentsOf: (try? modelContext.fetch(undatedDescriptor)) ?? [])
+        return result
     }
 
     func reminders(in list: ReminderList) -> [Reminder] {
@@ -210,6 +280,27 @@ final class ReminderRepository {
         }
     }
 
+    /// The newest completion log for each requested master, used to keep old
+    /// history rows non-reversible without loading unrelated completion logs.
+    func latestCompletionLogIDs(for parentIDs: Set<UUID>) -> Set<UUID> {
+        guard !parentIDs.isEmpty else { return [] }
+        let optionalParentIDs = parentIDs.map(Optional.some)
+        let descriptor = FetchDescriptor<Reminder>(
+            predicate: #Predicate { optionalParentIDs.contains($0.parentReminderID) }
+        )
+        var newest: [UUID: Reminder] = [:]
+        for log in (try? modelContext.fetch(descriptor)) ?? [] {
+            guard let parentID = log.parentReminderID else { continue }
+            if let current = newest[parentID],
+               (current.completedAt ?? .distantPast) >= (log.completedAt ?? .distantPast)
+            {
+                continue
+            }
+            newest[parentID] = log
+        }
+        return Set(newest.values.map(\.id))
+    }
+
     /// Deletes a master plus all of its detached completion logs (or a one-off).
     func deleteReminder(_ reminder: Reminder) {
         if reminder.isCompletionLog {
@@ -244,6 +335,64 @@ final class ReminderRepository {
         refreshRecurrenceEnd(of: reminder)
         save()
         return reminder
+    }
+
+    /// Prefetches import identities once, then saves once per bounded chunk.
+    /// Chunk commits deliberately permit partial progress for very large files.
+    @discardableResult
+    func upsertImportedReminders(
+        _ identities: [ImportedReminderIdentity],
+        deduplicateAfterApplying: Bool = false,
+        apply: (ImportedReminderIdentity, Reminder) -> Void
+    ) -> [Reminder] {
+        guard !identities.isEmpty else { return [] }
+
+        let requestedIdentifiers = Set(identities.flatMap { identity in
+            [identity.externalIdentifier, identity.fallbackExternalIdentifier].compactMap { $0 }
+        })
+        let optionalRequestedIdentifiers = requestedIdentifiers.map(Optional.some)
+        let existingDescriptor = FetchDescriptor<Reminder>(
+            predicate: #Predicate { optionalRequestedIdentifiers.contains($0.externalIdentifier) },
+            sortBy: [SortDescriptor(\.createdAt)]
+        )
+        let existing = (try? modelContext.fetch(existingDescriptor)) ?? []
+        var remindersByIdentifier: [String: Reminder] = [:]
+        for reminder in existing {
+            guard let identifier = reminder.externalIdentifier,
+                  requestedIdentifiers.contains(identifier),
+                  remindersByIdentifier[identifier] == nil
+            else { continue }
+            remindersByIdentifier[identifier] = reminder
+        }
+
+        var upserted: [Reminder] = []
+        upserted.reserveCapacity(identities.count)
+        for chunkStart in stride(from: 0, to: identities.count, by: Self.importChunkSize) {
+            let chunkEnd = min(chunkStart + Self.importChunkSize, identities.count)
+            for identity in identities[chunkStart ..< chunkEnd] {
+                let reminder = remindersByIdentifier[identity.externalIdentifier]
+                    ?? identity.fallbackExternalIdentifier.flatMap { remindersByIdentifier[$0] }
+                    ?? Reminder(externalIdentifier: identity.externalIdentifier)
+                if reminder.modelContext == nil {
+                    modelContext.insert(reminder)
+                }
+                apply(identity, reminder)
+                reminder.modifiedAt = .now
+                refreshRecurrenceEnd(of: reminder)
+                remindersByIdentifier[identity.externalIdentifier] = reminder
+                if let fallback = identity.fallbackExternalIdentifier {
+                    remindersByIdentifier[fallback] = reminder
+                }
+                upserted.append(reminder)
+            }
+            if deduplicateAfterApplying, chunkEnd == identities.count {
+                dedupeLists()
+                dedupeReminders()
+                sweepOrphanedCompletionLogs()
+            }
+            save()
+        }
+        return upserted
     }
 
     func listMatching(externalIdentifier: String) -> ReminderList? {
@@ -434,12 +583,18 @@ final class ReminderRepository {
     }
 
     private func sweepOrphanedCompletionLogs() {
-        let descriptor = FetchDescriptor<Reminder>(
+        let mastersDescriptor = FetchDescriptor<Reminder>(
+            predicate: #Predicate { $0.parentReminderID == nil }
+        )
+        let survivingMasterIDs = Set(
+            ((try? modelContext.fetch(mastersDescriptor)) ?? []).map(\.id)
+        )
+        let logsDescriptor = FetchDescriptor<Reminder>(
             predicate: #Predicate { $0.parentReminderID != nil }
         )
-        let logs = (try? modelContext.fetch(descriptor)) ?? []
+        let logs = (try? modelContext.fetch(logsDescriptor)) ?? []
         for log in logs {
-            if reminder(withID: log.parentReminderID!) == nil {
+            if !survivingMasterIDs.contains(log.parentReminderID!) {
                 modelContext.delete(log)
             }
         }

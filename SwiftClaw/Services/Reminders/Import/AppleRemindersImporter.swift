@@ -33,6 +33,19 @@ final class AppleRemindersImporter {
 
     private let store = EKEventStore()
 
+    private struct SnapshotImport {
+        let snapshot: ReminderKitMapping.Snapshot
+        let target: ReminderList
+    }
+
+    private struct PreparedImport {
+        let identity: ReminderRepository.ImportedReminderIdentity
+        let snapshot: ReminderKitMapping.Snapshot
+        let target: ReminderList
+        let due: ReminderKitMapping.ResolvedDueDate
+        let ruleString: String?
+    }
+
     func requestAccess() async throws {
         let granted = try await store.requestFullAccessToReminders()
         guard granted else { throw ImportError.accessDenied }
@@ -51,14 +64,15 @@ final class AppleRemindersImporter {
     func importLists(identifiers: Set<String>, repository: ReminderRepository) async -> Summary {
         var summary = Summary()
         let sourceLists = store.calendars(for: .reminder).filter { identifiers.contains($0.calendarIdentifier) }
+        var imports: [SnapshotImport] = []
 
         for source in sourceLists {
             let snapshots = await fetchSnapshots(in: source)
             let target = upsertList(from: source, repository: repository)
             summary.listCount += 1
-            Self.importSnapshots(snapshots, into: target, repository: repository, summary: &summary)
+            imports.append(contentsOf: snapshots.map { SnapshotImport(snapshot: $0, target: target) })
         }
-        repository.dedupeAfterRemoteMerge()
+        Self.importSnapshots(imports, repository: repository, summary: &summary)
         Self.logger.info("""
             apple import: \(summary.listCount, privacy: .public) lists, \
             \(summary.reminderCount, privacy: .public) reminders, \
@@ -75,24 +89,33 @@ final class AppleRemindersImporter {
         repository: ReminderRepository,
         summary: inout Summary
     ) {
-        for snapshot in snapshots {
+        importSnapshots(
+            snapshots.map { SnapshotImport(snapshot: $0, target: target) },
+            repository: repository,
+            summary: &summary
+        )
+    }
+
+    private static func importSnapshots(
+        _ imports: [SnapshotImport],
+        repository: ReminderRepository,
+        summary: inout Summary
+    ) {
+        var prepared: [PreparedImport] = []
+        prepared.reserveCapacity(imports.count)
+        for item in imports {
+            let snapshot = item.snapshot
             guard let stableIdentifier = snapshot.externalIdentifier ?? snapshot.localIdentifier else {
                 continue
             }
             // EventKit can expose only its device-local identity at first and
             // gain a cross-device external identity later. Reuse the row
-            // imported under the local key, then migrate it in the apply
-            // closure instead of inserting a duplicate under the new key.
-            let lookupIdentifier: String
-            if repository.reminder(withExternalIdentifier: stableIdentifier) != nil {
-                lookupIdentifier = stableIdentifier
-            } else if let localIdentifier = snapshot.localIdentifier,
-                      repository.reminder(withExternalIdentifier: localIdentifier) != nil
-            {
-                lookupIdentifier = localIdentifier
-            } else {
-                lookupIdentifier = stableIdentifier
-            }
+            // imported under the local key; the repository resolves both keys
+            // from its single prefetch before applying the batch.
+            let identity = ReminderRepository.ImportedReminderIdentity(
+                externalIdentifier: stableIdentifier,
+                fallbackExternalIdentifier: snapshot.localIdentifier
+            )
             let due = ReminderKitMapping.resolvedDueDate(from: snapshot.dueDateComponents)
             // A repeat without a due date has no anchor to roll forward from;
             // drop it alongside genuinely unmappable rules.
@@ -100,28 +123,42 @@ final class AppleRemindersImporter {
             if snapshot.hadUnmappableRecurrence || (snapshot.recurrenceRule != nil && ruleString == nil) {
                 summary.degradedRuleCount += 1
             }
-            repository.upsertImportedReminder(externalIdentifier: lookupIdentifier) { reminder in
-                reminder.externalIdentifier = stableIdentifier
-                reminder.title = snapshot.title
-                reminder.notes = snapshot.notes
-                reminder.urlString = snapshot.urlString
-                reminder.dueDate = due.date
-                reminder.hasDueTime = due.hasDueTime
-                reminder.timeZoneIdentifier = due.timeZoneIdentifier
-                reminder.priorityRawValue = snapshot.priorityRawValue
-                reminder.completedAt = snapshot.isCompleted
-                    ? (snapshot.completedAt ?? reminder.completedAt ?? .now)
-                    : nil
-                reminder.recurrenceRuleString = ruleString
-                if snapshot.recurrenceRule != nil || snapshot.hadUnmappableRecurrence {
-                    reminder.afterCompletionRepeat = nil
-                }
-                // Checklists are local-only data EventKit can't see; leave
-                // whatever the user built intact on re-import.
-                reminder.source = .appleImport
-                reminder.list = target
-            }
+            prepared.append(PreparedImport(
+                identity: identity,
+                snapshot: snapshot,
+                target: item.target,
+                due: due,
+                ruleString: ruleString
+            ))
             summary.reminderCount += 1
+        }
+
+        var remaining = prepared[...]
+        repository.upsertImportedReminders(
+            prepared.map(\.identity),
+            deduplicateAfterApplying: true
+        ) { _, reminder in
+            let item = remaining.removeFirst()
+            let snapshot = item.snapshot
+            reminder.externalIdentifier = item.identity.externalIdentifier
+            reminder.title = snapshot.title
+            reminder.notes = snapshot.notes
+            reminder.urlString = snapshot.urlString
+            reminder.dueDate = item.due.date
+            reminder.hasDueTime = item.due.hasDueTime
+            reminder.timeZoneIdentifier = item.due.timeZoneIdentifier
+            reminder.priorityRawValue = snapshot.priorityRawValue
+            reminder.completedAt = snapshot.isCompleted
+                ? (snapshot.completedAt ?? reminder.completedAt ?? .now)
+                : nil
+            reminder.recurrenceRuleString = item.ruleString
+            if snapshot.recurrenceRule != nil || snapshot.hadUnmappableRecurrence {
+                reminder.afterCompletionRepeat = nil
+            }
+            // Checklists are local-only data EventKit can't see; leave
+            // whatever the user built intact on re-import.
+            reminder.source = .appleImport
+            reminder.list = item.target
         }
     }
 

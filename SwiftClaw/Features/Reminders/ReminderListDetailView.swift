@@ -22,14 +22,57 @@ struct ReminderListDetailView: View {
     }
 
     let selection: Selection
-    let reminders: [Reminder]
+    let pendingReminders: [Reminder]
     let lists: [ReminderList]
     let now: Date
     let onEdit: (Reminder) -> Void
 
     @Environment(\.modelContext) private var modelContext
+    @Query private var completedReminders: [Reminder]
     @State private var isShowingCompleted = false
     @State private var deleteCandidate: Reminder?
+    /// Cached across minute ticks; refreshed from the store-change signal and
+    /// whenever the selection-scoped history IDs change.
+    @State private var latestLogIDs: Set<UUID> = []
+
+    init(
+        selection: Selection,
+        pendingReminders: [Reminder],
+        lists: [ReminderList],
+        now: Date,
+        onEdit: @escaping (Reminder) -> Void
+    ) {
+        self.selection = selection
+        self.pendingReminders = pendingReminders
+        self.lists = lists
+        self.now = now
+        self.onEdit = onEdit
+
+        _completedReminders = Query(Self.completedHistoryDescriptor(for: selection))
+    }
+
+    static func completedHistoryDescriptor(for selection: Selection) -> FetchDescriptor<Reminder> {
+        switch selection {
+        case .smart(.completed):
+            return FetchDescriptor(
+                predicate: #Predicate { $0.completedAt != nil },
+                sortBy: [SortDescriptor(\.completedAt, order: .reverse)]
+            )
+        case .list(let listID):
+            return FetchDescriptor(
+                predicate: #Predicate {
+                    $0.completedAt != nil && $0.list?.id == listID
+                },
+                sortBy: [SortDescriptor(\.completedAt, order: .reverse)]
+            )
+        default:
+            return FetchDescriptor(
+                predicate: #Predicate {
+                    $0.completedAt != nil && $0.completedAt == nil
+                }
+            )
+        }
+    }
 
     private var repository: ReminderRepository {
         ReminderRepository(modelContext: modelContext)
@@ -40,64 +83,32 @@ struct ReminderListDetailView: View {
         return lists.first { $0.id == id }
     }
 
-    /// Pending rows for the current selection, in manual order.
-    private var pendingRows: [Reminder] {
-        switch selection {
-        case .smart(let smart):
-            smart == .completed ? [] : smart.filter(reminders, now: now)
-        case .list(let id):
-            // sortOrder is what moveRows writes; without sorting here the
-            // manual order would never display.
-            reminders.filter {
-                $0.list?.id == id && !$0.isCompleted && !$0.isCompletionLog
-            }
-            .sorted {
-                $0.sortOrder != $1.sortOrder
-                    ? $0.sortOrder < $1.sortOrder
-                    : $0.createdAt < $1.createdAt
-            }
-        }
-    }
-
-    /// Completed rows shown in the trailing section: completion history for
-    /// the selection (log rows and completed one-offs).
-    private var completedRows: [Reminder] {
-        let completed: [Reminder]
-        switch selection {
-        case .smart(let smart):
-            guard smart == .completed else { return [] }
-            completed = reminders.filter(\.isCompleted)
-        case .list(let id):
-            completed = reminders.filter { $0.list?.id == id && $0.isCompleted }
-        }
-        return completed.sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
-    }
-
-    private var showsCompletedSection: Bool {
-        if case .smart(.completed) = selection { return false }
-        return !completedRows.isEmpty
-    }
-
     var body: some View {
+        let snapshot = RowSnapshot(
+            selection: selection,
+            pendingReminders: pendingReminders,
+            completedReminders: completedReminders,
+            now: now
+        )
         List {
             if case .smart(.completed) = selection {
-                completedContent
+                completedContent(rows: snapshot.completedRows)
             } else {
-                pendingContent
-                if showsCompletedSection {
+                pendingContent(rows: snapshot.pendingRows)
+                if snapshot.showsCompletedSection {
                     Section {
                         if isShowingCompleted {
-                            rows(completedRows)
+                            rows(snapshot.completedRows)
                         }
                     } header: {
-                        completedHeader
+                        completedHeader(count: snapshot.completedRows.count)
                     }
                 }
             }
         }
         .listStyle(.inset)
         .overlay {
-            if pendingRows.isEmpty, completedRows.isEmpty {
+            if snapshot.pendingRows.isEmpty, snapshot.completedRows.isEmpty {
                 emptyState
             }
         }
@@ -115,22 +126,33 @@ struct ReminderListDetailView: View {
         ) { candidate in
             repository.deleteReminder(candidate)
         }
-    }
-
-    @ViewBuilder
-    private var pendingContent: some View {
-        if case .list = selection {
-            // Manual ordering only makes sense inside one list — smart views
-            // interleave many lists and sort by relevance instead.
-            rows(pendingRows)
-                .onMove(perform: moveRows)
-        } else {
-            rows(sortedForSmartView(pendingRows))
+        .onAppear {
+            refreshLatestLogIDs(in: snapshot.completedRows)
+        }
+        .onChange(of: snapshot.completedRows.map(\.id)) { _, _ in
+            refreshLatestLogIDs(in: snapshot.completedRows)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .reminderStoreDidChange)) { _ in
+            refreshLatestLogIDs(in: snapshot.completedRows)
         }
     }
 
     @ViewBuilder
-    private var completedContent: some View {
+    private func pendingContent(rows pendingRows: [Reminder]) -> some View {
+        if case .list = selection {
+            // Manual ordering only makes sense inside one list — smart views
+            // interleave many lists and sort by relevance instead.
+            rows(pendingRows)
+                .onMove { source, destination in
+                    moveRows(pendingRows, from: source, to: destination)
+                }
+        } else {
+            rows(pendingRows)
+        }
+    }
+
+    @ViewBuilder
+    private func completedContent(rows completedRows: [Reminder]) -> some View {
         if completedRows.isEmpty {
             EmptyView()
         } else {
@@ -139,11 +161,7 @@ struct ReminderListDetailView: View {
     }
 
     private func rows(_ rows: [Reminder]) -> some ForEachView {
-        // Latest-log identity spans ALL logs, not just the displayed section:
-        // a master that moved lists leaves older logs behind in the previous
-        // list, and those must not offer an undo the repository will reject.
-        let latestLogIDs = latestLogIDs(in: reminders)
-        return ForEach(rows) { reminder in
+        ForEach(rows) { reminder in
             // Snapshot the rendered occurrence: a second click before the row
             // re-renders must not complete the next occurrence too.
             let renderedOccurrence = reminder.dueDate
@@ -175,12 +193,12 @@ struct ReminderListDetailView: View {
         }
     }
 
-    private var completedHeader: some View {
+    private func completedHeader(count: Int) -> some View {
         Button {
             withAnimation { isShowingCompleted.toggle() }
         } label: {
             HStack(spacing: 4) {
-                Text("Completed (\(completedRows.count))")
+                Text("Completed (\(count))")
                 Image(systemName: "chevron.right")
                     .font(.caption2)
                     .rotationEffect(.degrees(isShowingCompleted ? 90 : 0))
@@ -189,8 +207,8 @@ struct ReminderListDetailView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(
             isShowingCompleted
-                ? "Hide \(completedRows.count) completed reminders"
-                : "Show \(completedRows.count) completed reminders"
+                ? "Hide \(count) completed reminders"
+                : "Show \(count) completed reminders"
         )
     }
 
@@ -204,19 +222,9 @@ struct ReminderListDetailView: View {
 
     // MARK: - Actions
 
-    /// The newest completion log per master — the only history rows whose
-    /// undo may rewind the master (the repository enforces the same rule).
-    private func latestLogIDs(in rows: [Reminder]) -> Set<UUID> {
-        var newest: [UUID: Reminder] = [:]
-        for row in rows where row.isCompletionLog {
-            guard let parentID = row.parentReminderID else { continue }
-            if let current = newest[parentID],
-               (current.completedAt ?? .distantPast) >= (row.completedAt ?? .distantPast) {
-                continue
-            }
-            newest[parentID] = row
-        }
-        return Set(newest.values.map(\.id))
+    private func refreshLatestLogIDs(in rows: [Reminder]) {
+        let parentIDs = Set(rows.compactMap(\.parentReminderID))
+        latestLogIDs = repository.latestCompletionLogIDs(for: parentIDs)
     }
 
     private func toggleCompletion(_ reminder: Reminder, renderedOccurrence: Date?) {
@@ -236,7 +244,7 @@ struct ReminderListDetailView: View {
         }
     }
 
-    private func moveRows(from source: IndexSet, to destination: Int) {
+    private func moveRows(_ pendingRows: [Reminder], from source: IndexSet, to destination: Int) {
         guard case .list = selection else { return }
         var ordered = pendingRows
         ordered.move(fromOffsets: source, toOffset: destination)
@@ -244,18 +252,6 @@ struct ReminderListDetailView: View {
             reminder.sortOrder = index
         }
         repository.saveChanges()
-    }
-
-    /// Smart views interleave lists: soonest due first, then flagged, then
-    /// title — a stable, explainable order.
-    private func sortedForSmartView(_ rows: [Reminder]) -> [Reminder] {
-        rows.sorted {
-            let lhs = $0.dueDate ?? .distantFuture
-            let rhs = $1.dueDate ?? .distantFuture
-            if lhs != rhs { return lhs < rhs }
-            if $0.isFlagged != $1.isFlagged { return $0.isFlagged }
-            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
-        }
     }
 
     // MARK: - Empty-state copy
@@ -284,6 +280,50 @@ struct ReminderListDetailView: View {
             String(localized: "Reminders you complete will appear here.")
         default:
             String(localized: "Add a reminder with the + button.")
+        }
+    }
+
+    private struct RowSnapshot {
+        let pendingRows: [Reminder]
+        let completedRows: [Reminder]
+        let showsCompletedSection: Bool
+
+        init(
+            selection: Selection,
+            pendingReminders: [Reminder],
+            completedReminders: [Reminder],
+            now: Date
+        ) {
+            switch selection {
+            case .smart(.completed):
+                pendingRows = []
+                completedRows = completedReminders.filter(\.isInVisibleList)
+                showsCompletedSection = false
+            case .smart(let smart):
+                pendingRows = smart.filter(pendingReminders, now: now).sorted(by: Self.smartOrder)
+                completedRows = []
+                showsCompletedSection = false
+            case .list(let id):
+                // sortOrder is what moveRows writes; without sorting here the
+                // manual order would never display.
+                pendingRows = pendingReminders.filter { $0.list?.id == id }.sorted {
+                    $0.sortOrder != $1.sortOrder
+                        ? $0.sortOrder < $1.sortOrder
+                        : $0.createdAt < $1.createdAt
+                }
+                completedRows = completedReminders
+                showsCompletedSection = !completedRows.isEmpty
+            }
+        }
+
+        /// Smart views interleave lists: soonest due first, then flagged, then
+        /// title — a stable, explainable order.
+        private static func smartOrder(_ lhs: Reminder, _ rhs: Reminder) -> Bool {
+            let lhsDue = lhs.dueDate ?? .distantFuture
+            let rhsDue = rhs.dueDate ?? .distantFuture
+            if lhsDue != rhsDue { return lhsDue < rhsDue }
+            if lhs.isFlagged != rhs.isFlagged { return lhs.isFlagged }
+            return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }
     }
 }

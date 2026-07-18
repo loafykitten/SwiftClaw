@@ -123,16 +123,26 @@ struct RemindersOnboardingSheet: View {
 
     private func handleICSImport(_ result: Result<URL, Error>) {
         guard case .success(let url) = result else { return }
-        let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-            icsImportSummary = "Couldn't read that file."
-            return
+        Task {
+            let accessing = url.startAccessingSecurityScopedResource()
+            let parsed = await Task.detached(priority: .userInitiated) { () -> [ICSTodoRepresentation]? in
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                    return nil
+                }
+                return ICSParser.parseTodos(text)
+            }.value
+            if accessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+            guard let parsed else {
+                icsImportSummary = "Couldn't read that file."
+                return
+            }
+            let target = repository.defaultList(preferredID: SettingsStorage.loadRemindersDefaultListID())
+            let count = ICSTodoImporter.importTodos(parsed, into: target, repository: repository)
+            icsImportSummary = "Imported \(count) reminder\(count == 1 ? "" : "s")."
+            complete()
         }
-        let target = repository.defaultList(preferredID: SettingsStorage.loadRemindersDefaultListID())
-        let count = ICSTodoImporter.importTodos(from: text, into: target, repository: repository)
-        icsImportSummary = "Imported \(count) reminder\(count == 1 ? "" : "s")."
-        complete()
     }
 
     private func complete() {

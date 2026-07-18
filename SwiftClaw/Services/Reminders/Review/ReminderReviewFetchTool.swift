@@ -51,21 +51,11 @@ final class ReminderReviewFetchTool: Tool {
             let now = Date.now
             let horizon = now.addingTimeInterval(TimeInterval(dueWithinDays) * 24 * 3600)
             let repository = ReminderRepository(modelContext: ModelContext(modelContainer))
-            var reminders = repository.pendingReminders().filter { reminder in
-                guard let due = reminder.dueDate else { return includeUndated }
-                return due <= horizon
-            }
-            // Due items first in due order; undated ones trail in creation
-            // order so a stale inbox reads oldest-first.
-            reminders.sort { lhs, rhs in
-                switch (lhs.dueDate, rhs.dueDate) {
-                case let (lhsDue?, rhsDue?): lhsDue < rhsDue
-                case (nil, nil): lhs.createdAt < rhs.createdAt
-                case (nil, _): false
-                case (_, nil): true
-                }
-            }
-            reminders = Array(reminders.prefix(limit))
+            let reminders = repository.pendingReminders(
+                dueBefore: horizon,
+                includeUndated: includeUndated,
+                limit: limit
+            )
 
             onRemindersFetched(reminders.map(\.id))
 

@@ -173,7 +173,7 @@ final class ReminderReviewService {
         )
 
         // Stamp only what the model actually pulled, only after success.
-        let fetched = collector.ids.compactMap { repository.reminder(withID: $0) }
+        let fetched = repository.reminders(withIDs: collector.ids)
         let stamp = Date.now
         for reminder in fetched {
             reminder.lastReviewedAt = stamp
@@ -189,10 +189,11 @@ final class ReminderReviewService {
     /// undated or due within the guard horizon (overdue included).
     private func reviewScope(repository: ReminderRepository) -> [Reminder] {
         let horizon = Date.now.addingTimeInterval(Self.guardHorizon)
-        return repository.pendingReminders().filter { reminder in
-            guard let due = reminder.dueDate else { return true }
-            return due <= horizon
-        }
+        return repository.pendingReminders(
+            dueBefore: horizon,
+            includeUndated: true,
+            limit: 50
+        )
     }
 
     private func hasUnreadReviewChat(in context: ModelContext) -> Bool {

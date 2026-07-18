@@ -35,11 +35,21 @@ enum ICSTodoImporter {
         into list: ReminderList,
         repository: ReminderRepository
     ) -> Int {
-        let parsed = ICSParser.parseTodos(text)
-        for representation in parsed {
-            repository.upsertImportedReminder(externalIdentifier: representation.uid) { reminder in
-                apply(representation, to: reminder, list: list)
-            }
+        importTodos(ICSParser.parseTodos(text), into: list, repository: repository)
+    }
+
+    @discardableResult
+    static func importTodos(
+        _ parsed: [ICSTodoRepresentation],
+        into list: ReminderList,
+        repository: ReminderRepository
+    ) -> Int {
+        var remaining = parsed[...]
+        let identities = parsed.map {
+            ReminderRepository.ImportedReminderIdentity(externalIdentifier: $0.uid)
+        }
+        repository.upsertImportedReminders(identities) { _, reminder in
+            apply(remaining.removeFirst(), to: reminder, list: list)
         }
         return parsed.count
     }
