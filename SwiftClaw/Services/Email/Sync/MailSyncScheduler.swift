@@ -14,7 +14,7 @@ protocol MailSyncScheduler: AnyObject, Sendable {
 }
 
 /// Cross-platform baseline scheduler. Always-on `Task` + `Task.sleep` loop.
-/// Mirrors the cadence of `BraveRateGate` / `InvestigationEngine`.
+/// Mirrors the cadence of `BraveRateGate` / `ResearchEngine`.
 final class ForegroundLoopMailSyncScheduler: MailSyncScheduler, @unchecked Sendable {
     private static let logger = AppLog.make("mail.sync.scheduler")
 

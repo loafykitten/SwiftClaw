@@ -1,6 +1,6 @@
 import Foundation
 
-/// Runs a deep, multi-pass web investigation via ``InvestigationEngine``.
+/// Runs a deep, multi-pass web investigation via ``ResearchEngine``.
 ///
 /// Only offered to the model when the user explicitly toggles the search
 /// button in the chat composer for a message.
@@ -67,7 +67,7 @@ struct InvestigateTool: Tool {
             }
         }
 
-        return try await InvestigationEngine().investigate(
+        return try await ResearchEngine(configuration: .investigation()).investigate(
             topic: topic,
             focus: (focus?.isEmpty ?? true) ? nil : focus
         )

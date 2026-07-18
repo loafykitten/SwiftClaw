@@ -4,24 +4,29 @@ import os
 /// Orchestrates a multi-pass web investigation:
 ///
 /// 1. **Surface search** — one broad Brave search for the topic.
-/// 2. **Analysis** — the Claw Model reviews surface results and plans
+/// 2. **Analysis** — the Research Model reviews surface results and plans
 ///    follow-up lines of inquiry.
 /// 3. **Sub-agents** — each line of inquiry runs in parallel: its own Brave
 ///    search plus a Swift Model extraction of what was found.
-/// 4. **Synthesis** — the Claw Model cross-references the surface data and
+/// 4. **Synthesis** — the Research Model cross-references the surface data and
 ///    every thread's findings into the final report body.
 ///
 /// All Brave calls flow through ``BraveRateGate``; rate-limited or transient
 /// failures retry with backoff until the overall time budget runs out, and
 /// threads that can't finish surface as partial results instead of failing
 /// the whole investigation.
-struct InvestigationEngine: Sendable {
-    private static let logger = AppLog.make("InvestigationEngine")
+nonisolated struct ResearchEngine: Sendable {
+    private static let logger = AppLog.make("ResearchEngine")
 
-    private static let totalBudget = Duration.seconds(120)
     private static let maxAttempts = 3
     private static let surfaceResultCount = 8
     private static let threadResultCount = 4
+
+    private let configuration: ResearchConfiguration
+
+    init(configuration: ResearchConfiguration) {
+        self.configuration = configuration
+    }
 
     private struct DeadlineExceededError: LocalizedError, Sendable {
         var errorDescription: String? {
@@ -30,18 +35,17 @@ struct InvestigationEngine: Sendable {
     }
 
     func investigate(topic: String, focus: String?) async throws -> String {
-        let clawModel = UserDefaults.standard.string(forKey: SettingsKeys.clawModel) ?? ""
+        let researchModel = ResearchModelResolver.resolvedModel()
         let swiftModel = UserDefaults.standard.string(forKey: SettingsKeys.swiftModel) ?? ""
 
-        guard !clawModel.isEmpty, !swiftModel.isEmpty else {
+        guard !researchModel.isEmpty, !swiftModel.isEmpty else {
             throw ToolError.notConfigured(
                 toolName: "Investigation",
                 reason: "Set the Claw Model and Swift Model in Settings → Behaviors."
             )
         }
 
-        let deadline = ContinuousClock.now + Self.totalBudget
-        let maxSubAgents = SettingsStorage.loadInvestigationMaxSubAgents()
+        let deadline = ContinuousClock.now + configuration.totalBudget
         let subject = focus.map { "\(topic) — focus: \($0)" } ?? topic
 
         // 1. Surface search.
@@ -58,12 +62,12 @@ struct InvestigationEngine: Sendable {
         let catalog = SourceCatalog()
         let surfaceLines = await numberedLines(for: surfaceResults, in: catalog)
 
-        // 2. Claw Model plans the follow-up threads.
+        // 2. Research Model plans the follow-up threads.
         let plan = await analysisPlan(
             subject: subject,
             surfaceLines: surfaceLines,
-            maxThreads: maxSubAgents,
-            clawModel: clawModel,
+            maxThreads: configuration.maxThreads,
+            researchModel: researchModel,
             deadline: deadline
         )
 
@@ -80,13 +84,13 @@ struct InvestigationEngine: Sendable {
             deadline: deadline
         )
 
-        // 4. Claw Model synthesizes the report body.
+        // 4. Research Model synthesizes the report body.
         let body = await synthesizedBody(
             subject: subject,
             overview: plan.overview,
             surfaceLines: surfaceLines,
             outcomes: outcomes,
-            clawModel: clawModel,
+            researchModel: researchModel,
             deadline: deadline
         ) ?? mechanicalBody(overview: plan.overview, surfaceLines: surfaceLines, outcomes: outcomes)
 
@@ -104,7 +108,7 @@ struct InvestigationEngine: Sendable {
             """
     }
 
-    // MARK: - Analysis (Claw Model)
+    // MARK: - Analysis (Research Model)
 
     private struct AnalysisPlan: Decodable {
         var overview: String
@@ -120,7 +124,7 @@ struct InvestigationEngine: Sendable {
         subject: String,
         surfaceLines: [String],
         maxThreads: Int,
-        clawModel: String,
+        researchModel: String,
         deadline: ContinuousClock.Instant
     ) async -> AnalysisPlan {
         let prompt = """
@@ -151,7 +155,7 @@ struct InvestigationEngine: Sendable {
             let response = try await withRetries(deadline: deadline, label: "analysis") {
                 try await completeWithDeadline(
                     messages: [.user(prompt)],
-                    model: clawModel,
+                    model: researchModel,
                     deadline: deadline
                 )
             }
@@ -305,14 +309,14 @@ struct InvestigationEngine: Sendable {
         }
     }
 
-    // MARK: - Synthesis (Claw Model)
+    // MARK: - Synthesis (Research Model)
 
     private func synthesizedBody(
         subject: String,
         overview: String,
         surfaceLines: [String],
         outcomes: [ThreadOutcome],
-        clawModel: String,
+        researchModel: String,
         deadline: ContinuousClock.Instant
     ) async -> String? {
         let threadSection = outcomes.map { outcome in
@@ -361,7 +365,7 @@ struct InvestigationEngine: Sendable {
             let body = try await withRetries(deadline: deadline, label: "synthesis") {
                 try await completeWithDeadline(
                     messages: [.user(prompt)],
-                    model: clawModel,
+                    model: researchModel,
                     deadline: deadline
                 )
             }

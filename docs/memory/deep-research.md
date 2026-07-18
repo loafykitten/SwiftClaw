@@ -1,6 +1,6 @@
 # Deep Research feature + Investigation repositioning
 
-**Started:** 2026-07-18  **Status:** ready for review (planning phase)
+**Started:** 2026-07-18  **Status:** Phase 1 ready for review
 
 ## Goal
 
@@ -10,17 +10,17 @@ shared parameterized `ResearchEngine`. Full plan: `docs/DEEP_RESEARCH_PLAN.md`.
 
 ## Current state
 
-Planning complete on `feature/deep-research` (worktree
-`.claude/worktrees/deep-research`). No code changes yet. Evidence reports
-(gpt-5.6-sol research, citations spot-verified 14/14) committed under
-`docs/research/deep-research/`.
+Planning is complete on `feature/deep-research` (worktree
+`.claude/worktrees/deep-research`). Phase 1 extracts the existing Investigation
+pipeline into `ResearchEngine` + `ResearchConfiguration`, wires the optional
+Research Model with Claw Model fallback, and adds preset/model-resolution tests.
+Build and test verification is delegated to Claude per the phase task.
 
 ## Next steps
 
-1. Phase 1: extract `Services/Research/ResearchEngine.swift` +
-   `ResearchConfiguration` from `InvestigationEngine` with no behavior change;
-   wire the dormant `SettingsKeys.deepResearchModel` fallback chain.
-2. Phases 2–6 per the plan doc.
+1. Claude: review the Phase 1 diff and run macOS/iOS build plus focused tests.
+2. Phase 2: add evidence storage and page fetching per the plan.
+3. Phases 3–6 per the plan doc.
 
 ## Decisions & constraints
 
@@ -40,3 +40,8 @@ Planning complete on `feature/deep-research` (worktree
 - `docs/DEEP_RESEARCH_PLAN.md` — the plan (new)
 - `docs/research/deep-research/{competitive-teardown,user-sentiment,architecture-patterns}.md` — verified evidence base (new)
 - `docs/memory/deep-research.md` — this file
+- `SwiftClaw/Services/Research/ResearchConfiguration.swift` — shared presets and Research Model resolution
+- `SwiftClaw/Services/Research/ResearchEngine.swift` — extracted Investigation pipeline
+- `SwiftClaw/Services/Tools/Investigation/InvestigateTool.swift` — uses the Investigation preset
+- `SwiftClaw/Services/Tools/Investigation/InvestigationEngine.swift` — deleted after extraction
+- `SwiftClawTests/Research/ResearchConfigurationTests.swift` — preset, setting, and model-resolution coverage
