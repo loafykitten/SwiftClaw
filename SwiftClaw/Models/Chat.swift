@@ -160,7 +160,10 @@ extension Chat {
     }
 
     func matchesSearch(_ searchText: String) -> Bool {
-        SearchQuery.matches(searchText, in: searchValues)
+        // Inactive search matches everything; bail before materializing
+        // `searchValues`, which sorts and copies every visible message body.
+        guard SearchQuery.isActive(searchText) else { return true }
+        return SearchQuery.matches(searchText, in: searchValues)
     }
 
     private var searchValues: [String] {

@@ -112,7 +112,10 @@ final class EmailThread {
     }
 
     func matchesSearch(_ searchText: String) -> Bool {
-        SearchQuery.matches(searchText, in: messages.flatMap(\.searchValues))
+        // Inactive search matches everything; bail before materializing
+        // `searchValues`, which HTML-strips every message body.
+        guard SearchQuery.isActive(searchText) else { return true }
+        return SearchQuery.matches(searchText, in: messages.flatMap(\.searchValues))
     }
 }
 

@@ -9,11 +9,24 @@ nonisolated enum SearchQuery {
     }
 
     static func matches(_ text: String, in values: [String]) -> Bool {
-        let tokens = text.split(whereSeparator: \.isWhitespace)
-        guard !tokens.isEmpty else { return true }
+        Compiled(text).matches(in: values)
+    }
 
-        return tokens.allSatisfy { token in
-            values.contains { $0.localizedStandardContains(token) }
+    /// A query tokenized once, for matching against many candidates —
+    /// avoids re-splitting `text` for every row of a filtered collection.
+    struct Compiled {
+        let tokens: [Substring]
+
+        init(_ text: String) {
+            tokens = text.split(whereSeparator: \.isWhitespace)
+        }
+
+        var isActive: Bool { !tokens.isEmpty }
+
+        func matches(in values: [String]) -> Bool {
+            tokens.allSatisfy { token in
+                values.contains { $0.localizedStandardContains(token) }
+            }
         }
     }
 }

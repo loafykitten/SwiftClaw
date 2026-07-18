@@ -496,10 +496,11 @@ final class MemoryRepository {
     /// swap would land. Superseded entries are included — search and the UI
     /// see everything; only prompt injection excludes them.
     func search(_ text: String, filter: SearchFilter = SearchFilter()) -> [MemoryEntry] {
-        allEntries().filter { entry in
+        let query = SearchQuery.Compiled(text)
+        return allEntries().filter { entry in
             guard matchesFilter(entry, filter: filter) else { return false }
-            guard SearchQuery.isActive(text) else { return true }
-            return SearchQuery.matches(text, in: searchValues(for: entry))
+            guard query.isActive else { return true }
+            return query.matches(in: searchValues(for: entry))
         }
     }
 
