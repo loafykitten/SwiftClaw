@@ -58,6 +58,11 @@ final class EmailRepository {
     /// Inserts new messages and updates flags/bodies for already-known messages.
     /// Returns the newly inserted messages (count + notification-relevant
     /// summaries); updates and reconciliations are not reported.
+    /// Metadata-only convenience over `upsertPreparedMessages`: attachment
+    /// rows are created with empty file paths and NO bytes are written to
+    /// disk. Production sync must go through `EmailAttachmentStore.prepare`
+    /// + `upsertPreparedMessages` so attachment I/O stays off the main actor;
+    /// this entry point exists for tests and callers without attachment data.
     @discardableResult
     func upsertMessages(
         _ fetched: [FetchedMessage],

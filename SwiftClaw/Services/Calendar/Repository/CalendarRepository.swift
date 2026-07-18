@@ -214,7 +214,7 @@ final class CalendarRepository {
         let until = occurrenceStart.addingTimeInterval(-1)
         rule.end = .untilDate(until)
         master.recurrenceRuleString = rule.rruleString
-        master.recurrenceEndDate = until
+        refreshRecurrenceEnd(of: master)
         master.modifiedAt = .now
         for override in overrides(of: master)
         where (override.originalOccurrenceDate ?? override.startDate) >= occurrenceStart {
@@ -243,6 +243,12 @@ final class CalendarRepository {
     /// Re-derives `recurrenceEndDate` from the rule; call whenever the rule
     /// string, start, duration, or time zone changes. COUNT uses the canonical
     /// expander so BY-parts and DST behavior cannot drift from rendering.
+    ///
+    /// The stored value is the END of the last possible occurrence (its start
+    /// plus the event's duration), not its start: the window predicates test
+    /// `recurrenceEndDate >= windowStart`, and a final occurrence that starts
+    /// before the window but spans into it (an evening event crossing
+    /// midnight, a multi-day event) must still be fetched and expanded.
     func refreshRecurrenceEnd(of event: CalendarEvent) {
         guard let rule = event.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)) else {
             event.recurrenceEndDate = nil
@@ -250,7 +256,7 @@ final class CalendarRepository {
         }
         switch rule.end {
         case .untilDate(let until):
-            event.recurrenceEndDate = until
+            event.recurrenceEndDate = until.addingTimeInterval(event.duration)
         case .occurrenceCount(let count):
             let starts = RecurrenceExpander.occurrenceStarts(
                 rule: rule,
@@ -263,7 +269,7 @@ final class CalendarRepository {
                 timeZone: event.timeZone,
                 cap: count
             )
-            event.recurrenceEndDate = starts.last
+            event.recurrenceEndDate = starts.last.map { $0.addingTimeInterval(event.duration) }
         case nil:
             event.recurrenceEndDate = nil
         }

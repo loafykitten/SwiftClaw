@@ -197,7 +197,7 @@ struct CalendarRepositoryTests {
         ))
 
         let finalStart = Self.date(2026, 3, 15, 9, timeZoneIdentifier: "America/Chicago")
-        #expect(event.recurrenceEndDate == finalStart)
+        #expect(event.recurrenceEndDate == finalStart.addingTimeInterval(3600))
 
         let finalDay = DateInterval(
             start: Self.date(2026, 3, 15, timeZoneIdentifier: "America/Chicago"),
@@ -229,8 +229,31 @@ struct CalendarRepositoryTests {
         #expect(event.recurrenceEndDate == nil)
 
         #expect(repository.backfillRecurrenceEndDatesIfNeeded(userDefaults: fixture.defaults) == 1)
-        #expect(event.recurrenceEndDate == Self.date(2026, 6, 4, 9))
+        #expect(event.recurrenceEndDate == Self.date(2026, 6, 4, 10))
         #expect(repository.backfillRecurrenceEndDatesIfNeeded(userDefaults: fixture.defaults) == 0)
+    }
+
+    @Test func countTailOccurrenceSpanningWindowStartRemainsVisible() throws {
+        // The final occurrence starts before the visible window but ends
+        // inside it (an evening event crossing midnight). The persisted
+        // series end must keep the master fetchable for that window.
+        let repository = CalendarRepository(modelContext: ModelContext(try Self.inMemoryContainer()))
+        _ = repository.insert(CalendarEvent(
+            title: "Night shift",
+            startDate: Self.date(2026, 6, 1, 22),
+            endDate: Self.date(2026, 6, 2, 1),
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY;COUNT=3",
+            calendar: repository.defaultCalendar()
+        ))
+
+        let dayAfterFinalStart = DateInterval(
+            start: Self.date(2026, 6, 4),
+            end: Self.date(2026, 6, 5)
+        )
+        #expect(
+            repository.occurrences(in: dayAfterFinalStart).map(\.start) == [Self.date(2026, 6, 3, 22)]
+        )
     }
 
     @Test func countFinalOccurrenceAtWindowStartRemainsVisible() throws {
@@ -244,7 +267,7 @@ struct CalendarRepositoryTests {
             calendar: repository.defaultCalendar()
         ))
         let finalStart = Self.date(2026, 6, 3)
-        #expect(event.recurrenceEndDate == finalStart)
+        #expect(event.recurrenceEndDate == Self.date(2026, 6, 4))
 
         let finalDay = DateInterval(start: finalStart, end: Self.date(2026, 6, 4))
         #expect(repository.occurrences(in: finalDay).map(\.start) == [finalStart])

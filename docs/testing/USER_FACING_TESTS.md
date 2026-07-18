@@ -20,286 +20,487 @@ that platform; otherwise cover both where the behavior exists on both.
 
 ## Human Testing
 
+Each entry below leads with **Do** (what you actually do) and **Why** (why a
+person has to do it), followed by the technical detail for reference.
+
 ### App Shell and Cross-Feature Flows
 
-- **H-SHELL-001 — First-run notification offer.** With notification state reset,
-  launch the app and judge the splash timing, delayed offer, Allow/Not Now flow,
-  and relaunch behavior. The OS prompt must appear only after consent, and
-  Settings must remain a recovery path.
-- **H-SHELL-002 — Real notification delivery and routing.** With each source
-  enabled in turn, generate new mail, review results, a background chat reply, a
-  Calendar alert, and a Reminder alert. Each notification must be useful and its
-  tap must open the exact destination. No notification should appear while that
-  destination is already visible. *(Requires OS permission and live/seeded data.)*
-- **H-SHELL-003 — Notification denial recovery.** Deny permission in macOS,
-  confirm the in-app warning is understandable, use Open System Settings, grant
-  permission, and return. The status must refresh without relaunching.
-- **H-SHELL-004 — Accessibility pass.** Use keyboard-only navigation and
-  VoiceOver across the main window, Settings, composer, destructive dialogs,
-  review cards, and feature editors. Focus order, names, values, and disabled
-  reasons must be clear.
-- **H-SHELL-005 — Startup failure presentation.** Using a safe debug fault
-  injection, force model-container creation to fail. The recovery screen must
-  explain the problem and recovery options without risking real data. *(Defer
-  until a safe fault-injection mode exists.)*
+- **H-SHELL-001 — First-run notification offer.**
+  **Do:** Reset notification permissions, launch the app fresh, and walk through
+  the notification offer — try both Allow and Not Now, then relaunch.
+  **Why:** Only a person can judge whether the timing and wording feel right,
+  and the real macOS permission prompt can't be automated.
+  *Detail:* The OS prompt must appear only after you consent in-app, and
+  Settings must remain a recovery path if you said Not Now.
+- **H-SHELL-002 — Real notification delivery and routing.**
+  **Do:** Turn on one notification source at a time (mail, review results,
+  background chat reply, Calendar alert, Reminder alert), trigger each one, and
+  tap the notification.
+  **Why:** Real notification delivery needs OS permission and live data —
+  automation can't receive them.
+  *Detail:* Each notification must be useful and its tap must open the exact
+  destination. No notification should appear while that destination is already
+  on screen.
+- **H-SHELL-003 — Notification denial recovery.**
+  **Do:** Deny notification permission in macOS, read the in-app warning, use
+  its Open System Settings button, grant permission there, and come back.
+  **Why:** This crosses into System Settings, which only a person can drive,
+  and the warning text needs a human readability check.
+  *Detail:* The in-app status must refresh without relaunching the app.
+- **H-SHELL-004 — Accessibility pass.**
+  **Do:** Put the mouse away — use keyboard-only navigation and VoiceOver
+  through the main window, Settings, composer, delete dialogs, review cards,
+  and feature editors.
+  **Why:** Whether focus order and spoken labels actually make sense is a
+  judgment call.
+  *Detail:* Focus order, names, values, and the reasons controls are disabled
+  must all be clear.
+- **H-SHELL-005 — Startup failure presentation.**
+  **Do:** Nothing yet — this one is on hold.
+  **Why:** It needs a safe debug switch to fake a database failure, which
+  doesn't exist yet; forcing a real failure would risk real data.
+  *Detail:* Once fault injection exists: force model-container creation to
+  fail and check that the recovery screen explains the problem and options.
 
 ### Home
 
-- **H-HOME-001 — Personalized greeting quality.** At different times and weather
-  conditions, confirm the generated greeting is brief, natural, varied, and uses
-  time/daylight/weather only when relevant. It should end with the preferred
-  persona name. *(Requires Swift Model, location, and network.)*
-- **H-HOME-002 — Greeting fallback quality.** Repeat with location denied,
-  network offline, and no Swift Model. The fallback must appear quickly and must
-  not mention missing context or expose an error.
-- **H-HOME-003 — Home blurb quality.** Confirm the generated secondary line is
-  short, cozy or witty, and free of quotes, emoji, or explanations. Failure must
-  leave a stable layout without error noise. *(Requires Swift Model.)*
-- **H-HOME-004 — First-message result.** Submit from Home and judge the answer,
-  selected model, persona, and image understanding. The new conversation should
-  preserve the original prompt and attachments. *(Requires configured models;
-  use a vision model for the image case.)*
+- **H-HOME-001 — Personalized greeting quality.**
+  **Do:** Open the app at different times of day (and different weather) and
+  read the greeting on Home.
+  **Why:** "Does this greeting sound natural and not weird?" is AI-quality
+  judgment only a person can make.
+  *Detail:* It should be brief, varied, use time/daylight/weather only when
+  relevant, and end with your preferred persona name. Requires Swift Model,
+  location, and network.
+- **H-HOME-002 — Greeting fallback quality.**
+  **Do:** Repeat the greeting check with location denied, then with the network
+  off, then with no Swift Model configured.
+  **Why:** The fallback should feel normal, not broken — that's a feel check.
+  *Detail:* The fallback must appear quickly and must not mention missing
+  context or show an error.
+- **H-HOME-003 — Home blurb quality.**
+  **Do:** Read the small secondary line under the greeting a few times.
+  **Why:** Tone (cozy/witty, not robotic) is subjective.
+  *Detail:* It should be short and free of quotes, emoji, or explanations. If
+  generation fails, the layout must stay stable with no error noise. Requires
+  Swift Model.
+- **H-HOME-004 — First-message result.**
+  **Do:** Send a message from the Home screen (try one with an image attached)
+  and read the reply in the new chat.
+  **Why:** Judging answer quality, persona, and image understanding needs a
+  human eye.
+  *Detail:* The new conversation should preserve your original prompt and
+  attachments. Requires configured models; use a vision model for the image
+  case.
 
 ### Chats and Composer
 
-- **H-CHAT-001 — Multi-turn continuity and persona.** Hold a repeatable multi-turn
-  conversation. The assistant must use prior context, the selected model, and
-  current Persona/Personality settings without exposing system instructions.
-- **H-CHAT-002 — Reasoning behavior.** Compare Off and supported reasoning
-  efforts on the same prompt. Both must complete, effort should visibly improve
-  the appropriate task, and raw private reasoning must never be shown.
-- **H-CHAT-003 — Investigation quality.** Ask a current research question with
-  Investigation enabled. Progress text should make sense, claims should be
-  supported by working citation links, and the Sources section should be
-  complete. *(Requires Brave Search and a reasoning/tool-capable model.)*
-- **H-CHAT-004 — Vision conversation.** Send one and several images, then ask a
-  follow-up. The assistant must use the correct images, preserve context across
-  turns, and render them after relaunch. *(Requires a vision model.)*
-- **H-CHAT-005 — Generated titles.** Initial and regenerated titles must be
-  concise, representative, single-line, and unquoted. Regeneration should use
-  both the opening and recent messages.
-- **H-CHAT-006 — Background reply notification.** Leave a slow chat before it
-  finishes. Confirm the notification preview is safe and useful and opens the
-  exact chat. No notification should be posted while viewing that chat.
-- **H-CHAT-007 — Appearance judgment.** Across Light and Dark themes, judge chat
-  density, bubble balance, avatars, markdown hierarchy, quote accent readability,
-  hover states, and minimum-window layout.
+- **H-CHAT-001 — Multi-turn continuity and persona.**
+  **Do:** Have a several-message back-and-forth conversation.
+  **Why:** Whether the assistant "remembers" the conversation and stays in
+  character is a quality judgment.
+  *Detail:* It must use prior context, the selected model, and current
+  Persona/Personality settings without ever exposing system instructions.
+- **H-CHAT-002 — Reasoning behavior.**
+  **Do:** Ask the same question twice — once with reasoning Off, once with a
+  reasoning effort turned up — and compare.
+  **Why:** "Did more effort visibly help?" is a judgment call.
+  *Detail:* Both must complete, and raw private reasoning must never be shown.
+- **H-CHAT-003 — Investigation quality.**
+  **Do:** Turn on Investigation and ask a current-events research question.
+  **Why:** Checking that citations actually support the claims means reading
+  the sources yourself.
+  *Detail:* Progress text should make sense, citation links must work, and the
+  Sources section should be complete. Requires Brave Search and a
+  reasoning/tool-capable model.
+- **H-CHAT-004 — Vision conversation.**
+  **Do:** Send one image, then several images, ask follow-up questions about
+  them, and relaunch the app.
+  **Why:** Whether it understood the right image correctly is human judgment.
+  *Detail:* It must use the correct images, keep context across turns, and
+  still render them after relaunch. Requires a vision model.
+- **H-CHAT-005 — Generated titles.**
+  **Do:** Start chats and look at the auto-generated titles; also try
+  Regenerate Title.
+  **Why:** "Is this a good title?" is subjective.
+  *Detail:* Titles must be concise, representative, single-line, and unquoted.
+  Regeneration should reflect both the opening and recent messages.
+- **H-CHAT-006 — Background reply notification.**
+  **Do:** Send a message that will take a while, navigate away before it
+  finishes, and tap the notification when it arrives.
+  **Why:** Real notification delivery needs OS permission and live timing.
+  *Detail:* The preview must be safe and useful, the tap must open the exact
+  chat, and no notification should fire while you're already viewing that chat.
+- **H-CHAT-007 — Appearance judgment.**
+  **Do:** Look over chats in both Light and Dark themes, including at the
+  smallest window size.
+  **Why:** Visual polish (density, readability, balance) is a taste check.
+  *Detail:* Judge bubble balance, avatars, markdown hierarchy, quote accent
+  readability, and hover states.
 
 ### Workspace
 
-- **H-WORK-001 — Dashboard usefulness.** With realistic mail, events, and
-  reminders, judge whether the widget summaries surface the right information
-  at a glance and remain readable at common window sizes.
-- **H-WORK-002 — Cross-feature routing.** Open review cards and real
-  notifications for old email, Calendar, and Reminders. Confirm the resulting
-  Workspace destination is the item a person would expect, including mail older
-  than the initial message window.
+- **H-WORK-001 — Dashboard usefulness.**
+  **Do:** With realistic mail, events, and reminders loaded, glance at the
+  Workspace widgets and resize the window.
+  **Why:** "Does this show me the right stuff at a glance?" is a usefulness
+  judgment.
+  *Detail:* Summaries should surface the right information and stay readable
+  at common window sizes.
+- **H-WORK-002 — Cross-feature routing.**
+  **Do:** Open review cards and real notifications for email, Calendar, and
+  Reminders, and check where each one lands you.
+  **Why:** Whether the destination is what a person would *expect* is a
+  judgment call, and real notifications can't be automated.
+  *Detail:* Include mail older than the initially loaded message window.
 
 ### Email
 
-- **H-MAIL-001 — Account lifecycle.** Add a disposable IMAP/SMTP account, test
-  unsaved credentials, save, relaunch, edit connection details, retest, and
-  delete. Secrets must persist in Keychain while configured and be removed on
-  account deletion; already-synced local mail should remain.
-- **H-MAIL-002 — Live first and incremental sync.** Run first sync, receive new
-  mail, and sync again. Status and last-sync text must be honest, the first-sync
-  cap must not block later mail, and incremental sync must avoid duplicates.
-- **H-MAIL-003 — IMAP reconciliation.** In another client, change read/flag
-  state, delete, archive, and move messages. SwiftClaw must settle to the server
-  state without losing notes or thread identity.
-- **H-MAIL-004 — Connection reuse.** Toggle a flag while a long sync is running,
-  leave the app idle past the session timeout, then sync again. Interactive
-  actions must remain responsive and reconnect cleanly. *(Explicit live gap.)*
-- **H-MAIL-005 — Folder discovery.** With populated standard, custom, and nested
-  folders, confirm single-account contents are plausible, Gmail All Mail is not
-  misclassified, Review Folders lists real choices, and multi-account unified
-  scope hides interleaved custom folders. *(Explicit live gap.)*
-- **H-MAIL-006 — Message rendering.** Inspect plain text, Unicode, long mail,
-  malformed and newsletter HTML, remote images, links, and attachments. Content
-  must remain readable, safe, and usable without broken layout.
-- **H-MAIL-007 — Server-side actions.** Mark read, flag, archive, delete to Trash,
-  permanently delete from Trash, and add a local note. Verify both SwiftClaw and
-  another mail client, including recovery before permanent deletion.
-- **H-MAIL-008 — Reply end to end.** Reply between two disposable mailboxes.
-  Recipient threading and headers must be correct, Sent APPEND must succeed, and
-  the immediate local sent row must reconcile to the server UID without a
-  duplicate. *(Explicit live gap.)*
-- **H-MAIL-009 — Review judgment.** Run Review Now on a controlled inbox and
-  judge selection, summaries, suggested actions, persona, and restraint. A large
-  unread backlog must not create an unusable prompt.
-- **H-MAIL-010 — Review scope.** Vary read/unread/flagged/notated, age, maximum
-  count, Archive/Trash, and custom-folder settings. Inbox must remain included
-  and the result must match the chosen scope.
-- **H-MAIL-011 — Review actions.** From a review card, Review, Flag, Archive, and
-  Delete. Local and server state must agree. The current suggested Reply action
-  is expected to mark read and flag rather than open a composer.
-- **H-MAIL-012 — Conversational review follow-up.** Ask an Inbox Review chat
-  about shown mail, older mail, and an explicit folder/status. It must fetch the
-  relevant messages, distinguish uncertainty, and avoid hallucinating content.
-- **H-MAIL-013 — Scheduled review behavior.** Exercise manual-only, interval,
-  and daily schedules with auto-navigation both on and off. Prior unread review
-  results should suppress duplicates, and background notifications/badges should
-  match the setting.
+- **H-MAIL-001 — Account lifecycle.**
+  **Do:** Add a throwaway email account, save it, relaunch, edit its settings,
+  retest the connection, then delete the account.
+  **Why:** Real account credentials, Keychain, and a live server are involved —
+  none of that belongs in automation.
+  *Detail:* Secrets must live in the Keychain while configured and be removed
+  on deletion; already-synced local mail should remain.
+- **H-MAIL-002 — Live first and incremental sync.**
+  **Do:** Run the first sync, send yourself new mail, and sync again.
+  **Why:** Needs a real mail server delivering real messages.
+  *Detail:* Status and last-sync text must be honest, the first-sync cap must
+  not block later mail, and re-syncing must not create duplicates.
+- **H-MAIL-003 — IMAP reconciliation.**
+  **Do:** In a *different* mail app, mark things read/flagged, delete, archive,
+  and move messages — then check SwiftClaw catches up.
+  **Why:** Needs a second real mail client acting on the same live account.
+  *Detail:* SwiftClaw must settle to the server's state without losing your
+  notes or breaking thread grouping.
+- **H-MAIL-004 — Connection reuse.**
+  **Do:** Flag a message while a long sync is running; later, leave the app
+  idle long enough for the connection to time out, then sync again.
+  **Why:** Live-connection timing behavior can only be seen against a real
+  server. *(Known gap — not yet verified live.)*
+  *Detail:* Interactive actions must stay responsive and reconnect cleanly.
+- **H-MAIL-005 — Folder discovery.**
+  **Do:** With an account that has standard, custom, and nested folders, browse
+  the folder list — including a Gmail account and a second account.
+  **Why:** Real providers (especially Gmail) do quirky folder things fixtures
+  can't reproduce. *(Known gap — not yet verified live.)*
+  *Detail:* Gmail All Mail must not be misclassified, Review Folders must list
+  real choices, and the multi-account unified view hides interleaved custom
+  folders.
+- **H-MAIL-006 — Message rendering.**
+  **Do:** Open a variety of real mail: plain text, non-English text, very long
+  mail, ugly newsletter HTML, remote images, links, attachments.
+  **Why:** "Does this look readable and safe?" is an eyeball check across
+  messy real-world mail.
+  *Detail:* Content must remain readable and usable without broken layout.
+- **H-MAIL-007 — Server-side actions.**
+  **Do:** Mark read, flag, archive, delete to Trash, permanently delete, and
+  add a local note — then verify in another mail client too.
+  **Why:** Confirming the *server* really changed requires a second client;
+  permanent deletion is destructive.
+  *Detail:* Include recovering a message from Trash before permanent deletion.
+- **H-MAIL-008 — Reply end to end.**
+  **Do:** Reply back and forth between two throwaway mailboxes.
+  **Why:** Real delivery, threading, and the Sent folder only prove out
+  against live servers. *(Known gap — not yet verified live.)*
+  *Detail:* Recipient threading and headers must be correct, the Sent copy
+  must upload, and the local sent row must reconcile without a duplicate.
+- **H-MAIL-009 — Review judgment.**
+  **Do:** Run Review Now on an inbox you control and read what the AI picked
+  and said.
+  **Why:** Whether the AI chose sensibly and stayed restrained is judgment.
+  *Detail:* A large unread backlog must not blow up the prompt.
+- **H-MAIL-010 — Review scope.**
+  **Do:** Change the review scope settings (read/unread/flagged/notated, age,
+  max count, Archive/Trash, custom folders) and rerun reviews.
+  **Why:** Checking the AI actually respected each scope means reading the
+  results.
+  *Detail:* Inbox must always stay included, and results must match the
+  chosen scope.
+- **H-MAIL-011 — Review actions.**
+  **Do:** From a review card, use Review, Flag, Archive, and Delete.
+  **Why:** Server-side effects need live verification.
+  *Detail:* Local and server state must agree. The suggested Reply action
+  currently marks read and flags rather than opening a composer — that's
+  expected.
+- **H-MAIL-012 — Conversational review follow-up.**
+  **Do:** In an Inbox Review chat, ask about the mail it showed, then about
+  older mail, then about a specific folder/status.
+  **Why:** Spotting hallucinated mail content requires knowing what's really
+  in the mailbox.
+  *Detail:* It must fetch the relevant messages and be honest about
+  uncertainty.
+- **H-MAIL-013 — Scheduled review behavior.**
+  **Do:** Try manual-only, interval, and daily review schedules, with
+  auto-navigation both on and off, over real elapsed time.
+  **Why:** Schedules and background notifications play out in real time.
+  *Detail:* A prior unread review should suppress duplicates, and
+  notifications/badges should match the setting.
 
 ### Calendar
 
-- **H-CAL-001 — Natural-language quick entry.** Try timed, all-day, duration,
-  calendar, recurrence, alert, and ambiguous phrases. The editor should be
-  sensibly prefilled, preserve the phrase on failure, and never save before
-  confirmation. *(Requires a model.)*
-- **H-CAL-002 — Apple Calendar import.** Test denied and allowed permission,
-  selected calendars, all-day events, recurrence, detached/deleted occurrences,
-  and re-import. Mapping must be accurate and reruns must update rather than
-  duplicate.
-- **H-CAL-003 — ICS interoperability.** Import Apple/Google fixtures with
-  all-day dates, time zones, recurrence, EXDATE, detached instances, Unicode,
-  and folded lines. Export and open externally; dates and series must survive.
-- **H-CAL-004 — Apple Calendar overlay.** Compare the read-only overlay with
-  Apple Calendar, change an event externally, and confirm it refreshes. Overlay
-  events must never become editable or stored SwiftClaw events.
-- **H-CAL-005 — Event alerts.** Schedule near-future timed/all-day and lead-time
-  alerts. Delivery text/time and tap routing must be correct; edits, deletes,
-  source toggles, and feature disable must rebook or clear them. A retitled
-  event's alert must show the new title, and disabling the feature then quickly
-  re-enabling it must still rebook.
-- **H-CAL-007 — AI review quality.** With conflicts, changed events, and prep
-  opportunities, judge manual/scheduled analysis, restraint, summaries, and
-  suppression. Manual refresh must bypass scheduled suppression.
-- **H-CAL-008 — Scheduled AI loop.** Exercise manual-only, 6-hour, 12-hour, and
-  daily settings. Unchanged events and unread prior results should suppress
-  duplicates; useful results should route and notify correctly.
-- **H-CAL-009 — CloudKit sync.** Verify two-device sync, post-merge dedupe, and
-  remote alert reconciliation only after paid-team entitlements are restored.
-  This test is currently blocked, not a release failure.
+- **H-CAL-001 — Natural-language quick entry.**
+  **Do:** Type event phrases in plain English — timed, all-day, with duration,
+  a calendar name, recurrence, an alert, and something ambiguous.
+  **Why:** Judging how well the AI understood your phrasing is a human call.
+  *Detail:* The editor should be sensibly prefilled, keep your phrase if
+  parsing fails, and never save before you confirm. Requires a model.
+- **H-CAL-002 — Apple Calendar import.**
+  **Do:** Import from Apple Calendar: try denying then allowing permission,
+  picking calendars, and re-importing.
+  **Why:** Real OS permission prompts and your real Apple Calendar data are
+  involved.
+  *Detail:* All-day events, recurrence, and detached/deleted occurrences must
+  map accurately; re-imports must update rather than duplicate.
+- **H-CAL-003 — ICS interoperability.**
+  **Do:** Import calendar (.ics) files from Apple/Google, then export from
+  SwiftClaw and open the file in another calendar app.
+  **Why:** The round-trip through other real apps is the whole point.
+  *Detail:* All-day dates, time zones, recurrence, EXDATE, detached instances,
+  Unicode, and folded lines must all survive.
+- **H-CAL-004 — Apple Calendar overlay.**
+  **Do:** Compare the overlay side by side with Apple Calendar, change an
+  event in Apple Calendar, and watch SwiftClaw refresh.
+  **Why:** Needs the real Apple Calendar app changing real data.
+  *Detail:* Overlay events must stay read-only and never become stored
+  SwiftClaw events.
+- **H-CAL-005 — Event alerts.**
+  **Do:** Create events a few minutes out with alerts, wait for them, tap
+  them, then edit/delete events and toggle sources and the feature.
+  **Why:** Real alert delivery happens on the OS's clock, not automation's.
+  *Detail:* Delivery text/time and tap routing must be correct; edits,
+  deletes, and toggles must rebook or clear alerts. A retitled event's alert
+  shows the new title; disable-then-quickly-re-enable must still rebook.
+- **H-CAL-007 — AI review quality.**
+  **Do:** Set up a calendar with conflicts, changed events, and things worth
+  preparing for, then read the AI's review.
+  **Why:** Whether the analysis is useful and restrained is judgment.
+  *Detail:* Manual refresh must bypass scheduled suppression.
+- **H-CAL-008 — Scheduled AI loop.**
+  **Do:** Try manual-only, 6-hour, 12-hour, and daily review settings over
+  real time.
+  **Why:** Scheduling plays out over hours/days.
+  *Detail:* Unchanged events and unread prior results should suppress
+  duplicate reviews; useful results should route and notify correctly.
+- **H-CAL-009 — CloudKit sync.**
+  **Do:** Nothing yet — blocked until paid-team entitlements are restored.
+  **Why:** Two-device iCloud sync can't run without those entitlements. This
+  is a known blocker, not a release failure.
+  *Detail:* When unblocked: verify two-device sync, post-merge dedupe, and
+  remote alert reconciliation.
 
 ### Reminders
 
-- **H-REM-001 — Natural-language quick entry.** Try undated, date-only, timed,
-  list, priority, flag, notes, and both repeat styles. Unmatched lists and invalid
-  repeat-without-due input must degrade safely, with confirmation before save.
-- **H-REM-002 — Apple Reminders import.** Test permission states, list selection,
-  completed/date/time/priority/fixed recurrence mapping, and re-import without
-  duplicates. Confirm the known omission of Apple subtasks is communicated.
-- **H-REM-003 — VTODO interoperability.** Round-trip standard fields with another
-  task app and SwiftClaw-specific flags, checklists, and after-completion repeats
-  with a second SwiftClaw profile. Mixed VEVENT/VTODO files must not cross-import.
-- **H-REM-004 — Reminder alerts.** Verify timed and date-only delivery, selected
-  wall-clock time across a DST-adjacent date, edit rebooking, completion/delete
-  clearing, feature/source toggles, and tap routing to the exact reminder. A
-  hidden-list reminder's tap opens its editor directly; tapping a delivered
-  banner after the feature is disabled must do nothing (no stuck navigation).
-- **H-REM-005 — AI review quality.** With undated, overdue, and next-seven-day
-  work, judge prioritization, restraint, summaries, and the no-result case.
-  Failures must retry; manual runs must bypass suppression.
-- **H-REM-006 — Scheduled AI loop.** Exercise manual-only, 6-hour, 12-hour, and
-  daily settings. Prior unread review, no pending work, and unchanged work should
-  suppress a scheduled pass; meaningful changes should produce a result.
-- **H-REM-007 — Recurrence semantics.** Use real-world fixed-schedule and
-  after-completion tasks. Early completion, late completion, skip, undo, COUNT
-  exhaustion, and history should match the language shown to the user.
+- **H-REM-001 — Natural-language quick entry.**
+  **Do:** Type reminder phrases in plain English — no date, date-only, timed,
+  with a list, priority, flag, notes, and both repeat styles.
+  **Why:** Judging how well the AI parsed your phrasing is a human call.
+  *Detail:* Unmatched lists and repeat-without-a-due-date must degrade safely,
+  and nothing saves before you confirm.
+- **H-REM-002 — Apple Reminders import.**
+  **Do:** Import from Apple Reminders: try permission states, pick lists, and
+  re-import.
+  **Why:** Real OS permission and your real Reminders data are involved.
+  *Detail:* Completed/date/time/priority/fixed recurrence must map correctly,
+  re-import must not duplicate, and the known "Apple subtasks not imported"
+  omission must be communicated.
+- **H-REM-003 — VTODO interoperability.**
+  **Do:** Export/import reminder (.ics VTODO) files with another task app, and
+  with a second SwiftClaw profile for SwiftClaw-specific extras.
+  **Why:** Round-tripping through other real apps is the point.
+  *Detail:* Flags, checklists, and after-completion repeats must survive the
+  SwiftClaw-to-SwiftClaw trip; mixed event/task files must not cross-import.
+- **H-REM-004 — Reminder alerts.**
+  **Do:** Set timed and date-only reminders (including across a DST-change
+  date), wait for the alerts, tap them, and try edits, completion, deletion,
+  and toggles.
+  **Why:** Real alert delivery happens on the OS's clock.
+  *Detail:* Delivery time and tap routing must be exact. A hidden-list
+  reminder's tap opens its editor directly; tapping a delivered banner after
+  the feature is disabled must do nothing (no stuck navigation).
+- **H-REM-005 — AI review quality.**
+  **Do:** Seed undated, overdue, and this-week reminders, run a review, and
+  read it.
+  **Why:** Prioritization quality and restraint are judgment.
+  *Detail:* The no-result case must be handled, failures must retry, and
+  manual runs must bypass suppression.
+- **H-REM-006 — Scheduled AI loop.**
+  **Do:** Try manual-only, 6-hour, 12-hour, and daily review settings over
+  real time.
+  **Why:** Scheduling plays out over hours/days.
+  *Detail:* An unread prior review, no pending work, or unchanged work should
+  suppress a scheduled pass; meaningful changes should produce one.
+- **H-REM-007 — Recurrence semantics.**
+  **Do:** Live with real repeating tasks for a bit: complete early, complete
+  late, skip, undo, and let a limited-count series run out.
+  **Why:** Whether the behavior matches what the wording *promised* is a
+  human judgment over real usage.
+  *Detail:* History should match the language shown in the UI.
 
 ### Notes
 
-- **H-NOTE-001 — External vault interoperability.** Connect a disposable folder
-  containing Markdown notes and Obsidian metadata. Add, edit, rename, and remove
-  notes from another editor. SwiftClaw must reconcile the visible catalog while
-  leaving dotfiles, `.obsidian/`, non-Markdown files, and symlinks untouched.
-- **H-NOTE-002 — Concurrent-edit safety.** Edit the same note in SwiftClaw and an
-  external editor. The non-modal choice must explain Keep Mine and Take Theirs.
-  Keep Mine must preserve the external version and create exactly one clearly
-  surfaced conflict copy containing the SwiftClaw edits; Take Theirs must discard
-  the local buffer without creating a copy. If the file is deleted externally
-  while SwiftClaw has unsaved text, that text must remain visible and the deleted
-  path must not be silently recreated.
-- **H-NOTE-003 — External-vault permission recovery.** Disconnect or revoke access
-  while a note has unsaved edits, then restore access. The editor must keep the
-  text readable and selected, explain the save failure, and save successfully on
-  retry without requiring a relaunch.
-- **H-NOTE-004 — Hybrid search quality.** Search exact terms, punctuation-heavy
-  text, headings, and paraphrases across a representative vault. Results must
-  open the right note, show useful heading/snippet context, and remain useful
-  with embeddings disabled or unavailable.
-- **H-NOTE-005 — Link graph and backlinks.** Exercise direct, aliased, heading,
-  unresolved, and code-fenced wikilinks. Backlinks and broken-link reporting must
-  follow Obsidian-style resolution without treating fenced examples as links.
-- **H-NOTE-006 — Quick switcher ranking.** Use Command-O with exact, prefix,
-  subsequence, path, and no-match queries. Ranking and highlighted matches should
-  feel predictable, and choosing a result must select that note.
-- **H-NOTE-007 — Vault health and rebuild.** Create broken links and conflict
-  copies, toggle embeddings, and rebuild the index. Banner and Settings details
-  must agree, explain degraded search clearly, and recover after a rebuild.
-- **H-NOTE-008 — AI read tools end to end.** With a disposable configured vault,
-  ask a real chat what the notes say about a distinctive topic. The answer must
-  use Search Notes and Read Note as needed, cite the correct relative note and
-  heading, preserve verbatim content when requested, and clearly disclose any
-  truncation. Disable Notes and confirm neither tool remains available to chat.
-- **H-NOTE-009 — AI note proposal quality and safety.** With a disposable vault
-  and configured model, ask for a note edit and a new note. The assistant should
-  summarize the intended change clearly and produce a focused proposal instead
-  of changing files immediately. Approve one proposal, reject another, and alter
-  a target externally before approval; only the approved unchanged target may be
-  written, while the stale proposal must explain that it was not applied.
-- **H-NOTE-010 — Notes review judgment.** With a representative disposable
-  vault, run manual and scheduled Notes reviews through a configured model.
-  Selection and summaries must stay restrained and read-only while usefully
-  surfacing unchecked daily-note work, conflict copies, broken links, recent
-  notes that need follow-up, and degraded index health.
-- **H-NOTE-011 — Scale and large-note usability.** Generate 5,000 varied notes
-  in an owned temporary vault and confirm initial indexing finishes within 30
-  seconds on the supported test Mac. Exact, middle/late-corpus, and no-result
-  searches should remain responsive. Open and edit a 1 MiB Markdown note;
-  typing, selection, autosave, and VoiceOver must remain usable even when syntax
-  styling is capped, with no source changes beyond what was typed.
-- **H-NOTE-012 — Revision recovery safety.** Edit a note through several saved
-  versions, understand the timestamps/previews in Revisions, and restore an old
-  version. The current note must remain byte-for-byte unchanged; the old content
-  must appear in one clearly named sibling conflict copy that can be compared
-  and merged manually.
+- **H-NOTE-001 — External vault interoperability.**
+  **Do:** Connect a throwaway folder of Markdown notes (with Obsidian
+  metadata), then add/edit/rename/remove notes from another editor.
+  **Why:** Real interop with another app (Obsidian) needs that app.
+  *Detail:* SwiftClaw must reconcile the visible note list while leaving
+  dotfiles, `.obsidian/`, non-Markdown files, and symlinks untouched.
+- **H-NOTE-002 — Concurrent-edit safety.**
+  **Do:** Edit the same note in SwiftClaw and another editor at once; try Keep
+  Mine, Take Theirs, and deleting the file externally while SwiftClaw has
+  unsaved text.
+  **Why:** This is data-safety judgment with a real second editor — the one
+  place you can lose writing.
+  *Detail:* Keep Mine preserves the external version and creates exactly one
+  clearly surfaced conflict copy of your SwiftClaw edits; Take Theirs discards
+  the local buffer with no copy. Externally deleted + unsaved text: the text
+  stays visible and the path isn't silently recreated.
+- **H-NOTE-003 — External-vault permission recovery.**
+  **Do:** Revoke or disconnect vault access while a note has unsaved edits,
+  then restore access and retry the save.
+  **Why:** OS file-permission revocation is a real-system action.
+  *Detail:* The editor must keep your text readable and selected, explain the
+  save failure, and save on retry without a relaunch.
+- **H-NOTE-004 — Hybrid search quality.**
+  **Do:** Search a realistic vault with exact terms, punctuation-heavy text,
+  headings, and reworded paraphrases.
+  **Why:** "Did it find the right note?" is relevance judgment.
+  *Detail:* Results must open the right note with useful heading/snippet
+  context, and stay useful with embeddings disabled or unavailable.
+- **H-NOTE-005 — Link graph and backlinks.**
+  **Do:** Create direct, aliased, heading, unresolved, and inside-code-fence
+  wikilinks, then check backlinks and broken-link reports.
+  **Why:** Whether resolution matches Obsidian's behavior is a comparison a
+  person makes.
+  *Detail:* Fenced code examples must not be treated as links.
+- **H-NOTE-006 — Quick switcher ranking.**
+  **Do:** Use Command-O with exact, prefix, scattered-letters, path, and
+  no-match queries.
+  **Why:** Whether ranking "feels predictable" is subjective.
+  *Detail:* Highlighted matches should make sense and choosing a result must
+  select that note.
+- **H-NOTE-007 — Vault health and rebuild.**
+  **Do:** Create broken links and conflict copies, toggle embeddings, and
+  rebuild the index; read the banner and Settings details.
+  **Why:** Whether the degraded-search explanation is *clear* is a
+  readability judgment.
+  *Detail:* Banner and Settings must agree and recover after a rebuild.
+- **H-NOTE-008 — AI read tools end to end.**
+  **Do:** With a throwaway vault connected, ask a chat what your notes say
+  about a distinctive topic. Then disable Notes and ask again.
+  **Why:** Judging answer accuracy against what the notes really say is
+  human work.
+  *Detail:* The answer must use Search Notes / Read Note, cite the correct
+  note and heading, preserve verbatim content when asked, and disclose
+  truncation. After disabling Notes, neither tool may remain available.
+- **H-NOTE-009 — AI note proposal quality and safety.**
+  **Do:** Ask the AI to edit a note and to create one. Approve one proposal,
+  reject the other, and change one target file externally before approving.
+  **Why:** AI writing to your files is the highest-stakes flow — approval
+  safety needs a human.
+  *Detail:* The AI should propose, not write immediately. Only an approved,
+  unchanged target may be written; a stale proposal must say it wasn't
+  applied.
+- **H-NOTE-010 — Notes review judgment.**
+  **Do:** Run manual and scheduled Notes reviews on a realistic throwaway
+  vault and read the results.
+  **Why:** Usefulness and restraint are judgment.
+  *Detail:* Reviews stay read-only and should surface unchecked daily-note
+  tasks, conflict copies, broken links, notes needing follow-up, and degraded
+  index health.
+- **H-NOTE-011 — Scale and large-note usability.**
+  **Do:** Generate 5,000 varied notes in a temporary vault, time the initial
+  indexing, run searches, then open and edit a 1 MiB note.
+  **Why:** "Does it *feel* responsive?" under load is experienced, not
+  asserted.
+  *Detail:* Indexing should finish within 30 seconds on the supported test
+  Mac. Typing, selection, autosave, and VoiceOver must stay usable in the
+  big note (styling may be capped), with no source changes beyond what you
+  typed.
+- **H-NOTE-012 — Revision recovery safety.**
+  **Do:** Save a note several times, open Revisions, make sense of the
+  timestamps/previews, and restore an old version.
+  **Why:** Restore must never destroy current work — a data-safety check.
+  *Detail:* The current note stays byte-for-byte unchanged; the old content
+  appears as one clearly named sibling conflict copy you can merge by hand.
 
 ### Memory
 
-- **H-MEM-001 — Autonomous capture judgment.** With Memory enabled and a
-  configured model, share durable preferences in normal chats and judge what
-  the assistant chooses to save: facts should be atomic and short, filed into
-  sensible collections (Inbox when uncertain, never a wrong home), each save
-  disclosed with a chip, and trivial one-off statements should not be saved.
-- **H-MEM-002 — Asks-first flow quality.** With an asks-first collection,
-  ask the assistant to remember something belonging there. Judge the proposal
-  card's clarity (entry text, target, reason), the Edit sheet's wording flow,
-  and that dismissed proposals are not re-proposed in later conversations.
-- **H-MEM-003 — Review-run proposal restraint.** Over several days of email/
-  calendar/reminders/notes reviews with representative data, confirm
-  `propose_memory` suggestions are rare (cap two per run), genuinely durable
+- **H-MEM-001 — Autonomous capture judgment.**
+  **Do:** Chat normally and mention lasting preferences; watch what the
+  assistant decides to save to Memory.
+  **Why:** Whether it saved the *right* things (and skipped trivia) is
+  judgment.
+  *Detail:* Saved facts should be short and single-purpose, filed into
+  sensible collections (Inbox when unsure, never a wrong home), each save
+  disclosed with a chip. One-off statements should not be saved.
+- **H-MEM-002 — Asks-first flow quality.**
+  **Do:** With an "AI asks first" collection, ask the assistant to remember
+  something that belongs there, and try the proposal card and Edit sheet.
+  **Why:** Clarity of the proposal wording is a readability judgment.
+  *Detail:* The card must show entry text, target, and reason; dismissed
+  proposals must not come back in later conversations.
+- **H-MEM-003 — Review-run proposal restraint.**
+  **Do:** Over several days of normal email/calendar/reminders/notes reviews,
+  watch how often memory suggestions appear and decline some.
+  **Why:** Restraint over days of real data can only be observed by living
+  with it.
+  *Detail:* Suggestions should be rare (max two per run), genuinely durable
   patterns, land in the run's review chat or a Memory suggestions chat, and
-  that declined suggestions stop reappearing.
-- **H-MEM-004 — Recall usefulness.** With a seeded store, confirm the
-  assistant naturally applies stored facts in chats without being reminded,
-  including scoped collections during feature discussions, and never recites
-  entry handles to the user.
-- **H-MEM-005 — Accessibility pass.** VoiceOver across collection rows
-  (access description spoken), entry rows, chip and proposal cards, editor
-  sheets, and confirmation dialogs. Badge meaning must never rely on color.
+  declined ones stop reappearing.
+- **H-MEM-004 — Recall usefulness.**
+  **Do:** With facts already stored, chat normally and see whether the
+  assistant uses them without being reminded.
+  **Why:** "Did it apply my facts naturally?" is judgment.
+  *Detail:* Includes scoped collections during feature discussions; it must
+  never recite internal entry handles at you.
+- **H-MEM-005 — Accessibility pass.**
+  **Do:** VoiceOver through Memory: collection rows, entry rows, chip and
+  proposal cards, editor sheets, and confirmation dialogs.
+  **Why:** Whether spoken output makes sense is a human check.
+  *Detail:* The access-level description must be spoken, and badge meaning
+  must never rely on color alone.
 
 ### Settings
 
-- **H-SET-001 — Theme quality and propagation.** Judge System/Light/Dark and
-  quote-accent contrast in both windows. System must follow a live macOS
-  appearance change, and Reset must restore a readable default.
-- **H-SET-002 — Persona end to end.** Confirm detected and overridden name/avatar
-  look right on Home and in chats. A valid replacement, reset, and invalid image
-  error must all be understandable.
-- **H-SET-003 — Assistant personality end to end.** Compare Focused, Clear, Deep,
-  Playful, Warm, and a custom prompt using the same real request. Preview and
-  response should match the choice; whitespace-only custom input must be safe.
-- **H-SET-004 — Provider integrations.** For each provider Ember uses, verify
-  credential persistence/rotation, model discovery, a real completion, reasoning
-  behavior, and removal. Use disposable keys where possible.
-- **H-SET-005 — Brave Search configuration.** Confirm Ready/Needs Setup state,
-  a real cited search, Investigation dependency, and expected behavior at the
-  configured request rate. *(Requires a Brave key.)*
-- **H-SET-006 — Settings layout quality.** At minimum and common window sizes,
-  judge sidebar, forms, provider disclosures, long personality prompts, and
-  Back/Forward controls for clipping and usability.
+- **H-SET-001 — Theme quality and propagation.**
+  **Do:** Try System/Light/Dark in both windows, flip macOS appearance while
+  on System, and hit Reset.
+  **Why:** Contrast and readability are eyeball checks; the live macOS
+  appearance flip is a real-OS action.
+  *Detail:* Check quote-accent contrast; Reset must restore a readable
+  default.
+- **H-SET-002 — Persona end to end.**
+  **Do:** Check your detected name/avatar on Home and in chats, then override
+  them, reset, and try an invalid image.
+  **Why:** "Does it look right?" and error-message clarity are judgment.
+  *Detail:* Replacement, reset, and the invalid-image error must all be
+  understandable.
+- **H-SET-003 — Assistant personality end to end.**
+  **Do:** Ask the same real question under Focused, Clear, Deep, Playful,
+  Warm, and a custom prompt.
+  **Why:** Whether the tone actually matches the setting is judgment.
+  *Detail:* Preview and response should match the choice; a whitespace-only
+  custom prompt must be safe.
+- **H-SET-004 — Provider integrations.**
+  **Do:** For each AI provider, add a real key, confirm models appear, run a
+  real completion (and reasoning), rotate the key, and remove it.
+  **Why:** Real API keys and live provider calls can't go in automation.
+  *Detail:* Credentials must persist and rotate correctly. Use disposable
+  keys where possible.
+- **H-SET-005 — Brave Search configuration.**
+  **Do:** Configure a Brave key, run a real cited search, and check the
+  Ready/Needs Setup state and Investigation dependency.
+  **Why:** Needs a live key and live search traffic.
+  *Detail:* Behavior at the configured request rate should match
+  expectations.
+- **H-SET-006 — Settings layout quality.**
+  **Do:** Resize Settings down to minimum and through common sizes and look
+  everything over.
+  **Why:** Clipping and cramped layout are eyeball checks.
+  *Detail:* Check the sidebar, forms, provider disclosures, long personality
+  prompts, and Back/Forward controls.
 
 ## Computer Use Testing
 

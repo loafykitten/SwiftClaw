@@ -283,7 +283,7 @@ struct ICSRoundTripTests {
         let master = try #require(repository.event(withExternalIdentifier: "series-1"))
         #expect(master.title == "Standup")
         #expect(master.recurrenceRuleString == "FREQ=WEEKLY;COUNT=3")
-        #expect(master.recurrenceEndDate == Self.date(2026, 6, 15, 15))
+        #expect(master.recurrenceEndDate == Self.date(2026, 6, 15, 16))
         // The overridden occurrence is masked on the master…
         #expect(RecurrenceExpander.isException(Self.date(2026, 6, 8, 15), exceptionDates: master.exceptionDates))
 
