@@ -47,6 +47,15 @@ struct NoteLinkGraphTests {
         #expect(broken[0].pagePath == "Duplicate")
     }
 
+    @Test func ambiguousNormalizedExactPathStaysUnresolved() async throws {
+        let graph = try NoteLinkGraph(path: ":memory:")
+        try await graph.replaceLinksAndTags(forNote: "Page.md", links: [], tags: [])
+        try await graph.replaceLinksAndTags(forNote: "page.md", links: [], tags: [])
+        try await graph.replaceLinksAndTags(forNote: "Source.md", links: [link(to: "PAGE")], tags: [])
+
+        #expect(try await graph.links(forSource: "Source.md").first?.resolvedPath == nil)
+    }
+
     @Test func backlinksReturnEveryLinkResolvingToTheTargetNote() async throws {
         let graph = try NoteLinkGraph(path: ":memory:")
         try await graph.replaceLinksAndTags(forNote: "Hub.md", links: [], tags: [])

@@ -93,6 +93,26 @@ struct SearchIndexTests {
         #expect(hits.map(\.chunk.id) == [chunks[0].id])
     }
 
+    @Test func vectorSearchReturnsOnlyTheBestTopKWithStableTieOrdering() async throws {
+        let index = try SearchIndex(path: ":memory:")
+        let documentID = try await index.upsert(
+            document: makeDocument(),
+            chunks: makeChunks("first", "second", "third", "fourth")
+        )
+        let chunks = try await index.chunks(forDocumentID: documentID)
+        try await index.upsertEmbedding(chunkID: chunks[0].id, modelID: "stub", vector: [1, 0])
+        try await index.upsertEmbedding(chunkID: chunks[1].id, modelID: "stub", vector: [1, 0])
+        try await index.upsertEmbedding(chunkID: chunks[2].id, modelID: "stub", vector: [0.8, 0.2])
+        try await index.upsertEmbedding(chunkID: chunks[3].id, modelID: "stub", vector: [0, 1])
+
+        let hits = try await index.vectorSearch(
+            queryVector: [1, 0], modelID: "stub", limit: 2, minimumSimilarity: -1
+        )
+
+        #expect(hits.map(\.chunk.id) == [chunks[0].id, chunks[1].id])
+        #expect(hits.map(\.chunk.content) == ["first", "second"])
+    }
+
     @Test func ftsSearchReturnsMatchContextSnippet() async throws {
         let index = try SearchIndex(path: ":memory:")
         let preface = Array(repeating: "introductory", count: 80).joined(separator: " ")

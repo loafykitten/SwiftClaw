@@ -99,6 +99,11 @@ actor SearchIndex {
         let similarity: Double
     }
 
+    private struct ScoredChunk: Sendable {
+        let chunkID: Int64
+        let similarity: Double
+    }
+
     struct Health: Sendable, Equatable {
         let schemaVersion: Int32
         let ftsAvailable: Bool
@@ -244,29 +249,49 @@ actor SearchIndex {
         minimumSimilarity: Double = defaultMinimumCosineSimilarity
     ) async throws -> [VectorHit] {
         try await ensureSchema()
-        guard !queryVector.isEmpty else { return [] }
-        let rows = try await database.query(
+        guard !queryVector.isEmpty, limit > 0 else { return [] }
+        let winners = try await database.queryTopK(
             """
-            SELECT e.dim, e.vector,
-                   c.id, c.document_id, c.ordinal, c.heading_path, c.byte_start, c.byte_end, c.content,
-                   d.id, d.source_type, d.source_id, d.title, d.uri, d.content_hash, d.updated_at
+            SELECT e.dim, e.vector, e.chunk_id
             FROM embeddings e
-            JOIN chunks c ON c.id = e.chunk_id
-            JOIN documents d ON d.id = c.document_id
             WHERE e.model_id = ?;
             """,
-            params: [.text(modelID)]
+            params: [.text(modelID)],
+            limit: limit,
+            transform: { row in
+                guard let candidate = try Self.decodeScoredChunk(row, queryVector: queryVector),
+                      candidate.similarity >= minimumSimilarity
+                else { return nil }
+                return candidate
+            },
+            isOrderedBefore: Self.isBetter
         )
-        var scored: [(hit: VectorHit, similarity: Double)] = []
-        for row in rows {
-            guard let scoredHit = try Self.decodeVectorHit(row, queryVector: queryVector) else { continue }
-            guard scoredHit.similarity >= minimumSimilarity else { continue }
-            scored.append((scoredHit, scoredHit.similarity))
+
+        guard !winners.isEmpty else { return [] }
+        let placeholders = Array(repeating: "?", count: winners.count).joined(separator: ", ")
+        let hydratedRows = try await database.query(
+            """
+            SELECT c.id, c.document_id, c.ordinal, c.heading_path, c.byte_start, c.byte_end, c.content,
+                   d.id, d.source_type, d.source_id, d.title, d.uri, d.content_hash, d.updated_at
+            FROM chunks c
+            JOIN documents d ON d.id = c.document_id
+            WHERE c.id IN (\(placeholders));
+            """,
+            params: winners.map { .integer($0.chunkID) }
+        )
+        let similarities = Dictionary(uniqueKeysWithValues: winners.map { ($0.chunkID, $0.similarity) })
+        var hits = try hydratedRows.map { row -> VectorHit in
+            guard let chunkID = Self.int64(row[0]), let similarity = similarities[chunkID] else {
+                throw IndexError.malformedRow
+            }
+            return try Self.decodeVectorHit(row, similarity: similarity)
         }
-        scored.sort { lhs, rhs in
-            lhs.similarity != rhs.similarity ? lhs.similarity > rhs.similarity : lhs.hit.chunk.id < rhs.hit.chunk.id
+        hits.sort {
+            $0.similarity != $1.similarity
+                ? $0.similarity > $1.similarity
+                : $0.chunk.id < $1.chunk.id
         }
-        return scored.prefix(limit).map(\.hit)
+        return hits
     }
 
     /// Wipes all documents/chunks/embeddings (and, via triggers, FTS rows)
@@ -484,20 +509,32 @@ actor SearchIndex {
         return FTSHit(document: document, chunk: chunk, rank: rank, snippet: snippet)
     }
 
-    private static func decodeVectorHit(_ row: [SQLiteValue], queryVector: [Float]) throws -> VectorHit? {
-        guard row.count == 16,
-              let dim = int64(row[0]), let vectorBlob = blob(row[1]),
-              let chunkID = int64(row[2]), let documentID = int64(row[3]), let ordinal = int64(row[4]),
-              let headingPath = string(row[5]), let byteStart = int64(row[6]), let byteEnd = int64(row[7]),
-              let content = string(row[8]), let docID = int64(row[9]), let sourceType = string(row[10]),
-              let sourceID = string(row[11]), let title = string(row[12]), let uri = string(row[13]),
-              let contentHash = string(row[14]), let updatedAt = double(row[15])
+    private static func decodeScoredChunk(_ row: [SQLiteValue], queryVector: [Float]) throws -> ScoredChunk? {
+        guard row.count == 3,
+              let dim = int64(row[0]), let vectorBlob = blob(row[1]), let chunkID = int64(row[2])
         else {
             throw IndexError.malformedRow
         }
         guard Int(dim) == queryVector.count else { return nil }
         let vector = decode(vectorBlob)
         guard vector.count == queryVector.count else { return nil }
+        return ScoredChunk(chunkID: chunkID, similarity: cosineSimilarity(queryVector, vector))
+    }
+
+    private static func isBetter(_ lhs: ScoredChunk, _ rhs: ScoredChunk) -> Bool {
+        lhs.similarity != rhs.similarity ? lhs.similarity > rhs.similarity : lhs.chunkID < rhs.chunkID
+    }
+
+    private static func decodeVectorHit(_ row: [SQLiteValue], similarity: Double) throws -> VectorHit {
+        guard row.count == 14,
+              let chunkID = int64(row[0]), let documentID = int64(row[1]), let ordinal = int64(row[2]),
+              let headingPath = string(row[3]), let byteStart = int64(row[4]), let byteEnd = int64(row[5]),
+              let content = string(row[6]), let docID = int64(row[7]), let sourceType = string(row[8]),
+              let sourceID = string(row[9]), let title = string(row[10]), let uri = string(row[11]),
+              let contentHash = string(row[12]), let updatedAt = double(row[13])
+        else {
+            throw IndexError.malformedRow
+        }
         let chunk = Chunk(
             id: chunkID, documentID: documentID, ordinal: Int(ordinal), headingPath: headingPath,
             byteStart: Int(byteStart), byteEnd: Int(byteEnd), content: content
@@ -506,7 +543,7 @@ actor SearchIndex {
             id: docID, sourceType: sourceType, sourceID: sourceID, title: title, uri: uri,
             contentHash: contentHash, updatedAt: Date(timeIntervalSince1970: updatedAt)
         )
-        return VectorHit(document: document, chunk: chunk, similarity: cosineSimilarity(queryVector, vector))
+        return VectorHit(document: document, chunk: chunk, similarity: similarity)
     }
 
     private static func int64(_ value: SQLiteValue) -> Int64? {

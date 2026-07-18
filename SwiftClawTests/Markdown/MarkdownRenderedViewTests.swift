@@ -11,6 +11,18 @@ import Markdown
 /// view tree, per the small-testable-helper preference over a UI snapshot
 /// dependency.
 struct MarkdownRenderedViewTests {
+    @MainActor
+    @Test func renderModelCacheUsesExactSourceContentAsItsInvalidationKey() {
+        let first = MarkdownRenderModelCache.shared.model(for: "# One")
+        let repeated = MarkdownRenderModelCache.shared.model(for: "# One")
+        let changed = MarkdownRenderModelCache.shared.model(for: "# Two")
+
+        #expect(first.blocks.map(\.id) == repeated.blocks.map(\.id))
+        #expect(first.source == repeated.source)
+        #expect(changed.source != first.source)
+        #expect(changed.blocks.map(\.id) != first.blocks.map(\.id))
+    }
+
     @Test func bodyReturnsTheSourceUnchangedWhenThereIsNoFrontMatter() {
         let source = "# Title\n\nSome body text.\n"
         #expect(MarkdownRenderedView.body(of: source) == source)

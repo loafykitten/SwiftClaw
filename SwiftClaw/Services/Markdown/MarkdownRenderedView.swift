@@ -1,5 +1,51 @@
+import Foundation
 import SwiftUI
 import Markdown
+
+struct MarkdownRenderModel {
+    struct Block: Identifiable {
+        let id = UUID()
+        let markup: BlockMarkup
+    }
+
+    let source: String
+    let blocks: [Block]
+
+    init(source: String) {
+        self.source = source
+        blocks = Document(parsing: MarkdownRenderedView.body(of: source), options: [])
+            .blockChildren
+            .map { Block(markup: $0) }
+    }
+}
+
+@MainActor
+final class MarkdownRenderModelCache {
+    static let shared = MarkdownRenderModelCache()
+
+    private final class Entry {
+        let model: MarkdownRenderModel
+        init(model: MarkdownRenderModel) { self.model = model }
+    }
+
+    private let cache = NSCache<NSString, Entry>()
+
+    private init() {
+        cache.totalCostLimit = 8 * 1024 * 1024
+    }
+
+    func model(for source: String) -> MarkdownRenderModel {
+        let key = source as NSString
+        if let cached = cache.object(forKey: key) {
+            return cached.model
+        }
+        // Exact source content is the invalidation key: any edit misses this
+        // entry and produces a new immutable parse model.
+        let model = MarkdownRenderModel(source: source)
+        cache.setObject(Entry(model: model), forKey: key, cost: source.utf8.count)
+        return model
+    }
+}
 
 /// SwiftUI reading-mode rendering for a markdown source string, shared
 /// across features (not a Notes type). Covers headings, paragraphs,
@@ -25,10 +71,15 @@ struct MarkdownRenderedView: View {
     var loadImage: ((String) async -> PlatformImage?)?
 
     var body: some View {
-        let blocks = Array(Document(parsing: Self.body(of: source), options: []).blockChildren)
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                MarkdownBlockView(block: block, onWikilinkTap: onWikilinkTap, imageLoadScope: imageLoadScope, loadImage: loadImage)
+        let renderModel = MarkdownRenderModelCache.shared.model(for: source)
+        LazyVStack(alignment: .leading, spacing: 12) {
+            ForEach(renderModel.blocks) { block in
+                MarkdownBlockView(
+                    block: block.markup,
+                    onWikilinkTap: onWikilinkTap,
+                    imageLoadScope: imageLoadScope,
+                    loadImage: loadImage
+                )
             }
         }
         .textSelection(.enabled)

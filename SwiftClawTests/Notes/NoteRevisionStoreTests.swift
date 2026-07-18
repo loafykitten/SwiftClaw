@@ -44,8 +44,9 @@ struct NoteRevisionStoreTests {
 
         let all = try await store.revisions(forKey: "note.md")
         #expect(all.count == 1)
-        #expect(all.first?.content == "hello world")
+        #expect(all.first?.preview == "hello world")
         #expect(all.first?.id == revision.id)
+        #expect(try await store.revision(forKey: "note.md", id: revision.id)?.content == "hello world")
     }
 
     @Test func revisionsAreKeyedIndependently() async throws {
@@ -58,8 +59,8 @@ struct NoteRevisionStoreTests {
 
         let aRevisions = try await store.revisions(forKey: "a.md")
         let bRevisions = try await store.revisions(forKey: "b.md")
-        #expect(aRevisions.map(\.content) == ["a content"])
-        #expect(bRevisions.map(\.content) == ["b content"])
+        #expect(aRevisions.map(\.preview) == ["a content"])
+        #expect(bRevisions.map(\.preview) == ["b content"])
     }
 
     @Test func revisionsAreOrderedNewestFirst() async throws {
@@ -77,7 +78,7 @@ struct NoteRevisionStoreTests {
         _ = try await store.snapshot(key: "note.md", content: "third")
 
         let revisions = try await store.revisions(forKey: "note.md")
-        #expect(revisions.map(\.content) == ["third", "second", "first"])
+        #expect(revisions.map(\.preview) == ["third", "second", "first"])
     }
 
     @Test func prunesToAtMostFiftyRevisionsPerKey() async throws {
@@ -97,8 +98,8 @@ struct NoteRevisionStoreTests {
         let revisions = try await store.revisions(forKey: "note.md")
         #expect(revisions.count == NoteRevisionStore.maxRevisionsPerKey)
         // The 10 oldest (0...9) should have been pruned; the newest survives.
-        #expect(revisions.first?.content == "revision 59")
-        #expect(!revisions.contains { $0.content == "revision 0" })
+        #expect(revisions.first?.preview == "revision 59")
+        #expect(!revisions.contains { $0.preview == "revision 0" })
     }
 
     @Test func prunesRevisionsOlderThanThirtyDays() async throws {
@@ -127,6 +128,21 @@ struct NoteRevisionStoreTests {
         _ = try await laterStore.snapshot(key: "note.md", content: "fresh")
 
         let revisions = try await laterStore.revisions(forKey: "note.md")
-        #expect(revisions.map(\.content) == ["fresh"])
+        #expect(revisions.map(\.preview) == ["fresh"])
+    }
+
+    @Test func listingReadsOnlyABoundedPreviewWhileRestoreLoadsTheFullSnapshot() async throws {
+        let directory = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = NoteRevisionStore(directory: directory)
+        let content = String(repeating: "x", count: NoteRevisionStore.maxPreviewReadBytes * 2)
+        let revision = try await store.snapshot(key: "large.md", content: content)
+
+        let metadata = try #require(try await store.revisions(forKey: "large.md").first)
+        #expect(metadata.preview.count == NoteRevisionPreview.maxCharacterCount + 1)
+        #expect(metadata.preview.hasSuffix("…"))
+
+        let restored = try #require(try await store.revision(forKey: "large.md", id: revision.id))
+        #expect(restored.content == content)
     }
 }

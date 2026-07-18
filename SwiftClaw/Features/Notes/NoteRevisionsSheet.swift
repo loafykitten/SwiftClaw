@@ -8,7 +8,7 @@ struct NoteRevisionsSheet: View {
     let model: NotesFeatureModel
     let onDismiss: () -> Void
 
-    @State private var revisions: [NoteRevision] = []
+    @State private var revisions: [NoteRevisionMetadata] = []
     @State private var isLoading = true
     @State private var loadError: NotesError?
     @State private var actionError: NotesError?
@@ -99,17 +99,16 @@ struct NoteRevisionsSheet: View {
         }
     }
 
-    private func revisionPreviewRow(_ revision: NoteRevision) -> some View {
-        let preview = Self.preview(for: revision.content)
-        return Text(preview)
+    private func revisionPreviewRow(_ revision: NoteRevisionMetadata) -> some View {
+        Text(revision.preview)
             .font(.body.monospaced())
             .foregroundStyle(.secondary)
             .lineLimit(4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityLabel("Revision preview: \(preview)")
+            .accessibilityLabel("Revision preview: \(revision.preview)")
     }
 
-    private func restoreButton(for revision: NoteRevision) -> some View {
+    private func restoreButton(for revision: NoteRevisionMetadata) -> some View {
         Button {
             Task { await restore(revision) }
         } label: {
@@ -144,7 +143,7 @@ struct NoteRevisionsSheet: View {
         isLoading = false
     }
 
-    private func restore(_ revision: NoteRevision) async {
+    private func restore(_ revision: NoteRevisionMetadata) async {
         guard restoringRevisionID == nil else { return }
         restoringRevisionID = revision.id
         actionError = nil
@@ -163,13 +162,6 @@ struct NoteRevisionsSheet: View {
     }
 
     static func preview(for content: String) -> String {
-        var previewContent = content
-        if let frontMatter = FrontMatterBlock(source: content) {
-            previewContent = String(content[frontMatter.range.upperBound...])
-        }
-        let normalized = previewContent.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return "Empty note" }
-        let prefix = String(normalized.prefix(240))
-        return prefix.count == normalized.count ? prefix : prefix + "…"
+        NoteRevisionPreview.make(from: content)
     }
 }

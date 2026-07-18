@@ -114,6 +114,40 @@ actor SQLiteDatabase {
         return rows
     }
 
+    /// Steps a result set one row at a time while retaining only its best
+    /// `limit` transformed values. This is the backpressure-aware streaming
+    /// path for queries whose full result set must not be materialized.
+    func queryTopK<Result: Sendable>(
+        _ sql: String,
+        params: [SQLiteValue] = [],
+        limit: Int,
+        transform: @Sendable ([SQLiteValue]) throws -> Result?,
+        isOrderedBefore: @Sendable (Result, Result) -> Bool
+    ) throws -> [Result] {
+        guard limit > 0 else { return [] }
+        let statement = try prepared(for: sql)
+        defer { sqlite3_reset(statement) }
+        try bind(params, to: statement)
+        var winners: [Result] = []
+        winners.reserveCapacity(limit)
+        while true {
+            let result = sqlite3_step(statement)
+            if result == SQLITE_ROW {
+                guard let candidate = try transform(readRow(statement)) else { continue }
+                let insertionIndex = winners.firstIndex { isOrderedBefore(candidate, $0) } ?? winners.endIndex
+                guard winners.count < limit || insertionIndex < winners.endIndex else { continue }
+                winners.insert(candidate, at: insertionIndex)
+                if winners.count > limit {
+                    winners.removeLast()
+                }
+            } else if result == SQLITE_DONE {
+                return winners
+            } else {
+                throw DatabaseError.stepFailed(lastErrorMessage())
+            }
+        }
+    }
+
     /// The `user_version` pragma — the migration cursor. `SearchIndex` reads
     /// this to decide which versioned DDL still needs to run.
     func currentUserVersion() throws -> Int32 {

@@ -69,6 +69,14 @@ actor VaultReconciler {
         }
     }
 
+    /// Seeds the baseline from a catalog loaded while filesystem monitoring
+    /// was already active. Callers that cannot establish monitoring must use
+    /// `rescanNow()` instead so an external edit cannot fall into an unwatched
+    /// load-to-prime window.
+    func primeKnownState(with entries: [VaultEntry]) {
+        knownState = Dictionary(uniqueKeysWithValues: entries.map { ($0.relativePath, $0.sha256) })
+    }
+
     func stop() {
         eventConsumerTask?.cancel()
         eventConsumerTask = nil

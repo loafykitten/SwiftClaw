@@ -162,8 +162,9 @@ final class NotesFeatureModel {
         activeCount += 1
         guard !ProcessInfo.processInfo.isRunningInPreview else { return }
 
+        let wasAlreadyConfigured = repository != nil
         await ensureConfigurationBootstrapped(skipIfDisabled: false)
-        if repository != nil {
+        if wasAlreadyConfigured, repository != nil {
             await reconciler?.rescanNow()
         }
         startPeriodicRescanIfNeeded()
@@ -414,6 +415,11 @@ final class NotesFeatureModel {
             fileManager: FileManager()
         )
         let repository = NotesRepository(vault: vault, revisionStore: revisionStore)
+        // Monitoring starts before catalog hydration. That makes the loaded
+        // catalog safe to use as the reconciler baseline: edits during the
+        // load are buffered as events instead of disappearing in a prime
+        // window.
+        let monitoring = watchStream(root: root, location: location)
         await repository.reload()
         if let error = repository.lastError {
             Self.logger.error("reload reported \(String(describing: error))")
@@ -465,7 +471,7 @@ final class NotesFeatureModel {
         self.currentLocation = location
         self.currentRootURL = root
 
-        await reconciler.start(events: watchStream(root: root, location: location)) { [weak self] delta in
+        await reconciler.start(events: monitoring.events) { [weak self] delta in
             await self?.handle(delta: delta, fromConfigurationGeneration: generation)
         }
         do {
@@ -478,7 +484,17 @@ final class NotesFeatureModel {
             throw error
         }
 
-        await reconciler.rescanNow()
+        if monitoring.isActive {
+            await reconciler.primeKnownState(
+                with: repository.notes.map {
+                    VaultReconciler.VaultEntry(relativePath: $0.relativePath, sha256: $0.sha256)
+                }
+            )
+        } else {
+            // iOS and a macOS external vault whose security scope could not
+            // be monitored must scan rather than prime from an unwatched load.
+            await reconciler.rescanNow()
+        }
         do {
             try checkConfigurationCurrent(generation: generation)
         } catch {
@@ -488,15 +504,9 @@ final class NotesFeatureModel {
 
         startActivationObserver()
 
-        // Existing notes must be searchable immediately, not only after their
-        // next edit. `apply(delta:)`'s per-note content-hash short-circuit
-        // makes replaying the whole catalog as an "added" delta cheap on
-        // every relaunch (not just the very first one) — already-indexed,
-        // unchanged notes are skipped rather than re-chunked/re-embedded.
-        let initialDelta = VaultReconciler.ReconcileDelta(
-            added: repository.notes.map(\.relativePath), modified: [], removed: [], renamedPairs: []
-        )
-        _ = await indexer.apply(delta: initialDelta)
+        // Existing notes must be searchable immediately. Exact catalog hashes
+        // let the indexer skip even the note-file read for unchanged rows.
+        _ = await indexer.syncCatalog(repository.notes)
         do {
             try checkConfigurationCurrent(generation: generation)
         } catch {
@@ -542,16 +552,16 @@ final class NotesFeatureModel {
         return entries
     }
 
-    private func watchStream(root: URL, location: VaultLocation) -> AsyncStream<Void> {
+    private func watchStream(root: URL, location: VaultLocation) -> (events: AsyncStream<Void>, isActive: Bool) {
         #if os(macOS)
         if case .external(let bookmarkKey) = location {
             monitoringScope = try? bookmarkStore.resolve(forKey: bookmarkKey)
-            guard monitoringScope != nil else { return AsyncStream { $0.finish() } }
+            guard monitoringScope != nil else { return (AsyncStream { $0.finish() }, false) }
         }
         let fsMonitor = FSEventStreamMonitor(paths: [root.path])
         monitor = fsMonitor
         let events = fsMonitor.start()
-        return AsyncStream { continuation in
+        let forwarded = AsyncStream<Void> { continuation in
             let forwardTask = Task {
                 for await _ in events {
                     continuation.yield(())
@@ -560,8 +570,9 @@ final class NotesFeatureModel {
             }
             continuation.onTermination = { _ in forwardTask.cancel() }
         }
+        return (forwarded, true)
         #else
-        return AsyncStream { $0.finish() }
+        return (AsyncStream { $0.finish() }, false)
         #endif
     }
 
@@ -715,7 +726,7 @@ final class NotesFeatureModel {
     /// Lists snapshots for a note while holding the configured vault stable.
     /// A settings reset or vault switch waits for this read to finish instead
     /// of letting a stale sheet populate from the prior vault.
-    func revisions(forRelativePath relativePath: String) async throws -> [NoteRevision] {
+    func revisions(forRelativePath relativePath: String) async throws -> [NoteRevisionMetadata] {
         guard configurationState == .configured, let repository else {
             throw NotesError.underlying("The Notes vault is no longer available.")
         }

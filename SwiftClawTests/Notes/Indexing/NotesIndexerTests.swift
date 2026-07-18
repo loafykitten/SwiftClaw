@@ -4,6 +4,7 @@ import Testing
 
 private actor FakeNoteStore {
     private var snapshots: [String: NoteFileSnapshot] = [:]
+    private var reads = 0
 
     func set(_ path: String, content: String, modifiedAt: Date) {
         snapshots[path] = NoteFileSnapshot(relativePath: path, content: content, sha256: Self.hash(content), modifiedAt: modifiedAt)
@@ -14,9 +15,12 @@ private actor FakeNoteStore {
     }
 
     func read(_ path: String) throws -> NoteFileSnapshot {
+        reads += 1
         guard let snapshot = snapshots[path] else { throw TestError.missing }
         return snapshot
     }
+
+    func readCount() -> Int { reads }
 
     func catalog() -> [NoteSummary] {
         snapshots.values.map { NoteSummary(snapshot: $0) }.sorted { $0.relativePath < $1.relativePath }
@@ -88,6 +92,19 @@ struct NotesIndexerTests {
         let secondDocument = try await searchIndex.document(sourceType: NotesIndexer.sourceType, sourceID: "Note.md")
 
         #expect(firstDocument?.updatedAt == secondDocument?.updatedAt)
+    }
+
+    @Test func catalogSyncSkipsReadingAFileWhoseIndexedHashMatchesItsSummary() async throws {
+        let store = FakeNoteStore()
+        await store.set("Note.md", content: "Same content forever.", modifiedAt: Self.epoch)
+        let (indexer, _, _) = try makeIndexer(store: store)
+        await indexer.apply(delta: .init(added: ["Note.md"], modified: [], removed: [], renamedPairs: []))
+        #expect(await store.readCount() == 1)
+
+        let outcome = await indexer.syncCatalog(await store.catalog())
+
+        #expect(outcome.indexed == 1)
+        #expect(await store.readCount() == 1)
     }
 
     @Test func modifiedContentReindexes() async throws {

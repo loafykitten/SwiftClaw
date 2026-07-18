@@ -186,6 +186,18 @@ struct NotesRepositoryTests {
         #expect(Set(names) == ["Ideas.md", "Ideas 2.md", "Ideas 3.md"])
     }
 
+    @Test func createsAndSamePathSavesPreserveCatalogOrder() async throws {
+        let (repository, vaultRoot, _) = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: vaultRoot) }
+        _ = try await repository.create(title: "Note 10")
+        let note2 = try await repository.create(title: "Note 2")
+        _ = try await repository.create(title: "alpha")
+        #expect(repository.notes.map(\.relativePath) == ["alpha.md", "Note 2.md", "Note 10.md"])
+
+        _ = try await repository.save(relativePath: note2.relativePath, content: "updated", expectedHash: note2.sha256)
+        #expect(repository.notes.map(\.relativePath) == ["alpha.md", "Note 2.md", "Note 10.md"])
+    }
+
     @Test func createPreservesASafeSubfolder() async throws {
         let (repository, vaultRoot, _) = try makeRepository()
         defer { try? FileManager.default.removeItem(at: vaultRoot) }
@@ -225,7 +237,7 @@ struct NotesRepositoryTests {
         let revisionStore = NoteRevisionStore(directory: revisionsDirectory)
         let revisions = try await revisionStore.revisions(forKey: "note.md")
         #expect(revisions.count == 1)
-        #expect(revisions.first?.content == "original")
+        #expect(revisions.first?.preview == "original")
     }
 
     @Test func saveUpdatesTheCatalogSummaryOnSuccess() async throws {

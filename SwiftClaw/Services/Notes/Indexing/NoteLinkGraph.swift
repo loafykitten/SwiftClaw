@@ -107,12 +107,12 @@ actor NoteLinkGraph {
     /// All outgoing links from `path`, resolved against the current vault state.
     func links(forSource path: String) async throws -> [ResolvedLink] {
         try await ensureSchema()
-        let notePaths = try await allNotePaths()
+        let resolutionIndex = try await resolutionIndex()
         let rows = try await database.query(
             "SELECT source_path, kind, page_path, heading, alias, normalized_path, normalized_stem FROM links WHERE source_path = ?;",
             params: [.text(path)]
         )
-        return try rows.map { try Self.decode(row: $0, notePaths: notePaths) }
+        return try rows.map { try Self.decode(row: $0, resolutionIndex: resolutionIndex) }
     }
 
     /// Every link, from any note, that resolves to `path` — the reverse
@@ -140,22 +140,35 @@ actor NoteLinkGraph {
 
     private func allResolvedLinks() async throws -> [ResolvedLink] {
         try await ensureSchema()
-        let notePaths = try await allNotePaths()
+        let resolutionIndex = try await resolutionIndex()
         let rows = try await database.query(
             "SELECT source_path, kind, page_path, heading, alias, normalized_path, normalized_stem FROM links;"
         )
-        return try rows.map { try Self.decode(row: $0, notePaths: notePaths) }
+        return try rows.map { try Self.decode(row: $0, resolutionIndex: resolutionIndex) }
     }
 
-    private func allNotePaths() async throws -> [String] {
+    private struct ResolutionIndex {
+        var exactPaths: [String: [String]] = [:]
+        var stems: [String: [String]] = [:]
+    }
+
+    /// Query-local dictionaries are rebuilt from the current `notes` table,
+    /// so path changes invalidate resolution without retaining stale state.
+    private func resolutionIndex() async throws -> ResolutionIndex {
         let rows = try await database.query("SELECT path FROM notes;")
-        return rows.compactMap { row -> String? in
-            guard case .text(let path)? = row.first else { return nil }
-            return path
+        var index = ResolutionIndex()
+        index.exactPaths.reserveCapacity(rows.count)
+        index.stems.reserveCapacity(rows.count)
+        for row in rows {
+            guard case .text(let path)? = row.first else { continue }
+            let normalizedPath = WikilinkScanner.normalize(path: path)
+            index.exactPaths[normalizedPath, default: []].append(path)
+            index.stems[WikilinkScanner.stem(ofNormalizedPath: normalizedPath), default: []].append(path)
         }
+        return index
     }
 
-    private static func decode(row: [SQLiteValue], notePaths: [String]) throws -> ResolvedLink {
+    private static func decode(row: [SQLiteValue], resolutionIndex: ResolutionIndex) throws -> ResolvedLink {
         guard row.count == 7,
               case .text(let sourcePath) = row[0], case .text(let kindRaw) = row[1], case .text(let pagePath) = row[2],
               case .text(let normalizedPath) = row[5], case .text(let normalizedStem) = row[6],
@@ -166,7 +179,8 @@ actor NoteLinkGraph {
         let heading: String? = { if case .text(let value) = row[3] { return value } else { return nil } }()
         let alias: String? = { if case .text(let value) = row[4] { return value } else { return nil } }()
         let resolvedPath = resolve(
-            normalizedPath: normalizedPath, normalizedStem: normalizedStem, sourcePath: sourcePath, notePaths: notePaths
+            normalizedPath: normalizedPath, normalizedStem: normalizedStem,
+            sourcePath: sourcePath, resolutionIndex: resolutionIndex
         )
         return ResolvedLink(
             sourcePath: sourcePath, kind: kind, pagePath: pagePath, heading: heading, alias: alias, resolvedPath: resolvedPath
@@ -176,14 +190,19 @@ actor NoteLinkGraph {
     /// Exact normalized-path match wins if unambiguous; otherwise a unique
     /// filename-stem match; otherwise unresolved. Never guesses between
     /// multiple equally-plausible candidates.
-    private static func resolve(normalizedPath: String, normalizedStem: String, sourcePath: String, notePaths: [String]) -> String? {
+    private static func resolve(
+        normalizedPath: String,
+        normalizedStem: String,
+        sourcePath: String,
+        resolutionIndex: ResolutionIndex
+    ) -> String? {
         guard !normalizedPath.isEmpty else { return sourcePath }
 
-        let exactMatches = notePaths.filter { WikilinkScanner.normalize(path: $0) == normalizedPath }
+        let exactMatches = resolutionIndex.exactPaths[normalizedPath] ?? []
         if exactMatches.count == 1 { return exactMatches[0] }
         guard exactMatches.isEmpty else { return nil }
 
-        let stemMatches = notePaths.filter { WikilinkScanner.stem(ofNormalizedPath: WikilinkScanner.normalize(path: $0)) == normalizedStem }
+        let stemMatches = resolutionIndex.stems[normalizedStem] ?? []
         return stemMatches.count == 1 ? stemMatches[0] : nil
     }
 

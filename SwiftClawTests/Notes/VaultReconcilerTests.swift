@@ -86,6 +86,22 @@ struct VaultReconcilerTests {
         #expect(delta.added == ["missed.md"])
     }
 
+    @Test func monitoredCatalogPrimeAvoidsAColdAddedDeltaAndStillDetectsLaterChanges() async throws {
+        let store = EntryStore()
+        await store.set([.init(relativePath: "note.md", sha256: "hash1")])
+        let reconciler = VaultReconciler(stateProvider: { await store.snapshot() })
+        let (stream, continuation) = makeEventStream()
+        defer { continuation.finish() }
+
+        await reconciler.start(events: stream) { _ in }
+        await reconciler.primeKnownState(with: await store.snapshot())
+        #expect(await reconciler.rescanNow().isEmpty)
+
+        await store.set([.init(relativePath: "note.md", sha256: "hash2")])
+        #expect(await reconciler.rescanNow().modified == ["note.md"])
+        await reconciler.stop()
+    }
+
     @Test func renamePairingRequiresAUniqueHashMatch() async throws {
         let store = EntryStore()
         let reconciler = VaultReconciler(stateProvider: { await store.snapshot() })

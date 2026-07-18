@@ -193,7 +193,7 @@ struct NoteProposalDispatcherTests {
         #expect(onDisk.content == "new content")
 
         let revisions = try await revisionStore.revisions(forKey: "note.md")
-        #expect(revisions.contains { $0.content == "original content" })
+        #expect(revisions.contains { $0.preview == "original content" })
 
         let updatedChat = try #require(fetchChat(id: chat.id, in: container))
         #expect(updatedChat.visibleMessages.contains { $0.content.contains("Applied") })
@@ -671,7 +671,7 @@ struct NoteProposalDispatcherTests {
         #expect(try await vault.read(relativePath: "note.md").content == "new content")
         let revisionsAfterFirstAttempt = try await revisionStore.revisions(forKey: "note.md")
         #expect(revisionsAfterFirstAttempt.count == 1)
-        #expect(revisionsAfterFirstAttempt.first?.content == "original content")
+        #expect(revisionsAfterFirstAttempt.first?.preview == "original content")
 
         let chatAfterFailure = try #require(fetchChat(id: chat.id, in: container))
         #expect(chatAfterFailure.visibleMessages.contains {

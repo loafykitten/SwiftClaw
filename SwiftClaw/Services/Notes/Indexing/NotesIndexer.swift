@@ -135,6 +135,25 @@ actor NotesIndexer {
         return RunOutcome(indexed: indexed, removed: removed, failedPaths: failed)
     }
 
+    /// Ensures a freshly loaded catalog is present in the index without
+    /// re-reading note files whose indexed hash already matches the catalog's
+    /// `NoteSummary.sha256`. Catalog hashes are used only for this bootstrap
+    /// path; ordinary reconciliation still reads the changed file.
+    @discardableResult
+    func syncCatalog(_ notes: [NoteSummary]) async -> RunOutcome {
+        var indexed = 0
+        var failed: [String] = []
+        for note in notes {
+            if await indexNote(note.relativePath, catalogHash: note.sha256) {
+                indexed += 1
+            } else {
+                failed.append(note.relativePath)
+            }
+        }
+        freshness = Freshness(lastSuccessAt: Date(), lastFailedPaths: failed, lastRunWasRebuild: false)
+        return RunOutcome(indexed: indexed, removed: 0, failedPaths: failed)
+    }
+
     /// Wipes both stores and reindexes every note the catalog currently
     /// knows about, from scratch — ignores content-hash short-circuiting
     /// entirely (the index is a rebuildable cache; a rebuild exists
@@ -200,8 +219,14 @@ actor NotesIndexer {
     /// common case for a reconciler rescan that found no real edits, or a
     /// touch-only mtime bump.
     @discardableResult
-    private func indexNote(_ relativePath: String) async -> Bool {
+    private func indexNote(_ relativePath: String, catalogHash: String? = nil) async -> Bool {
         do {
+            if let catalogHash,
+               let existing = try await searchIndex.document(sourceType: Self.sourceType, sourceID: relativePath),
+               existing.contentHash == catalogHash {
+                return true
+            }
+
             let snapshot = try await noteReader(relativePath)
 
             if let existing = try await searchIndex.document(sourceType: Self.sourceType, sourceID: relativePath),

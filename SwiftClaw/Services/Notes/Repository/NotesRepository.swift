@@ -346,7 +346,7 @@ final class NotesRepository {
 
     /// Lists the private, out-of-vault snapshots for one live note. The
     /// repository remains the only UI-facing path to the revision store.
-    func revisions(forRelativePath relativePath: String) async throws -> [NoteRevision] {
+    func revisions(forRelativePath relativePath: String) async throws -> [NoteRevisionMetadata] {
         do {
             return try await revisionStore.revisions(forKey: relativePath)
         } catch {
@@ -364,8 +364,7 @@ final class NotesRepository {
     ) async throws -> NoteSummary {
         let revision: NoteRevision
         do {
-            let available = try await revisionStore.revisions(forKey: relativePath)
-            guard let match = available.first(where: { $0.id == revisionID }) else {
+            guard let match = try await revisionStore.revision(forKey: relativePath, id: revisionID) else {
                 throw NotesError.revisionNotFound(revisionID)
             }
             revision = match
@@ -410,11 +409,9 @@ final class NotesRepository {
             throw NotesError.from(error)
         }
 
-        var byPath = Dictionary(uniqueKeysWithValues: notes.map { ($0.relativePath, $0) })
-        byPath.removeValue(forKey: relativePath)
+        notes.removeAll { $0.relativePath == relativePath }
         let summary = NoteSummary(snapshot: renamed)
-        byPath[newRelativePath] = summary
-        notes = byPath.values.sorted(by: Self.catalogOrder)
+        upsert(summary)
         NotificationCenter.default.post(name: .notesStoreDidChange, object: self)
         return summary
     }
@@ -444,9 +441,22 @@ final class NotesRepository {
     // MARK: - Helpers
 
     private func upsert(_ summary: NoteSummary) {
-        var byPath = Dictionary(uniqueKeysWithValues: notes.map { ($0.relativePath, $0) })
-        byPath[summary.relativePath] = summary
-        notes = byPath.values.sorted(by: Self.catalogOrder)
+        if let existingIndex = notes.firstIndex(where: { $0.relativePath == summary.relativePath }) {
+            notes[existingIndex] = summary
+            return
+        }
+
+        var lowerBound = 0
+        var upperBound = notes.count
+        while lowerBound < upperBound {
+            let midpoint = lowerBound + (upperBound - lowerBound) / 2
+            if Self.catalogOrder(notes[midpoint], summary) {
+                lowerBound = midpoint + 1
+            } else {
+                upperBound = midpoint
+            }
+        }
+        notes.insert(summary, at: lowerBound)
     }
 
     private static func catalogOrder(_ lhs: NoteSummary, _ rhs: NoteSummary) -> Bool {
