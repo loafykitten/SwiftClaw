@@ -17,12 +17,10 @@ Planning complete on `feature/deep-research` (worktree
 
 ## Next steps
 
-1. Get Ember's review of `docs/DEEP_RESEARCH_PLAN.md` (open questions at the
-   bottom need answers — especially SwiftSoup vs. hand-rolled extractor).
-2. Phase 1: extract `Services/Research/ResearchEngine.swift` +
+1. Phase 1: extract `Services/Research/ResearchEngine.swift` +
    `ResearchConfiguration` from `InvestigationEngine` with no behavior change;
    wire the dormant `SettingsKeys.deepResearchModel` fallback chain.
-3. Phases 2–6 per the plan doc.
+2. Phases 2–6 per the plan doc.
 
 ## Decisions & constraints
 

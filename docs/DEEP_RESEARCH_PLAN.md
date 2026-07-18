@@ -252,16 +252,17 @@ Each phase builds and passes tests independently; plan-review after each.
    budget, thread cap, report length), USER_FACING_TESTS entries, simulator
    UI verification pass.
 
-## Open questions
+## Resolved questions (decided 2026-07-18)
 
-1. `ContentExtractor`: hand-rolled readability heuristics vs. adding
-   SwiftSoup as the repo's first dependency. (Plan assumes hand-rolled.)
-2. Should Deep Research later expose a second "Extended" effort level (Gemini
-   Max / Grok DeeperSearch pattern), or is Investigation → Deep Research
-   ladder enough? (Assumed: enough for v1.)
-3. Follow-up chat seeding: full report in context vs. summary + on-demand
-   fetch tool. (Assumed: summary + sources list; report is markdown the model
-   can request via an appended request-bound tool.)
-4. Do investigation runs also get evidence-backed citation popovers in chat
-   (nice, but requires persisting evidence for chat messages)? (Assumed: v1
-   no — chat report keeps plain `[n]` + source URLs.)
+1. `ContentExtractor` is **hand-rolled** readability heuristics, no SwiftSoup.
+   Ember plans to reuse research components in another project after this app,
+   and hand-rolled keeps them maximally tweakable. Keep the extractor
+   self-contained and dependency-free with that reuse in mind.
+2. **No second effort level** above Deep Research. Effort levels get redone
+   later anyway (modern models use custom thinking-level maps), so don't bake
+   a tier scheme in now.
+3. Follow-up chat seeding: **summary + sources in context**, with the full
+   report available through an appended request-bound tool the model can call
+   for sections on demand.
+4. Investigation chat results keep **plain `[n]` citations + source list** —
+   no evidence-backed popovers in chat.
