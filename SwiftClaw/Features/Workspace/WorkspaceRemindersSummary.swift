@@ -25,31 +25,54 @@ nonisolated struct WorkspaceRemindersSummary: Equatable {
     let nextReminder: NextReminder?
 
     init(reminders: [Reminder], now: Date, calendar: Calendar) {
-        // Hidden lists are excluded everywhere outside their own list view,
-        // matching the calendar chips.
-        let pending = reminders.filter { !$0.isCompleted && !$0.isCompletionLog && $0.isInVisibleList }
         let startOfToday = calendar.startOfDay(for: now)
         let endOfToday = calendar.dateInterval(of: .day, for: now)?.end
             ?? startOfToday.addingTimeInterval(24 * 3600)
         let endOfWeek = calendar.date(byAdding: .day, value: 7, to: startOfToday)
             ?? startOfToday.addingTimeInterval(7 * 24 * 3600)
+        var todayCount = 0
+        var overdueCount = 0
+        var weekCount = 0
+        var flaggedCount = 0
+        var nextReminder: NextReminder?
 
-        todayCount = pending.count { reminder in
-            guard let due = reminder.dueDate else { return false }
-            return due < endOfToday
-        }
-        overdueCount = pending.count { $0.isOverdue(now: now, calendar: calendar) }
-        weekCount = pending.count { reminder in
-            guard let due = reminder.dueDate else { return false }
-            return due >= startOfToday && due < endOfWeek
-        }
-        flaggedCount = pending.count(where: \.isFlagged)
+        // Hidden lists are excluded everywhere outside their own list view,
+        // matching the calendar chips.
+        for reminder in reminders {
+            guard !reminder.isCompleted,
+                  !reminder.isCompletionLog,
+                  reminder.isInVisibleList else { continue }
 
-        nextReminder = pending
-            .compactMap { reminder -> NextReminder? in
-                guard reminder.hasDueTime, let due = reminder.dueDate, due > now else { return nil }
-                return NextReminder(title: reminder.title, due: due)
+            if reminder.isFlagged {
+                flaggedCount += 1
             }
-            .min { ($0.due, $0.title) < ($1.due, $1.title) }
+            if reminder.isOverdue(now: now, calendar: calendar) {
+                overdueCount += 1
+            }
+            guard let due = reminder.dueDate else { continue }
+
+            if due < endOfToday {
+                todayCount += 1
+            }
+            if due >= startOfToday, due < endOfWeek {
+                weekCount += 1
+            }
+            if reminder.hasDueTime, due > now {
+                let candidate = NextReminder(title: reminder.title, due: due)
+                if let current = nextReminder {
+                    if (candidate.due, candidate.title) < (current.due, current.title) {
+                        nextReminder = candidate
+                    }
+                } else {
+                    nextReminder = candidate
+                }
+            }
+        }
+
+        self.todayCount = todayCount
+        self.overdueCount = overdueCount
+        self.weekCount = weekCount
+        self.flaggedCount = flaggedCount
+        self.nextReminder = nextReminder
     }
 }

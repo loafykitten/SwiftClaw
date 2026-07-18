@@ -32,6 +32,11 @@ final class HomeDayGreetingContextProvider {
             return HomeDayGreetingContext(
                 now: now,
                 timeZoneIdentifier: weather.timeZoneIdentifier,
+                locationKey: .approximate(
+                    latitude: location.coordinate.latitude,
+                    longitude: location.coordinate.longitude,
+                    timeZoneIdentifier: weather.timeZoneIdentifier
+                ),
                 phase: HomeDayPhase.calculate(
                     now: now,
                     sunrise: sunrise,

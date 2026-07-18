@@ -37,6 +37,21 @@ enum HomeDayPhase: Sendable {
         }
     }
 
+    var cachePhase: HomeDayCachePhase {
+        switch self {
+        case .morningTwilight, .dawn, .morning:
+            .morning
+        case .afternoon:
+            .afternoon
+        case .evening, .eveningTwilight, .dusk:
+            .evening
+        }
+    }
+
+    static func cachePhase(now: Date, calendar: Calendar = .current) -> HomeDayCachePhase {
+        fallbackPhase(now: now, calendar: calendar).cachePhase
+    }
+
     static func calculate(
         now: Date,
         sunrise: Date?,
@@ -94,4 +109,10 @@ enum HomeDayPhase: Sendable {
             return .dusk
         }
     }
+}
+
+enum HomeDayCachePhase: String, Hashable, Sendable {
+    case morning
+    case afternoon
+    case evening
 }

@@ -43,8 +43,6 @@ struct WorkspaceView: View {
     var pendingReminderFocusID: UUID?
     var onReminderPresented: () -> Void = {}
 
-    @Query(sort: \Email.date, order: .reverse)
-    private var emails: [Email]
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
     @AppStorage(SettingsKeys.calendarEnabled) private var isCalendarEnabled = SettingsStorage.defaultCalendarEnabled
     @AppStorage(SettingsKeys.remindersEnabled) private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
@@ -87,11 +85,6 @@ struct WorkspaceView: View {
     }
 
     var body: some View {
-        let emailContent = WorkspaceEmailWidgetContent(
-            emails: emails,
-            accounts: EmailAccountStore.shared.accounts
-        )
-
         NavigationStack(path: $navigationPath) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -105,7 +98,6 @@ struct WorkspaceView: View {
                                 NavigationLink(value: item) {
                                     WorkspaceWidgetPanel(
                                         item: item,
-                                        emailContent: emailContent,
                                         notesModel: notesModel,
                                         memoryModel: memoryModel
                                     )
@@ -307,7 +299,6 @@ private struct WorkspaceDisabledFeaturesList: View {
 
 private struct WorkspaceWidgetPanel: View {
     let item: WorkspaceItem
-    let emailContent: WorkspaceEmailWidgetContent
     let notesModel: NotesFeatureModel
     let memoryModel: MemoryFeatureModel
 
@@ -335,7 +326,7 @@ private struct WorkspaceWidgetPanel: View {
 
             switch item {
             case .email:
-                WorkspaceEmailStatsView(summary: emailContent.summary)
+                WorkspaceEmailStatsView()
             case .calendar:
                 WorkspaceCalendarStatsView()
             case .reminders:
@@ -354,7 +345,7 @@ private struct WorkspaceWidgetPanel: View {
     }
 
     private var accountCountLabel: String {
-        let count = emailContent.completeAccountCount
+        let count = EmailAccountStore.shared.accounts.count(where: \.isComplete)
         return "\(count) \(count == 1 ? "account" : "accounts")"
     }
 }
@@ -474,15 +465,60 @@ private struct WorkspaceNotesStatsView: View {
 /// footer. `@Query` keeps it live as events change; the summary itself is the
 /// testable `WorkspaceCalendarSummary`.
 private struct WorkspaceCalendarStatsView: View {
-    @Query private var events: [CalendarEvent]
+    var body: some View {
+        // The day key rebuilds the fixed-at-init SwiftData predicates after
+        // midnight while minute ticks only update time-derived labels.
+        TimelineView(.everyMinute) { timeline in
+            let calendar = Calendar.current
+            let day = calendar.startOfDay(for: timeline.date)
+            WorkspaceCalendarStatsContent(
+                day: day,
+                now: timeline.date,
+                calendar: calendar
+            )
+            .id(day)
+        }
+    }
+}
+
+private struct WorkspaceCalendarStatsContent: View {
+    let window: DateInterval
+    let now: Date
+    let calendar: Calendar
+
+    @Query private var plainEvents: [CalendarEvent]
+    @Query private var recurringEvents: [CalendarEvent]
+    @State private var occurrenceCache = WorkspaceCalendarOccurrenceCache()
+
+    init(day: Date, now: Date, calendar: Calendar) {
+        let end = calendar.date(byAdding: .day, value: 7, to: day)
+            ?? day.addingTimeInterval(7 * 24 * 3600)
+        let window = DateInterval(start: day, end: end)
+        self.window = window
+        self.now = now
+        self.calendar = calendar
+
+        let windowStart = window.start
+        let windowEnd = window.end
+        let distantFuture = Date.distantFuture
+        _plainEvents = Query(filter: #Predicate<CalendarEvent> {
+            $0.recurrenceRuleString == nil
+                && $0.startDate < windowEnd
+                && $0.endDate > windowStart
+        })
+        _recurringEvents = Query(filter: #Predicate<CalendarEvent> {
+            $0.recurrenceRuleString != nil
+                && $0.startDate < windowEnd
+                && ($0.recurrenceEndDate ?? distantFuture) >= windowStart
+        })
+    }
 
     var body: some View {
-        let calendar = Calendar.current
-        let now = Date.now
-        let start = calendar.startOfDay(for: now)
-        let window = DateInterval(start: start, duration: 7 * 24 * 3600)
         let summary = WorkspaceCalendarSummary(
-            occurrences: CalendarOccurrenceBuilder.occurrences(from: events, in: window),
+            occurrences: occurrenceCache.occurrences(
+                from: plainEvents + recurringEvents,
+                in: window
+            ),
             now: now,
             calendar: calendar
         )
@@ -521,13 +557,70 @@ private struct WorkspaceCalendarStatsView: View {
     }
 }
 
+@MainActor
+private final class WorkspaceCalendarOccurrenceCache {
+    private struct Key: Equatable {
+        let window: DateInterval
+        let events: [EventContent]
+    }
+
+    private struct EventContent: Equatable {
+        let id: UUID
+        let title: String
+        let startDate: Date
+        let endDate: Date
+        let isAllDay: Bool
+        let timeZoneIdentifier: String?
+        let recurrenceRuleString: String?
+        let recurrenceEndDate: Date?
+        let exceptionDatesData: Data?
+        let parentEventID: UUID?
+        let sourceRawValue: String
+        let calendarID: UUID?
+        let calendarIsVisible: Bool?
+        let calendarColorHex: String?
+
+        init(event: CalendarEvent) {
+            id = event.id
+            title = event.title
+            startDate = event.startDate
+            endDate = event.endDate
+            isAllDay = event.isAllDay
+            timeZoneIdentifier = event.timeZoneIdentifier
+            recurrenceRuleString = event.recurrenceRuleString
+            recurrenceEndDate = event.recurrenceEndDate
+            exceptionDatesData = event.exceptionDatesData
+            parentEventID = event.parentEventID
+            sourceRawValue = event.sourceRawValue
+            calendarID = event.calendar?.id
+            calendarIsVisible = event.calendar?.isVisible
+            calendarColorHex = event.calendar?.colorHex
+        }
+    }
+
+    private var key: Key?
+    private var value: [EventOccurrence] = []
+
+    /// Expansion invalidates by exact window and rendered event content, so
+    /// minute ticks reuse it while event edits and the day-keyed window do not.
+    func occurrences(from events: [CalendarEvent], in window: DateInterval) -> [EventOccurrence] {
+        let nextKey = Key(window: window, events: events.map(EventContent.init))
+        guard key != nextKey else { return value }
+
+        key = nextKey
+        value = CalendarOccurrenceBuilder.occurrences(from: events, in: window)
+        return value
+    }
+}
+
 /// Reminders widget body: today / overdue / week / flagged counts plus a
 /// "next deadline" footer. `@Query` keeps it live as reminders change; the
 /// summary itself is the testable `WorkspaceRemindersSummary`.
 private struct WorkspaceRemindersStatsView: View {
-    /// Masters and one-offs only — the summary never counts completion-log
-    /// history, which grows unbounded.
-    @Query(filter: #Predicate<Reminder> { $0.parentReminderID == nil })
+    /// Pending masters and one-offs only — completion history grows unbounded.
+    @Query(filter: #Predicate<Reminder> {
+        $0.parentReminderID == nil && $0.completedAt == nil
+    })
     private var reminders: [Reminder]
 
     var body: some View {
@@ -580,7 +673,8 @@ private struct WorkspaceRemindersStatsView: View {
 }
 
 private struct WorkspaceEmailStatsView: View {
-    let summary: WorkspaceEmailSummary
+    @Query(filter: #Predicate<Email> { !$0.isArchived && !$0.isDeleted })
+    private var emails: [Email]
 
     /// Bumped when Settings posts `emailReviewScheduleDidChange` or a review
     /// pass posts `emailReviewCompletionDidChange` so the footer re-reads the
@@ -590,6 +684,8 @@ private struct WorkspaceEmailStatsView: View {
     @State private var scheduleVersion = 0
 
     var body: some View {
+        let summary = WorkspaceEmailSummary(emails: emails)
+
         VStack(alignment: .leading, spacing: 12) {
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
                 GridRow(alignment: .firstTextBaseline) {

@@ -17,19 +17,18 @@ nonisolated struct WorkspaceCalendarSummary: Equatable {
 
     /// `occurrences` should cover `[startOfDay(now), startOfDay(now) + 7d)`.
     init(occurrences: [EventOccurrence], now: Date, calendar: Calendar) {
-        let sorted = occurrences.sorted { $0.start < $1.start }
-
-        todayRemainingCount = sorted.count { occurrence in
+        todayRemainingCount = occurrences.count { occurrence in
             calendar.isDate(occurrence.start, inSameDayAs: now)
                 && (occurrence.isAllDay || occurrence.end > now)
         }
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: now) ?? now
-        tomorrowCount = sorted.count { calendar.isDate($0.start, inSameDayAs: tomorrow) }
-        weekCount = sorted.count
+        tomorrowCount = occurrences.count { calendar.isDate($0.start, inSameDayAs: tomorrow) }
+        weekCount = occurrences.count
 
         // The next concrete thing on the schedule: soonest timed event that
-        // hasn't ended (all-day events don't make useful countdowns).
-        nextEvent = sorted
+        // hasn't ended (all-day events don't make useful countdowns). The
+        // occurrence builder supplies start/title ordering.
+        nextEvent = occurrences
             .first { !$0.isAllDay && $0.end > now }
             .map { NextEvent(title: $0.title, start: $0.start, isAllDay: $0.isAllDay) }
     }

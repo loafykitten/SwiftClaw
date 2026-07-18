@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct HomeDayGreetingView: View {
-    let swiftModel: String
+    @ObservedObject var viewModel: HomeDayGreetingViewModel
 
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
@@ -10,11 +10,6 @@ struct HomeDayGreetingView: View {
     @AppStorage(SettingsKeys.personaDisplayName) private var personaDisplayName = ""
     @AppStorage(SettingsKeys.quoteAccentHue) private var quoteAccentHue = QuoteAccent.defaultQuoteHue
     @AppStorage(SettingsKeys.quoteAccentLightness) private var quoteAccentLightness = QuoteAccent.defaultQuoteLightness
-    @StateObject private var viewModel = HomeDayGreetingViewModel()
-
-    private var refreshID: String {
-        "\(swiftModel)|\(personaDisplayName)"
-    }
 
     private var quoteAccent: Color {
         QuoteAccent.color(hue: quoteAccentHue, lightness: quoteAccentLightness)
@@ -25,9 +20,6 @@ struct HomeDayGreetingView: View {
             .font(.title3)
             .contentTransition(.opacity)
             .animation(.easeInOut(duration: 0.4), value: viewModel.greeting)
-            .task(id: refreshID) {
-                viewModel.refresh(swiftModel: swiftModel)
-            }
     }
 
     @ViewBuilder
@@ -64,6 +56,6 @@ struct HomeDayGreetingView: View {
 }
 
 #Preview {
-    HomeDayGreetingView(swiftModel: "")
+    HomeDayGreetingView(viewModel: HomeDayGreetingViewModel())
         .frame(width: 300, height: 80)
 }

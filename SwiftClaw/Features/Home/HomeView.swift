@@ -8,8 +8,15 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.modelContext) private var modelContext
     @AppStorage(SettingsKeys.swiftModel) private var swiftModel = ""
+    @AppStorage(SettingsKeys.personaDisplayName) private var personaDisplayName = ""
+    @AppStorage(SettingsKeys.assistantDisplayName)
+    private var assistantDisplayName = AssistantPersona.defaultDisplayName
+    @AppStorage(SettingsKeys.assistantPersonalityPreset)
+    private var assistantPersonalityPreset = AssistantPersonalityLibrary.defaultPresetID
+    @AppStorage(SettingsKeys.assistantUsesCustomPersonality) private var assistantUsesCustomPersonality = false
+    @AppStorage(SettingsKeys.assistantCustomPersonality) private var assistantCustomPersonality = ""
 
-    @State private var blurb = HomeBlurb.initial
+    @StateObject private var generatedContent = HomeDayGreetingViewModel()
     @State private var isCreatingChat = false
     @State private var submissionError: String?
     @State private var presentedError: PresentedAppError?
@@ -20,6 +27,16 @@ struct HomeView: View {
         #else
         40
         #endif
+    }
+
+    private var personaCacheKey: String {
+        [
+            personaDisplayName,
+            assistantDisplayName,
+            assistantPersonalityPreset,
+            assistantUsesCustomPersonality.description,
+            assistantCustomPersonality,
+        ].joined(separator: "\u{1F}")
     }
 
     var body: some View {
@@ -39,15 +56,27 @@ struct HomeView: View {
                         .font(.system(size: 32, weight: .bold))
                 }
 
-                VStack(spacing: 4) {
-                    HomeDayGreetingView(swiftModel: swiftModel)
+                TimelineView(.everyMinute) { timeline in
+                    VStack(spacing: 4) {
+                        HomeDayGreetingView(viewModel: generatedContent)
 
-                    Text(blurb)
-                        .font(.callout)
-                        .italic()
-                        .foregroundStyle(.tertiary)
-                        .contentTransition(.opacity)
-                        .animation(.easeInOut(duration: 0.4), value: blurb)
+                        Text(generatedContent.blurb)
+                            .font(.callout)
+                            .italic()
+                            .foregroundStyle(.tertiary)
+                            .contentTransition(.opacity)
+                            .animation(.easeInOut(duration: 0.4), value: generatedContent.blurb)
+                    }
+                    .task(id: HomeContentRefreshID(
+                        phase: HomeDayPhase.cachePhase(now: timeline.date),
+                        persona: personaCacheKey,
+                        model: swiftModel
+                    )) {
+                        generatedContent.refresh(
+                            swiftModel: swiftModel,
+                            personaKey: personaCacheKey
+                        )
+                    }
                 }
             }
 
@@ -61,18 +90,15 @@ struct HomeView: View {
                 isBusy: isCreatingChat,
                 submissionError: submissionError
             ) { submission in
-                submitMessage(submission)
+                await submitMessage(submission)
             }
             .padding(.horizontal, composerHorizontalPadding)
             .padding(.bottom, 24)
         }
-        .task {
-            await generateBlurb()
-        }
         .appErrorAlert($presentedError)
     }
 
-    private func submitMessage(_ submission: ChatComposerSubmission) -> Bool {
+    private func submitMessage(_ submission: ChatComposerSubmission) async -> Bool {
         let input = submission.text
         guard !input.isEmpty, !isCreatingChat else {
             return false
@@ -90,7 +116,7 @@ struct HomeView: View {
 
         let finalizedAttachments: [ImageAttachmentRecord]
         do {
-            finalizedAttachments = try ImageAttachmentStore.shared.finalizeDraftAttachments(
+            finalizedAttachments = try await ImageAttachmentStore.shared.finalizeDraftAttachmentsAsync(
                 submission.imageAttachments,
                 for: chat.id
             )
@@ -146,41 +172,12 @@ struct HomeView: View {
         submissionError = error.errorDescription
         presentedError = PresentedAppError(error, title: "Couldn't create chat")
     }
+}
 
-    private func generateBlurb() async {
-        // Previews must not hit the Keychain or the network; the 60s request
-        // timeout blows past the preview engine's 5s update budget.
-        guard !ProcessInfo.processInfo.isRunningInPreview else {
-            return
-        }
-
-        guard !swiftModel.isEmpty else {
-            HomeBlurb.logger.info("Skipping blurb generation: no Swift Model configured")
-            return
-        }
-
-        do {
-            let response = try await InferenceService.shared.complete(
-                messages: [
-                    .system(HomeBlurb.systemPrompt),
-                    .user("Write one new blurb."),
-                ],
-                model: swiftModel,
-                systemPromptMode: .standalone
-            )
-
-            let cleaned = HomeBlurb.cleaned(response)
-            guard !Task.isCancelled else { return }
-            if !cleaned.isEmpty {
-                blurb = cleaned
-            }
-        } catch is CancellationError {
-            return
-        } catch {
-            // Keep the blank line; details land in the unified log.
-            HomeBlurb.logger.error("Blurb generation failed: \(String(describing: error), privacy: .public)")
-        }
-    }
+private struct HomeContentRefreshID: Hashable {
+    let phase: HomeDayCachePhase
+    let persona: String
+    let model: String
 }
 
 private enum HomeSubmissionError: LocalizedError {
@@ -206,7 +203,7 @@ private enum HomeSubmissionError: LocalizedError {
     }
 }
 
-private enum HomeBlurb {
+enum HomeBlurb {
     static let logger = AppLog.make("HomeBlurb")
 
     static let previewFallback = "There's no place like 127.0.0.1"

@@ -11,18 +11,42 @@ struct WorkspaceEmailSummary: Equatable {
         // Same partition as `EmailView.inboxThreads`: a thread belongs to the
         // inbox while it still has at least one visible message, so the tile
         // count always agrees with the Inbox list the widget navigates to.
-        let activeEmails = emails.filter { !$0.isArchived && !$0.isDeleted }
-        unreadCount = activeEmails.filter { !$0.isRead }.count
+        var unreadCount = 0
+        var inboxThreadCount = 0
+        var flaggedThreadCount = 0
+        var notatedThreadCount = 0
+        var threadSignals: [UUID: (isFlagged: Bool, hasNote: Bool)] = [:]
 
-        var seen = Set<UUID>()
-        let activeThreads = activeEmails.compactMap { email -> EmailThread? in
-            guard let thread = email.thread else { return nil }
-            guard seen.insert(thread.id).inserted else { return nil }
-            return thread
+        for email in emails where !email.isArchived && !email.isDeleted {
+            if !email.isRead {
+                unreadCount += 1
+            }
+            guard let threadID = email.thread?.id else { continue }
+
+            let existing = threadSignals[threadID] ?? (false, false)
+            if threadSignals[threadID] == nil {
+                inboxThreadCount += 1
+            }
+            // Flag/note signals mirror `isReviewFlagged`/`hasReviewNote`,
+            // which only consider reviewable roles — a flagged message in
+            // Junk or Drafts must not mark the thread.
+            let isReviewableRole = email.role != .junk && email.role != .drafts
+            if email.isFlagged, isReviewableRole, !existing.isFlagged {
+                flaggedThreadCount += 1
+            }
+            if !email.notes.isEmpty, isReviewableRole, !existing.hasNote {
+                notatedThreadCount += 1
+            }
+            threadSignals[threadID] = (
+                existing.isFlagged || (isReviewableRole && email.isFlagged),
+                existing.hasNote || (isReviewableRole && !email.notes.isEmpty)
+            )
         }
-        inboxThreadCount = activeThreads.count
-        flaggedThreadCount = activeThreads.filter(\.isReviewFlagged).count
-        notatedThreadCount = activeThreads.filter(\.hasReviewNote).count
+
+        self.unreadCount = unreadCount
+        self.inboxThreadCount = inboxThreadCount
+        self.flaggedThreadCount = flaggedThreadCount
+        self.notatedThreadCount = notatedThreadCount
     }
 
     static let empty = WorkspaceEmailSummary(emails: [])

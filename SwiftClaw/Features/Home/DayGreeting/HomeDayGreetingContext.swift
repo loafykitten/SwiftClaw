@@ -3,6 +3,7 @@ import Foundation
 struct HomeDayGreetingContext: Sendable {
     let now: Date
     let timeZoneIdentifier: String
+    let locationKey: HomeDayGreetingLocationKey
     let phase: HomeDayPhase
     let sunrise: Date?
     let sunset: Date?
@@ -17,11 +18,41 @@ struct HomeDayGreetingContext: Sendable {
         return HomeDayGreetingContext(
             now: now,
             timeZoneIdentifier: timeZone.identifier,
+            locationKey: .unavailable(timeZoneIdentifier: timeZone.identifier),
             phase: HomeDayPhase.calculate(now: now, sunrise: nil, sunset: nil, calendar: calendar),
             sunrise: nil,
             sunset: nil,
             daylightSummary: "Sunrise and sunset unavailable",
             weatherSummary: "Weather unavailable"
+        )
+    }
+}
+
+struct HomeDayGreetingLocationKey: Hashable, Sendable {
+    let latitudeBucket: Int?
+    let longitudeBucket: Int?
+    let timeZoneIdentifier: String
+
+    static func approximate(
+        latitude: Double,
+        longitude: Double,
+        timeZoneIdentifier: String
+    ) -> HomeDayGreetingLocationKey {
+        // Core Location is requested at three-kilometer accuracy. A 0.1-degree
+        // bucket keeps harmless fixes from invalidating the content cache while
+        // still changing the key when the user moves to a different area.
+        HomeDayGreetingLocationKey(
+            latitudeBucket: Int((latitude * 10).rounded()),
+            longitudeBucket: Int((longitude * 10).rounded()),
+            timeZoneIdentifier: timeZoneIdentifier
+        )
+    }
+
+    static func unavailable(timeZoneIdentifier: String) -> HomeDayGreetingLocationKey {
+        HomeDayGreetingLocationKey(
+            latitudeBucket: nil,
+            longitudeBucket: nil,
+            timeZoneIdentifier: timeZoneIdentifier
         )
     }
 }
