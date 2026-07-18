@@ -118,21 +118,23 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
                 let lowerBound: UInt32 = (sinceUID ?? 0) < UInt32.max
                     ? (sinceUID ?? 0) + 1
                     : UInt32.max
-                let infos = try await server.fetchMessageInfos(
-                    uidRange: UID(lowerBound)...,
-                    options: .default
-                )
-
                 let infosToFetch: [MessageInfo]
-                if let maxMessages, maxMessages > 0, infos.count > maxMessages {
-                    infosToFetch = Array(
-                        infos
-                            .filter { $0.uid != nil }
-                            .sorted { ($0.uid?.value ?? 0) < ($1.uid?.value ?? 0) }
-                            .suffix(maxMessages)
+                if sinceUID == nil,
+                   let maxMessages,
+                   maxMessages > 0,
+                   let latest = selection.latest(maxMessages) {
+                    // Sequence numbers are contiguous positions in the
+                    // selected mailbox, so this asks the server for exactly
+                    // the newest N entries without guessing from sparse UIDs.
+                    infosToFetch = try await server.fetchMessageInfosBulk(
+                        using: latest,
+                        options: .default
                     )
                 } else {
-                    infosToFetch = infos
+                    infosToFetch = try await server.fetchMessageInfos(
+                        uidRange: UID(lowerBound)...,
+                        options: .default
+                    )
                 }
 
                 var fetched: [FetchedMessage] = []

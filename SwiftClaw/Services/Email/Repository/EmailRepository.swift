@@ -21,6 +21,11 @@ nonisolated struct InsertedEmailSummary: Sendable {
     let isRead: Bool
 }
 
+nonisolated struct MailboxReconciliationOutcome: Sendable {
+    let removedCount: Int
+    let changedFlagCount: Int
+}
+
 /// Single mutation boundary for all Email/SwiftData writes. The first
 /// repository abstraction in the codebase — call out new repositories in
 /// `AGENTS.md` when introducing them.
@@ -35,9 +40,17 @@ final class EmailRepository {
     /// Visible to sibling-file extensions of `EmailRepository` (e.g.
     /// `EmailReviewSelection`); not part of the external API.
     let modelContext: ModelContext
+    private let attachmentStore: EmailAttachmentStore
+    private let saveUpsertChanges: () throws -> Void
 
-    init(modelContext: ModelContext) {
+    init(
+        modelContext: ModelContext,
+        attachmentStore: EmailAttachmentStore = .shared,
+        saveUpsertChanges: (() throws -> Void)? = nil
+    ) {
         self.modelContext = modelContext
+        self.attachmentStore = attachmentStore
+        self.saveUpsertChanges = saveUpsertChanges ?? { try modelContext.save() }
     }
 
     // MARK: - Upsert
@@ -52,7 +65,37 @@ final class EmailRepository {
         accountID: UUID,
         role: MailFolderRole = .inbox
     ) -> EmailUpsertOutcome {
-        guard !fetched.isEmpty else { return EmailUpsertOutcome(inserted: []) }
+        let prepared = fetched.map { message in
+            PreparedFetchedMessage(
+                message: message,
+                emailID: UUID(),
+                attachments: message.attachmentDescriptors.map { descriptor in
+                    PreparedEmailAttachment(
+                        filename: descriptor.filename,
+                        filePath: "",
+                        mimeType: descriptor.mimeType,
+                        sizeBytes: descriptor.sizeBytes
+                    )
+                }
+            )
+        }
+        return upsertPreparedMessages(
+            prepared,
+            mailbox: mailbox,
+            accountID: accountID,
+            role: role
+        )
+    }
+
+    @discardableResult
+    func upsertPreparedMessages(
+        _ prepared: [PreparedFetchedMessage],
+        mailbox: String,
+        accountID: UUID,
+        role: MailFolderRole = .inbox
+    ) -> EmailUpsertOutcome {
+        guard !prepared.isEmpty else { return EmailUpsertOutcome(inserted: []) }
+        let fetched = prepared.map(\.message)
         var inserted: [InsertedEmailSummary] = []
         let existing = fetchExistingMailboxIndex(uids: fetched.map(\.uid), mailbox: mailbox, accountID: accountID)
         // Fallback dedup for locally-synthetic Sent rows seeded by
@@ -90,7 +133,8 @@ final class EmailRepository {
             )
             : [:]
 
-        for message in fetched {
+        for preparedMessage in prepared {
+            let message = preparedMessage.message
             if let existingEmail = existing[message.uid] {
                 // If the matched row is a locally-synthetic Sent echo whose
                 // messageID also matches this fetched server message, promote it
@@ -128,7 +172,7 @@ final class EmailRepository {
                 reconcileFlags(existing: reclaimed, fetched: message)
             } else {
                 let email = insert(
-                    message: message,
+                    prepared: preparedMessage,
                     mailbox: mailbox,
                     accountID: accountID,
                     role: role
@@ -144,9 +188,12 @@ final class EmailRepository {
         }
 
         do {
-            try modelContext.save()
+            try saveUpsertChanges()
         } catch {
             Self.logger.error("upsertMessages save failed: \(String(describing: error))")
+            attachmentStore.deletePreparedMessages(prepared)
+            modelContext.rollback()
+            inserted.removeAll()
         }
 
         return EmailUpsertOutcome(inserted: inserted)
@@ -270,8 +317,26 @@ final class EmailRepository {
     /// 4. Re-attach messages to their canonical account thread by id.
     /// 5. Delete prior threads that are now empty.
     func resolveThreads() {
-        guard let messages = try? modelContext.fetch(FetchDescriptor<Email>()),
-              !messages.isEmpty else {
+        resolveThreads(accountIDs: nil)
+    }
+
+    /// Sync-time rebuild restricted to the account that received inserts.
+    /// The full overload above remains the repair path for legacy stores.
+    func resolveThreads(for accountID: UUID) {
+        resolveThreads(accountIDs: [accountID])
+    }
+
+    private func resolveThreads(accountIDs: Set<UUID>?) {
+        let messages: [Email]
+        if let accountIDs {
+            let descriptor = FetchDescriptor<Email>(
+                predicate: #Predicate { accountIDs.contains($0.accountID) }
+            )
+            messages = (try? modelContext.fetch(descriptor)) ?? []
+        } else {
+            messages = (try? modelContext.fetch(FetchDescriptor<Email>())) ?? []
+        }
+        guard !messages.isEmpty else {
             return
         }
 
@@ -284,6 +349,14 @@ final class EmailRepository {
             },
             uniquingKeysWith: { first, _ in first }
         )
+        // Snapshot before detaching the scoped messages below. A scoped
+        // rebuild must not claim a legacy mixed-account thread and relabel
+        // messages belonging to an unaffected account.
+        let reusableThreadIDs: Set<UUID>? = accountIDs.map { ids in
+            Set(priorThreadByMessageID.values.compactMap { thread in
+                thread.messages.allSatisfy { ids.contains($0.accountID) } ? thread.id : nil
+            })
+        }
 
         // Compute fresh cluster groupings per account. We use
         // `ThreadResolver.cluster` only for its grouping logic; the
@@ -321,9 +394,23 @@ final class EmailRepository {
         // reuse, and track — via `claimedExistingThreadIDs` — which existing
         // thread has already been claimed by a cluster (prevents a split
         // cluster from re-merging onto a previously-claimed thread).
-        var existingThreadByID: [UUID: EmailThread] = [:]
-        (try? modelContext.fetch(FetchDescriptor<EmailThread>()))?.forEach { thread in
-            existingThreadByID[thread.id] = thread
+        var existingThreadByID = Dictionary(
+            priorThreadByMessageID.values.map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        if let accountIDs {
+            for accountID in accountIDs {
+                let descriptor = FetchDescriptor<EmailThread>(
+                    predicate: #Predicate { $0.accountID == accountID }
+                )
+                (try? modelContext.fetch(descriptor))?.forEach { thread in
+                    existingThreadByID[thread.id] = thread
+                }
+            }
+        } else {
+            (try? modelContext.fetch(FetchDescriptor<EmailThread>()))?.forEach { thread in
+                existingThreadByID[thread.id] = thread
+            }
         }
         var claimedExistingThreadIDs: Set<UUID> = []
 
@@ -338,7 +425,8 @@ final class EmailRepository {
                     priorCount: bestPriorThreadCandidate(
                         for: grouping,
                         priorThreadByMessageID: priorThreadByMessageID,
-                        claimedExistingThreadIDs: []
+                        claimedExistingThreadIDs: [],
+                        reusableThreadIDs: reusableThreadIDs
                     )?.count ?? 0
                 )
             }
@@ -363,7 +451,8 @@ final class EmailRepository {
             let canonicalID = bestPriorThreadCandidate(
                 for: grouping,
                 priorThreadByMessageID: priorThreadByMessageID,
-                claimedExistingThreadIDs: claimedExistingThreadIDs
+                claimedExistingThreadIDs: claimedExistingThreadIDs,
+                reusableThreadIDs: reusableThreadIDs
             )?.threadID
 
             let canonical: EmailThread
@@ -421,11 +510,15 @@ final class EmailRepository {
     private func bestPriorThreadCandidate(
         for grouping: ResolvedThreadGrouping,
         priorThreadByMessageID: [UUID: EmailThread],
-        claimedExistingThreadIDs: Set<UUID>
+        claimedExistingThreadIDs: Set<UUID>,
+        reusableThreadIDs: Set<UUID>? = nil
     ) -> (threadID: UUID, count: Int)? {
         let candidateCount: [UUID: Int] = grouping.messageIDs.reduce(into: [:]) { counts, mid in
             guard let thread = priorThreadByMessageID[mid],
-                  !claimedExistingThreadIDs.contains(thread.id),
+                  !claimedExistingThreadIDs.contains(thread.id) else {
+                return
+            }
+            guard reusableThreadIDs?.contains(thread.id) ?? true,
                   thread.accountID == nil || thread.accountID == grouping.accountID else {
                 return
             }
@@ -643,6 +736,63 @@ final class EmailRepository {
         return changed
     }
 
+    /// Applies a UID/flag snapshot with one mailbox fetch, one scan, and one
+    /// save. Sync uses this combined boundary so deletion and flag drift do
+    /// not independently materialize the same SwiftData rows.
+    @discardableResult
+    func reconcileMailbox(
+        _ snapshot: MailboxUIDSet,
+        mailbox: String,
+        accountID: UUID,
+        preserveLocallySynthetic: Bool = false,
+        hardDelete: Bool = false
+    ) -> MailboxReconciliationOutcome {
+        let descriptor = FetchDescriptor<Email>(
+            predicate: #Predicate { email in
+                email.mailbox == mailbox && email.accountID == accountID
+            }
+        )
+        guard let locals = try? modelContext.fetch(descriptor), !locals.isEmpty else {
+            return MailboxReconciliationOutcome(removedCount: 0, changedFlagCount: 0)
+        }
+
+        var removed = 0
+        var changed = 0
+        for email in locals {
+            let uid = UInt32(email.uid)
+            if let flags = snapshot.flagsByUID[uid], !email.needsFlagSync {
+                if email.isRead != flags.isRead {
+                    email.isRead = flags.isRead
+                    changed += 1
+                }
+                if email.isFlagged != flags.isFlagged {
+                    email.isFlagged = flags.isFlagged
+                    changed += 1
+                }
+            }
+
+            guard !snapshot.uids.contains(uid),
+                  !email.isArchived,
+                  !email.isDeleted,
+                  !(preserveLocallySynthetic && email.isLocallySynthetic) else {
+                continue
+            }
+            if hardDelete {
+                modelContext.delete(email)
+            } else {
+                email.isDeleted = true
+            }
+            removed += 1
+        }
+        if removed > 0 || changed > 0 {
+            save()
+        }
+        return MailboxReconciliationOutcome(
+            removedCount: removed,
+            changedFlagCount: changed
+        )
+    }
+
     @discardableResult
     func backfillFolderRolesIfNeeded(
         accounts: [StoredEmailAccount],
@@ -770,12 +920,14 @@ final class EmailRepository {
 
     @discardableResult
     private func insert(
-        message: FetchedMessage,
+        prepared: PreparedFetchedMessage,
         mailbox: String,
         accountID: UUID,
         role: MailFolderRole
     ) -> Email {
+        let message = prepared.message
         let email = Email(
+            id: prepared.emailID,
             messageID: message.messageID,
             subject: message.subject,
             fromAddress: EmailAddressDisplayFormatter.string(message.fromAddress),
@@ -798,25 +950,10 @@ final class EmailRepository {
             uid: message.uid
         )
 
-        for descriptor in message.attachmentDescriptors {
-            // Persist attachment bytes to disk when the fetch path supplied
-            // them (the `fetchMailbox` full-body fetch already pulled them
-            // — no extra round-trip). Metadata-only scans (the `.uidFlagsOnly`
-            // reconciliation pass) never reach `insert`, so there's no
-            // wasted write here. Falls back to `filePath == ""` when bytes
-            // weren't supplied; the viewer then renders the row as
-            // "unavailable" without a file URL.
-            var filePath = ""
-            if let data = descriptor.data, !data.isEmpty {
-                filePath = (try? EmailAttachmentStore.shared.save(
-                    data: data,
-                    filename: descriptor.filename,
-                    forEmailID: email.id
-                )) ?? ""
-            }
+        for descriptor in prepared.attachments {
             let attachment = EmailAttachment(
                 filename: descriptor.filename,
-                filePath: filePath,
+                filePath: descriptor.filePath,
                 mimeType: descriptor.mimeType,
                 sizeBytes: descriptor.sizeBytes
             )

@@ -1,10 +1,24 @@
 import Foundation
 
+nonisolated struct PreparedFetchedMessage: Sendable {
+    let message: FetchedMessage
+    let emailID: UUID
+    let attachments: [PreparedEmailAttachment]
+}
+
+nonisolated struct PreparedEmailAttachment: Sendable {
+    let filename: String
+    let filePath: String
+    let mimeType: String
+    let sizeBytes: Int
+}
+
 /// Persists email attachments on disk under
 /// `~/Library/Application Support/SwiftClaw/EmailAttachments/<emailID>/<filename>`.
 /// Mirrors `ImageAttachmentStore` (`Features/ImageAttachments/ImageAttachmentStore.swift:55-56,275-284`).
-@MainActor
-final class EmailAttachmentStore {
+/// The immutable root plus FileManager's thread-safe operations allow account
+/// sync tasks to prepare separate UUID directories concurrently.
+nonisolated final class EmailAttachmentStore: @unchecked Sendable {
     static let shared = EmailAttachmentStore()
 
     private let rootDirectory: URL
@@ -32,6 +46,42 @@ final class EmailAttachmentStore {
         let url = directory.appendingPathComponent(safeFilename)
         try data.write(to: url, options: [.atomic])
         return relativePath(emailID: emailID, filename: safeFilename)
+    }
+
+    /// Performs attachment I/O before the caller enters its MainActor
+    /// SwiftData transaction. Failed individual writes keep their metadata
+    /// with an empty path, matching the viewer's existing unavailable state.
+    func prepare(_ messages: [FetchedMessage]) -> [PreparedFetchedMessage] {
+        messages.map { message in
+            let emailID = UUID()
+            let attachments = message.attachmentDescriptors.map { descriptor in
+                var filePath = ""
+                if let data = descriptor.data, !data.isEmpty {
+                    filePath = (try? save(
+                        data: data,
+                        filename: descriptor.filename,
+                        forEmailID: emailID
+                    )) ?? ""
+                }
+                return PreparedEmailAttachment(
+                    filename: descriptor.filename,
+                    filePath: filePath,
+                    mimeType: descriptor.mimeType,
+                    sizeBytes: descriptor.sizeBytes
+                )
+            }
+            return PreparedFetchedMessage(
+                message: message,
+                emailID: emailID,
+                attachments: attachments
+            )
+        }
+    }
+
+    func deletePreparedMessages(_ messages: [PreparedFetchedMessage]) {
+        for message in messages {
+            deleteAttachments(forEmailID: message.emailID)
+        }
     }
 
     /// Resolves a relative `filePath` stored on `EmailAttachment` back to its

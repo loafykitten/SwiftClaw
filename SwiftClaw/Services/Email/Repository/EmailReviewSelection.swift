@@ -53,21 +53,14 @@ extension EmailRepository {
         filter: EmailReviewFetchFilter,
         now: Date = .now
     ) -> [EmailThread] {
-        let candidates = fetchReviewCandidateThreads(
-            includeArchived: filter.includeArchived,
-            includeTrashed: filter.includeTrashed,
-            folders: filter.folders
-        )
-
         let ageWindow = TimeInterval(max(0, filter.maxAgeDays)) * 86_400
         let ageCutoff = now.addingTimeInterval(-ageWindow)
-
         var overrides: [EmailThread] = []  // unread/flagged/notated — never capped
         var others: [EmailThread] = []     // plain read — subject to the limit
 
-        for thread in candidates {
+        func classify(_ thread: EmailThread) {
             let considered = Self.consideredMessages(of: thread, filter: filter)
-            guard let latest = considered.last else { continue }
+            guard let latest = considered.last else { return }
 
             let isFlagged = considered.contains { $0.isFlagged }
             let isNotated = considered.contains { !$0.notes.isEmpty }
@@ -76,14 +69,14 @@ extension EmailRepository {
 
             if filter.applySuppression,
                !Self.passesSuppression(thread, isMarker: isMarker, now: now) {
-                continue
+                return
             }
 
             // Flagged/notated threads are exempt from the age window; unread is
             // not (so an ancient unread backlog stays bounded by the window —
             // unread only overrides the count limit, below).
             if latest.date < ageCutoff && !isMarker {
-                continue
+                return
             }
 
             let keep =
@@ -91,7 +84,7 @@ extension EmailRepository {
                 (isNotated && filter.includeNotated) ||
                 (isUnread && filter.includeUnread) ||
                 (!isUnread && filter.includeRead)
-            guard keep else { continue }
+            guard keep else { return }
 
             if isUnread || isMarker {
                 overrides.append(thread)
@@ -100,8 +93,56 @@ extension EmailRepository {
             }
         }
 
+        let notatedThreads = fetchNotatedReviewThreads()
+        let notatedThreadIDs = Set(notatedThreads.map(\.id))
+        var broadOverrides = fetchReviewCandidateThreads(overrideCategory: true, filter: filter)
+        let fetchedOverrideIDs = Set(broadOverrides.map(\.id))
+        broadOverrides.append(contentsOf: notatedThreads.filter { !fetchedOverrideIDs.contains($0.id) })
+
+        // Broad model-level override rows stay uncapped. The precise
+        // folder/category checks still happen above; a thread whose marker is
+        // only in an excluded folder is correctly reclassified as ordinary.
+        for thread in broadOverrides {
+            classify(thread)
+        }
+
+        if filter.limit == Int.max {
+            for thread in fetchReviewCandidateThreads(
+                overrideCategory: false,
+                filter: filter,
+                excludingThreadIDs: notatedThreadIDs
+            ) {
+                classify(thread)
+            }
+        } else if filter.limit > 0 {
+            // Filtering includes suppression and custom-folder rules that
+            // SwiftData cannot express. Page with a fetchLimit until enough
+            // eligible ordinary rows are found; this preserves the exact cap
+            // without eagerly materializing the whole ordinary candidate set.
+            let pageSize = max(1, filter.limit)
+            var offset = 0
+            var eligibleFromOrdinaryQuery = 0
+            while eligibleFromOrdinaryQuery < filter.limit {
+                let page = fetchReviewCandidateThreads(
+                    overrideCategory: false,
+                    filter: filter,
+                    excludingThreadIDs: notatedThreadIDs,
+                    fetchLimit: pageSize,
+                    fetchOffset: offset
+                )
+                guard !page.isEmpty else { break }
+                let priorCount = others.count
+                for thread in page { classify(thread) }
+                eligibleFromOrdinaryQuery += others.count - priorCount
+                offset += page.count
+                if page.count < pageSize { break }
+            }
+        }
+
         let remainingSlots = max(0, filter.limit - overrides.count)
-        let selected = overrides + others.prefix(remainingSlots)
+        let selected = overrides + others
+            .sorted { $0.lastDate > $1.lastDate }
+            .prefix(remainingSlots)
         return selected.sorted { $0.lastDate > $1.lastDate }
     }
 
@@ -144,6 +185,94 @@ extension EmailRepository {
                 isMarker: isMarker,
                 now: now
             )
+        }
+    }
+
+    private func fetchReviewCandidateThreads(
+        overrideCategory: Bool,
+        filter: EmailReviewFetchFilter,
+        excludingThreadIDs: Set<UUID> = [],
+        fetchLimit: Int? = nil,
+        fetchOffset: Int = 0
+    ) -> [EmailThread] {
+        // Archived/trashed visibility must live in the predicate, not in
+        // `classify`: threads materialized through relationship-predicate
+        // fetches can serve stale attribute snapshots, so an in-memory
+        // recheck is not a reliable exclusion boundary.
+        let includeArchived = filter.includeArchived
+        let includeTrashed = filter.includeTrashed
+        let foldersRequested = !(filter.folders ?? []).isEmpty
+        var descriptor: FetchDescriptor<EmailThread>
+        if foldersRequested {
+            // Explicitly requested folders always count, even archived or
+            // trashed (matching `consideredMessages`) — folder names aren't
+            // predicate-expressible, so keep only the category split and let
+            // `classify` apply the folder rules.
+            if overrideCategory {
+                descriptor = FetchDescriptor<EmailThread>(
+                    predicate: #Predicate { thread in
+                        thread.messages.contains { message in
+                            !message.isRead || message.isFlagged
+                        }
+                    },
+                    sortBy: [SortDescriptor(\.lastDate, order: .reverse)]
+                )
+            } else {
+                descriptor = FetchDescriptor<EmailThread>(
+                    predicate: #Predicate { thread in
+                        !excludingThreadIDs.contains(thread.id)
+                            && !thread.messages.contains { message in
+                                !message.isRead || message.isFlagged
+                            }
+                    },
+                    sortBy: [SortDescriptor(\.lastDate, order: .reverse)]
+                )
+            }
+        } else if overrideCategory {
+            descriptor = FetchDescriptor<EmailThread>(
+                predicate: #Predicate { thread in
+                    thread.messages.contains { message in
+                        ((!message.isArchived && !message.isDeleted)
+                            || (includeArchived && message.isArchived)
+                            || (includeTrashed && message.isDeleted))
+                            && (!message.isRead || message.isFlagged)
+                    }
+                },
+                sortBy: [SortDescriptor(\.lastDate, order: .reverse)]
+            )
+        } else {
+            descriptor = FetchDescriptor<EmailThread>(
+                predicate: #Predicate { thread in
+                    !excludingThreadIDs.contains(thread.id)
+                        && thread.messages.contains { message in
+                            (!message.isArchived && !message.isDeleted)
+                                || (includeArchived && message.isArchived)
+                                || (includeTrashed && message.isDeleted)
+                        }
+                        && !thread.messages.contains { message in
+                            ((!message.isArchived && !message.isDeleted)
+                                || (includeArchived && message.isArchived)
+                                || (includeTrashed && message.isDeleted))
+                                && (!message.isRead || message.isFlagged)
+                        }
+                },
+                sortBy: [SortDescriptor(\.lastDate, order: .reverse)]
+            )
+        }
+        if let fetchLimit { descriptor.fetchLimit = fetchLimit }
+        descriptor.fetchOffset = fetchOffset
+        return (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    private func fetchNotatedReviewThreads() -> [EmailThread] {
+        let notes = (try? modelContext.fetch(FetchDescriptor<EmailNote>())) ?? []
+        var seen: Set<UUID> = []
+        return notes.compactMap { note in
+            guard let thread = note.email?.thread,
+                  seen.insert(thread.id).inserted else {
+                return nil
+            }
+            return thread
         }
     }
 

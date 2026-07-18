@@ -88,10 +88,15 @@ nonisolated struct EmailReviewAction: Codable, Sendable {
 }
 
 nonisolated enum EmailReviewDateFormatter {
-    static func string(from date: Date) -> String {
+    private static let lock = NSLock()
+    private static let formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
-        return formatter.string(from: date)
+        return formatter
+    }()
+
+    static func string(from date: Date) -> String {
+        lock.withLock { formatter.string(from: date) }
     }
 }

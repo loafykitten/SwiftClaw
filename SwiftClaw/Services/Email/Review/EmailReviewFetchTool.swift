@@ -67,14 +67,17 @@ final class EmailReviewFetchTool: Tool {
         }
 
         let filterToFetch = filter
-        let (json, count): (String, Int) = await MainActor.run {
+        let (descriptors, count): ([EmailReviewThreadDescriptor], Int) = await MainActor.run {
             let context = ModelContext(modelContainer)
             let repository = EmailRepository(modelContext: context)
             let threads = repository.fetchThreadsForReview(filter: filterToFetch)
             onThreadsFetched?(threads.map(\.id))
             let descriptors = threads.map { EmailReviewThreadDescriptor.make(for: $0) }
-            return (Self.encode(descriptors), threads.count)
+            return (descriptors, threads.count)
         }
+        let json = await Task.detached(priority: .utility) {
+            Self.encode(descriptors)
+        }.value
 
         Self.logger.info("""
             fetch_inbox_emails returned \(count, privacy: .public) thread(s) \

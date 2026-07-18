@@ -467,6 +467,106 @@ struct EmailRepositoryTests {
         #expect(threads.first?.id == firstThreadID)
     }
 
+    @Test func accountScopedResolveLeavesOtherAccountThreadUntouched() throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let accountA = UUID()
+        let accountB = UUID()
+
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 1, messageID: "<a@example.com>", subject: "Alpha")],
+            mailbox: "INBOX",
+            accountID: accountA
+        )
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 1, messageID: "<b@example.com>", subject: "Beta")],
+            mailbox: "INBOX",
+            accountID: accountB
+        )
+        repository.resolveThreads()
+        let before = try context.fetch(FetchDescriptor<EmailThread>())
+        let accountAThreadID = try #require(before.first { $0.accountID == accountA }?.id)
+        let accountBThreadID = try #require(before.first { $0.accountID == accountB }?.id)
+
+        repository.upsertMessages(
+            [Self.simpleMessage(uid: 2, messageID: "<a2@example.com>", subject: "Other")],
+            mailbox: "INBOX",
+            accountID: accountA
+        )
+        repository.resolveThreads(for: accountA)
+
+        let after = try context.fetch(FetchDescriptor<EmailThread>())
+        #expect(after.contains { $0.id == accountAThreadID })
+        #expect(after.contains { $0.id == accountBThreadID })
+        #expect(after.first { $0.id == accountBThreadID }?.messages.count == 1)
+    }
+
+    @Test func preparedAttachmentIsRemovedWhenSwiftDataSaveFails() throws {
+        struct ExpectedSaveError: Error {}
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("email-attachment-save-failure-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = EmailAttachmentStore(rootDirectory: root)
+        let original = Self.simpleMessage(
+            uid: 1,
+            messageID: "<attachment@example.com>",
+            subject: "Attachment"
+        )
+        let message = FetchedMessage(
+            uid: original.uid,
+            messageID: original.messageID,
+            subject: original.subject,
+            fromAddress: original.fromAddress,
+            toAddresses: original.toAddresses,
+            ccAddresses: original.ccAddresses,
+            bccAddresses: original.bccAddresses,
+            date: original.date,
+            internalDate: original.internalDate,
+            bodyText: original.bodyText,
+            bodyHTML: original.bodyHTML,
+            inReplyTo: original.inReplyTo,
+            references: original.references,
+            isRead: original.isRead,
+            isFlagged: original.isFlagged,
+            mailbox: original.mailbox,
+            attachmentDescriptors: [
+                FetchedAttachmentDescriptor(
+                    filename: "unsafe/name.txt",
+                    mimeType: "text/plain",
+                    sizeBytes: 4,
+                    partNumber: "1",
+                    data: Data("test".utf8)
+                )
+            ]
+        )
+        let prepared = store.prepare([message])
+        let preparedMessage = try #require(prepared.first)
+        let fileURL = store.absoluteURL(
+            forEmailID: preparedMessage.emailID,
+            filename: "unsafe/name.txt"
+        )
+        #expect(FileManager.default.fileExists(atPath: fileURL.path))
+
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(
+            modelContext: context,
+            attachmentStore: store,
+            saveUpsertChanges: { throw ExpectedSaveError() }
+        )
+        let outcome = repository.upsertPreparedMessages(
+            prepared,
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+
+        #expect(outcome.insertedCount == 0)
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+        #expect(try context.fetch(FetchDescriptor<Email>()).isEmpty)
+    }
+
     // MARK: - H3 — Review triage suppression via lastReviewedAt
 
     @Test func reviewSuppressionExcludesThreadUntilNewMailArrives() async throws {

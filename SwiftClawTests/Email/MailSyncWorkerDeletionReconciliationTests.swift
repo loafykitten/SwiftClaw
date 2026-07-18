@@ -317,6 +317,40 @@ struct MailSyncWorkerDeletionReconciliationTests {
         #expect(refreshed?.isFlagged == true)
     }
 
+    @Test func combinedReconciliationUpdatesFlagsAndDeletesInOnePass() throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        repository.upsertMessages(
+            [
+                Self.simpleMessage(uid: 1, messageID: "<gone@example.com>", subject: "Gone"),
+                Self.simpleMessage(uid: 2, messageID: "<kept@example.com>", subject: "Kept"),
+            ],
+            mailbox: "INBOX",
+            accountID: Self.noteAccountID
+        )
+        let snapshot = MailboxUIDSet(
+            uidValidity: 1,
+            uids: [2],
+            flagsByUID: [2: MailFlagSnapshot(isRead: true, isFlagged: true)]
+        )
+
+        let outcome = repository.reconcileMailbox(
+            snapshot,
+            mailbox: "INBOX",
+            accountID: Self.noteAccountID
+        )
+
+        let byUID = Dictionary(
+            uniqueKeysWithValues: try context.fetch(FetchDescriptor<Email>()).map { ($0.uid, $0) }
+        )
+        #expect(outcome.removedCount == 1)
+        #expect(outcome.changedFlagCount == 2)
+        #expect(byUID[1]?.isDeleted == true)
+        #expect(byUID[2]?.isRead == true)
+        #expect(byUID[2]?.isFlagged == true)
+    }
+
     // MARK: - Helpers
 
     private static let noteAccountID = UUID()

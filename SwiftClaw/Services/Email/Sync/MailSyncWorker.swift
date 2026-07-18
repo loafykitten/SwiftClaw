@@ -43,6 +43,7 @@ actor MailSyncWorker {
     /// Counts `syncOnce` invocations so deletion reconciliation can run on a
     /// slower cadence than the incremental fetch (see `reconcileEveryNPasses`).
     private var passCount = 0
+    private var inFlightSync: Task<Int, Never>?
 
     private let accountsProvider: @Sendable () async -> [StoredEmailAccount]
     private let modelContainer: ModelContainer
@@ -82,6 +83,17 @@ actor MailSyncWorker {
     /// accounts + synced mailboxes.
     @discardableResult
     func syncOnce() async -> Int {
+        if let inFlightSync {
+            return await inFlightSync.value
+        }
+        let task = Task { await self.performSyncOnce() }
+        inFlightSync = task
+        let result = await task.value
+        inFlightSync = nil
+        return result
+    }
+
+    private func performSyncOnce() async -> Int {
         let accounts = (await accountsProvider()).filter { $0.isComplete }
         guard !accounts.isEmpty else {
             Self.logger.info("syncOnce skipped — no configured mail accounts")
@@ -185,6 +197,12 @@ actor MailSyncWorker {
                     \(account.effectiveDisplayName): \
                     \(String(describing: error))
                     """)
+            }
+        }
+        if inserted > 0 {
+            await MainActor.run {
+                let context = ModelContext(modelContainer)
+                EmailRepository(modelContext: context).resolveThreads(for: account.id)
             }
         }
         return AccountSyncResult(inserted: inserted, removed: removed, newMail: newMail)
@@ -355,27 +373,24 @@ actor MailSyncWorker {
         accountID: UUID,
         role: MailFolderRole
     ) async -> EmailUpsertOutcome {
-        await MainActor.run {
+        // File I/O stays off MainActor; the repository receives only metadata
+        // and prepared relative paths for its SwiftData transaction.
+        let prepared = EmailAttachmentStore.shared.prepare(fetched)
+        let outcome = await MainActor.run {
             let context = ModelContext(modelContainer)
             let repository = EmailRepository(modelContext: context)
-            let outcome = repository.upsertMessages(
-                fetched,
+            return repository.upsertPreparedMessages(
+                prepared,
                 mailbox: mailbox,
                 accountID: accountID,
                 role: role
             )
-            // Only re-cluster when messages were actually inserted. The
-            // incremental path commonly returns `[]` (no new mail), and
-            // re-running `resolveThreads()` on an unchanged inbox would
-            // regenerate every `EmailThread.id` mid-read, causing the
-            // user's open thread to silently jump back to the list top.
-            // See `EmailRepository.resolveThreads()` for the
-            // identity-stable incremental algorithm.
-            if outcome.insertedCount > 0 {
-                repository.resolveThreads()
-            }
-            return outcome
         }
+        let insertedIDs = Set(outcome.inserted.map(\.id))
+        EmailAttachmentStore.shared.deletePreparedMessages(
+            prepared.filter { !insertedIDs.contains($0.emailID) }
+        )
+        return outcome
     }
 
     /// Runs the per-`(account, mailbox)` server-side reconciliation pass and
@@ -404,15 +419,14 @@ actor MailSyncWorker {
             return await MainActor.run {
                 let context = ModelContext(modelContainer)
                 let repository = EmailRepository(modelContext: context)
-                repository.reconcileFlagsFromSnapshot(snapshot, mailbox: mailbox.name, accountID: accountID)
                 let preserveSynthetic = mailbox.role == .sent
-                return repository.reconcileDeletions(
-                    serverUIDs: snapshot.uids,
+                return repository.reconcileMailbox(
+                    snapshot,
                     mailbox: mailbox.name,
                     accountID: accountID,
                     preserveLocallySynthetic: preserveSynthetic,
                     hardDelete: mailbox.role == .drafts
-                )
+                ).removedCount
             }
         } catch {
             // The cheap UID-set scan is a background reconciliation; if it

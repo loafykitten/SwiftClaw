@@ -148,7 +148,6 @@ final class Email {
     var notes: [EmailNote]
     @Relationship(deleteRule: .cascade, inverse: \EmailAttachment.email)
     var attachments: [EmailAttachment]
-
     var uid: Int
 
     /// True for rows `upsertSentMessage` seeds locally to echo a just-sent
@@ -241,10 +240,19 @@ final class Email {
             return bodyText
         }
         if let html = bodyHTML, !html.isEmpty {
-            return Self.stripHTML(html)
+            if let cached = Self.plainTextBodyCache.result(for: id, html: html) {
+                return cached
+            }
+            let result = Self.stripHTML(html)
+            // Exact source equality invalidates stale entries when a server
+            // body refresh changes the HTML for an existing message id.
+            Self.plainTextBodyCache.insert(result: result, for: id, html: html)
+            return result
         }
         return ""
     }
+
+    private static let plainTextBodyCache = EmailPlainTextBodyCache()
 
     /// Lossy HTML → plain-text conversion. Replaces block-level tags with
     /// newlines, strips remaining tags, decodes common entities, and collapses
@@ -301,6 +309,36 @@ final class Email {
             + bccAddresses.map(EmailAddressDisplayFormatter.string)
             + notes.map(\.content)
             + attachments.map(\.filename)
+    }
+}
+
+private nonisolated final class EmailPlainTextBodyCacheEntry: Sendable {
+    let html: String
+    let result: String
+
+    init(html: String, result: String) {
+        self.html = html
+        self.result = result
+    }
+}
+
+/// `NSCache` is thread-safe but not annotated Sendable by Foundation.
+private nonisolated final class EmailPlainTextBodyCache: @unchecked Sendable {
+    private let storage = NSCache<NSUUID, EmailPlainTextBodyCacheEntry>()
+
+    func result(for id: UUID, html: String) -> String? {
+        guard let entry = storage.object(forKey: id as NSUUID),
+              entry.html == html else {
+            return nil
+        }
+        return entry.result
+    }
+
+    func insert(result: String, for id: UUID, html: String) {
+        storage.setObject(
+            EmailPlainTextBodyCacheEntry(html: html, result: result),
+            forKey: id as NSUUID
+        )
     }
 }
 

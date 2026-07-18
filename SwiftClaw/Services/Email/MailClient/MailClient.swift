@@ -86,9 +86,10 @@ nonisolated struct FetchedAttachmentDescriptor: Sendable, Hashable {
     /// `fetchMailbox` full-body fetch does — `SwiftMailClient.normalize`
     /// populates this from `MessagePart.data`). `nil` when the calling
     /// path is metadata-only (e.g. `.uidFlagsOnly` scans). On upsert, the
-    /// repository writes any non-nil payload to `EmailAttachmentStore`
-    /// and records the relative path on the `EmailAttachment` row so the
-    /// viewer can resolve an absolute URL without a separate fetch.
+    /// sync worker writes any non-nil payload to `EmailAttachmentStore`
+    /// before entering the MainActor repository transaction, then records
+    /// the relative path on the `EmailAttachment` row so the viewer can
+    /// resolve an absolute URL without a separate fetch.
     let data: Data?
 
     init(

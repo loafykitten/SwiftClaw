@@ -15,6 +15,33 @@ import SwiftData
 /// - A UIDVALIDITY change forces a full re-fetch.
 @MainActor
 struct MailSyncWorkerIncrementalTests {
+    @Test func overlappingSyncCallsShareOnePass() async throws {
+        let container = try Self.inMemoryContainer()
+        let mock = MockMailClient()
+        let accountID = UUID()
+        let account = Self.completeAccount(id: accountID)
+        await mock.setMailbox("INBOX", messages: [Self.message(uid: 1, accountID: accountID)])
+
+        let worker = MailSyncWorker(
+            accountsProvider: {
+                try? await Task.sleep(for: .milliseconds(50))
+                return [account]
+            },
+            modelContainer: container,
+            clientFactory: { _ in mock },
+            syncStateProvider: { _, _ in nil },
+            syncStateUpdater: { _, _, _ in }
+        )
+
+        async let first = worker.syncOnce()
+        async let second = worker.syncOnce()
+        let results = await [first, second]
+        let inboxRequestCount = await mock.fetchRequests.filter { $0.name == "INBOX" }.count
+
+        #expect(results == [1, 1])
+        #expect(inboxRequestCount == 1)
+    }
+
     @Test func firstSyncFetchesEverythingThenIncrementalOnly() async throws {
         let container = try Self.inMemoryContainer()
         let mock = MockMailClient()

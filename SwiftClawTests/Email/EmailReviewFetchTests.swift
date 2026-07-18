@@ -168,6 +168,47 @@ struct EmailReviewFetchTests {
         #expect(repository.fetchThreadsForReview(filter: filter).count == 2)
     }
 
+    @Test func ordinaryFetchPagesPastSuppressedNewerThreads() throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let now = Date()
+        repository.upsertMessages(
+            [
+                EmailRepositoryTests.simpleMessage(
+                    uid: 1,
+                    messageID: "<older-eligible@example.com>",
+                    subject: "Older eligible",
+                    isRead: true,
+                    date: now.addingTimeInterval(-60)
+                ),
+                EmailRepositoryTests.simpleMessage(
+                    uid: 2,
+                    messageID: "<newer-suppressed@example.com>",
+                    subject: "Newer suppressed",
+                    isRead: true,
+                    date: now
+                ),
+            ],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+        repository.resolveThreads()
+        let newer = try #require(
+            try context.fetch(FetchDescriptor<EmailThread>()).first {
+                $0.latestMessage?.subject == "Newer suppressed"
+            }
+        )
+        repository.markThreadsReviewed([newer], at: now)
+
+        var filter = EmailReviewFetchFilter(applySuppression: true)
+        filter.limit = 1
+        let result = repository.fetchThreadsForReview(filter: filter, now: now)
+
+        #expect(result.count == 1)
+        #expect(result.first?.latestMessage?.subject == "Older eligible")
+    }
+
     @Test func ageWindowExcludesOldReadMailButNotMarkers() async throws {
         let container = try EmailRepositoryTests.inMemoryContainer()
         let context = ModelContext(container)

@@ -46,6 +46,7 @@ private struct WindowedEmailContent: View {
     @State private var selectedThreadID: UUID?
     @State private var selectedMailbox: EmailMailbox = .inbox
     @State private var emailSearchText = ""
+    @State private var debouncedEmailSearchText = ""
     @State private var composingReplyFor: Email?
     @State private var manualSyncCoordinator = EmailManualSyncCoordinator.shared
     @State private var manualReviewCoordinator = EmailManualReviewCoordinator.shared
@@ -101,7 +102,7 @@ private struct WindowedEmailContent: View {
         let accountLabeler = EmailAccountLabeler(accountScope: accountScope, accounts: accounts)
         let snapshot = EmailThreadScopeSnapshot(emails: emails, accountScope: accountScope)
 
-        let searched = snapshot.search(selectedMailbox, with: emailSearchText)
+        let searched = snapshot.search(selectedMailbox, with: debouncedEmailSearchText)
         let selected = searched.first { $0.id == selectedThreadID } ?? searched.first
 
         // Custom folders only show for a single account's view: in "All
@@ -187,6 +188,13 @@ private struct WindowedEmailContent: View {
             if selectedThreadID == nil {
                 selectedThreadID = searched.first?.id
             }
+        }
+        .task(id: emailSearchText) {
+            if SearchQuery.isActive(emailSearchText) {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard !Task.isCancelled else { return }
+            }
+            debouncedEmailSearchText = emailSearchText
         }
         .onAppear {
             normalizeAccountScope()
@@ -307,7 +315,7 @@ private struct WindowedEmailContent: View {
         .navigationDestination(for: EmailMailbox.self) { mailbox in
             EmailThreadNavigationList(
                 mailbox: mailbox,
-                threads: snapshot.search(mailbox, with: emailSearchText),
+                threads: snapshot.search(mailbox, with: debouncedEmailSearchText),
                 quickAction: quickAction,
                 searchText: $emailSearchText,
                 isSearching: isSearchingEmails,

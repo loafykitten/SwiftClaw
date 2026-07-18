@@ -56,6 +56,14 @@ struct EmailSearchMatchingTests {
         #expect(thread.matchesSearch("croissant"))
     }
 
+    @Test func htmlPlainTextCacheInvalidatesWhenBodyChanges() {
+        let email = Email(subject: "Newsletter", bodyHTML: "<p>First edition</p>")
+
+        #expect(email.plainTextBody == "First edition")
+        email.bodyHTML = "<p>Second edition</p>"
+        #expect(email.plainTextBody == "Second edition")
+    }
+
     @Test func emptyQueryMatchesEverything() {
         let thread = EmailThread(subjectNormalized: "empty")
 

@@ -111,7 +111,8 @@ struct EmailThreadScopeSnapshot {
     }
 
     func search(_ mailbox: EmailMailbox, with searchText: String) -> [EmailThread] {
-        threads(for: mailbox).filter { $0.matchesSearch(searchText) }
+        guard SearchQuery.isActive(searchText) else { return threads(for: mailbox) }
+        return threads(for: mailbox).filter { $0.matchesSearch(searchText) }
     }
 
     private static func threads(from emails: [Email]) -> [EmailThread] {
