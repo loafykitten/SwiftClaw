@@ -220,7 +220,7 @@ final class ReminderReviewService {
         return """
         \(persona)
 
-        Today is \(Date.now.formatted(date: .complete, time: .shortened)).
+        \(PromptDateContext.currentString())
 
         You are reviewing the user's reminders on their behalf. Your job is to spot what \
         genuinely deserves their attention and tell them about it in your own voice.

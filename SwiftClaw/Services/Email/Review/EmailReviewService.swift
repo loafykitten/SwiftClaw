@@ -329,7 +329,7 @@ final class EmailReviewService {
         return """
         \(resolvedPersona)
 
-        \(EmailReviewDateContext.currentString())
+        \(PromptDateContext.currentString())
 
         You are triaging the user's email inbox on their behalf. Your job is to decide which threads \
         genuinely need the user to do something, and to tell them about those in your own voice.

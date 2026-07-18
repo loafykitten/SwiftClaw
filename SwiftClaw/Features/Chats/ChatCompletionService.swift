@@ -106,6 +106,9 @@ enum ChatCompletionService {
                 emailReviewContext ?? EmailReviewFollowUpContextBuilder.capabilityOnlyContext()
             ))
         }
+        // Last on purpose: this line changes every turn, so it must sit at
+        // the tail of the hoisted system prompt to keep the prefix cacheable.
+        messages.append(.system(PromptDateContext.currentString()))
 
         var tools: [any Tool] = []
         if canUseTools {

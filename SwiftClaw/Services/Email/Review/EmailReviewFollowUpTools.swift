@@ -26,7 +26,7 @@ enum EmailReviewFollowUpContextBuilder {
         return """
         This chat is an email review follow-up. You ARE connected to the user's inbox in this chat
         through your email tools — never say you lack email access or can't see their email.
-        \(EmailReviewDateContext.currentString())
+        \(PromptDateContext.currentString())
         Use the email_guid exactly when calling email tools. You can add AI notes, set/unset flags,
         or re-run the inbox analysis (refresh_email_review) when the user asks for more to review;
         otherwise just answer normally. Report results truthfully — never claim a card or new emails
@@ -45,7 +45,7 @@ enum EmailReviewFollowUpContextBuilder {
         """
         This chat is an email review follow-up. You ARE connected to the user's inbox in this chat
         through your email tools — never say you lack email access or can't see their email.
-        \(EmailReviewDateContext.currentString())
+        \(PromptDateContext.currentString())
         There are no specific emails attached right now (the review card was cleared). When the user
         asks for more emails to review, or to re-check or refresh the inbox, call refresh_email_review
         to run a fresh analysis — it posts an updated review card ONLY if something needs attention.

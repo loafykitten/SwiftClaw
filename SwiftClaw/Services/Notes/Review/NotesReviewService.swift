@@ -119,6 +119,8 @@ final class NotesReviewService {
         """
         \(AssistantPersona.personaPrompt(userDefaults: userDefaults))
 
+        \(PromptDateContext.currentString())
+
         Review Notes as a read-only vault-hygiene and triage assistant. FIRST call `fetch_notes_review_digest`. Look only for unchecked daily-note tasks, conflict copies, broken links, recent-note follow-up, and index health. Quality over quantity.
 
         Never edit notes, propose edits, reorganize content, or turn this into writing advice. The finding UUIDs are temporary IDs for this pass, not note paths or durable identities.

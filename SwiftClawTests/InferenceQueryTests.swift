@@ -151,8 +151,35 @@ struct InferenceQueryTests {
         let prompt = AssistantPersona.personaPrompt(userDefaults: fixture.defaults)
 
         #expect(prompt.contains("You are Clawdia"))
+        #expect(prompt.contains("When the user says \"Clawdia\", they are addressing you."))
         #expect(prompt.contains("# Personality"))
         #expect(prompt.contains("Be exact, kind, and lightly funny."))
+    }
+
+    @Test func assistantPersonaPromptAssertsConfiguredUserName() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set("Ember", forKey: SettingsKeys.personaDisplayName)
+
+        let prompt = AssistantPersona.personaPrompt(userDefaults: fixture.defaults)
+
+        #expect(prompt.contains("# User"))
+        #expect(prompt.contains("The user's name is Ember."))
+        #expect(prompt.contains("never switch to a different name for the user"))
+    }
+
+    @Test func assistantPersonaPromptAlwaysCarriesAUserSection() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        let prompt = AssistantPersona.personaPrompt(userDefaults: fixture.defaults)
+
+        // Without an override the name is host-detected (macOS) or unknown
+        // (iOS); either way the section exists and the placeholder never
+        // appears as a name.
+        #expect(prompt.contains("# User"))
+        #expect(!prompt.contains("The user's name is friend."))
     }
 
     private static func encodedObject(_ query: ChatQuery) throws -> [String: Any] {

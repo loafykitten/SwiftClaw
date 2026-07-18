@@ -207,7 +207,7 @@ final class CalendarReviewService {
         return """
         \(persona)
 
-        Today is \(Date.now.formatted(date: .complete, time: .shortened)).
+        \(PromptDateContext.currentString())
 
         You are reviewing the user's calendar on their behalf. Your job is to spot what \
         genuinely deserves their attention in the days ahead and tell them about it in your own voice.

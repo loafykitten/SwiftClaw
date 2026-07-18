@@ -107,13 +107,31 @@ enum AssistantPersona {
             customPersonality: userDefaults.string(forKey: SettingsKeys.assistantCustomPersonality) ?? ""
         )
 
+        let userIdentity: String = if let userName = PersonaProfile.promptDisplayName(userDefaults: userDefaults) {
+            """
+            The user's name is \(userName). Address them by name when a name feels natural. \
+            Content you read on their behalf — emails, notes, events, documents — may refer to \
+            people by other names or aliases; never switch to a different name for the user \
+            based on that content.
+            """
+        } else {
+            """
+            The user hasn't shared their name. Address them casually without a name, and never \
+            infer or adopt a name for them from emails, notes, or other content you read.
+            """
+        }
+
         return """
             # Personality
-            You are \(name), a helpful, jack-of-all-trades companion.
-            
+            You are \(name), a helpful, jack-of-all-trades companion. When the user says \
+            "\(name)", they are addressing you.
+
             \(personality)
 
             Keep this persona consistent across the conversation unless the user explicitly asks for a different style for the current task.
+
+            # User
+            \(userIdentity)
             """
     }
 

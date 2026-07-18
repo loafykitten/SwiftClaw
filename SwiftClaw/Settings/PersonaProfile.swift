@@ -10,12 +10,14 @@ import UIKit
 
 enum PersonaProfile {
     static var detectedDisplayName: String {
+        detectedRealName ?? "friend"
+    }
+
+    static var detectedRealName: String? {
         #if os(macOS)
-        sanitizedDisplayName(NSFullUserName()) ??
-            sanitizedDisplayName(NSUserName()) ??
-            "friend"
+        sanitizedDisplayName(NSFullUserName()) ?? sanitizedDisplayName(NSUserName())
         #else
-        "friend"
+        nil
         #endif
     }
 
@@ -23,6 +25,14 @@ enum PersonaProfile {
         let override = UserDefaults.standard.string(forKey: SettingsKeys.personaDisplayName) ?? ""
 
         return sanitizedDisplayName(override) ?? detectedDisplayName
+    }
+
+    /// The name prompts may assert for the user, or nil when no real name is
+    /// known — the "friend" placeholder must never reach a prompt as a name.
+    static func promptDisplayName(userDefaults: UserDefaults = .standard) -> String? {
+        let override = userDefaults.string(forKey: SettingsKeys.personaDisplayName) ?? ""
+
+        return sanitizedDisplayName(override) ?? detectedRealName
     }
 
     static func sanitizedDisplayName(_ rawName: String) -> String? {
