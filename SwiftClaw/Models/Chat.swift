@@ -125,6 +125,10 @@ extension Chat {
     static let calendarReviewTitlePrefix = "Calendar review —"
     static let remindersReviewTitlePrefix = "Reminders review —"
     static let notesReviewTitlePrefix = "Notes review —"
+    /// Fallback destination for `propose_memory` cards when the review run
+    /// that raised them produced no review chat of its own — see
+    /// `MemoryReviewProposalRouter`.
+    static let memorySuggestionsTitlePrefix = "Memory suggestions —"
 
     /// Whether this chat was created by the email review pass. A chat *is* a
     /// review chat for its whole life — keyed off the title stamped at
@@ -148,6 +152,11 @@ extension Chat {
     /// Whether this chat was created by the Notes vault-hygiene review pass.
     var isNotesReviewChat: Bool {
         title.hasPrefix(Self.notesReviewTitlePrefix)
+    }
+
+    /// Whether this chat was created as a `propose_memory` card fallback.
+    var isMemorySuggestionsChat: Bool {
+        title.hasPrefix(Self.memorySuggestionsTitlePrefix)
     }
 
     func matchesSearch(_ searchText: String) -> Bool {

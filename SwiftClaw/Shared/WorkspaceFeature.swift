@@ -7,6 +7,7 @@ enum WorkspaceFeature: String, CaseIterable, Hashable, Identifiable {
     case calendar
     case reminders
     case notes
+    case memory
 
     var id: String { rawValue }
 
@@ -16,6 +17,7 @@ enum WorkspaceFeature: String, CaseIterable, Hashable, Identifiable {
         case .calendar: "Calendar"
         case .reminders: "Reminders"
         case .notes: "Notes"
+        case .memory: "Memory"
         }
     }
 
@@ -25,6 +27,7 @@ enum WorkspaceFeature: String, CaseIterable, Hashable, Identifiable {
         case .calendar: "calendar"
         case .reminders: "checklist"
         case .notes: "note.text"
+        case .memory: "brain"
         }
     }
 
@@ -34,6 +37,7 @@ enum WorkspaceFeature: String, CaseIterable, Hashable, Identifiable {
         case .calendar: "Your schedule at a glance, with month, week, day, and agenda views."
         case .reminders: "Lists, due dates, repeats, and checklists in Workspace."
         case .notes: "Markdown notes, quick capture, search, and vault health."
+        case .memory: "Collections of small, persistent facts the assistant can recall for you."
         }
     }
 
@@ -43,6 +47,7 @@ enum WorkspaceFeature: String, CaseIterable, Hashable, Identifiable {
         case .calendar: SettingsKeys.calendarEnabled
         case .reminders: SettingsKeys.remindersEnabled
         case .notes: SettingsKeys.notesEnabled
+        case .memory: SettingsKeys.memoryEnabled
         }
     }
 }

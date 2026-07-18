@@ -26,6 +26,14 @@ final class ReminderReviewService {
     private let modelContainer: ModelContainer
     private let userDefaults: UserDefaults
 
+    /// Memory availability through this service's injected defaults — the
+    /// global `MemoryFeatureModel.shared.isAvailable` reads `.standard`,
+    /// which tests must not depend on.
+    private var isMemoryAvailable: Bool {
+        SettingsStorage.isMemoryEnabled(userDefaults: userDefaults)
+            && MemoryFeatureModel.shared.repository != nil
+    }
+
     /// Invoked when a review chat is created (chatID + notification-sized
     /// summary) so the workflow manager can route + notify.
     var onReviewCreated: ((UUID, String) -> Void)?
@@ -110,6 +118,8 @@ final class ReminderReviewService {
         Self.logger.info("reminders review: starting pass (force: \(force, privacy: .public))")
 
         let collector = FetchedReminderCollector()
+        let memoryCollector = MemoryProposalRunCollector()
+        let reviewChatCapture = MemoryReviewChatCapture()
         let fetchTool = ReminderReviewFetchTool(
             modelContainer: modelContainer,
             onRemindersFetched: { [collector] ids in collector.add(ids) }
@@ -118,15 +128,28 @@ final class ReminderReviewService {
             modelContainer: modelContainer,
             targetChatID: targetChatID,
             onReviewCreated: { [weak self] chatID, summary in
+                reviewChatCapture.chatID = chatID
                 if targetChatID == nil {
                     self?.onReviewCreated?(chatID, summary)
                 }
             }
         )
-        let registry = ToolRegistry(tools: [fetchTool, notifyTool])
+        var reviewTools: [any Tool] = [fetchTool, notifyTool]
+        if isMemoryAvailable {
+            reviewTools.append(ProposeMemoryTool(
+                feature: .reminders,
+                modelContainer: modelContainer,
+                collector: memoryCollector
+            ))
+        }
+        let registry = ToolRegistry(tools: reviewTools)
 
+        var systemPrompt = Self.systemPrompt(userDefaults: userDefaults)
+        if let memoryBlock = MemoryReviewContextBuilder.block(for: .reminders, isEnabled: isMemoryAvailable) {
+            systemPrompt += "\n\n\(memoryBlock)"
+        }
         let messages: [InferenceMessage] = [
-            .system(Self.systemPrompt(userDefaults: userDefaults)),
+            .system(systemPrompt),
             .user(Self.userPrompt()),
         ]
 
@@ -137,6 +160,17 @@ final class ReminderReviewService {
             lastStatusMessage = "Review failed"
             return false
         }
+
+        // Any memory proposals this run raised get their cards now — into
+        // the run's review chat when one exists, else the shared
+        // "Memory suggestions" chat. The router also sweeps this source's
+        // orphans from runs that were interrupted before routing.
+        MemoryReviewProposalRouter.route(
+            proposalIDs: memoryCollector.proposalIDs,
+            for: .reminders,
+            preferredChatID: targetChatID ?? reviewChatCapture.chatID,
+            modelContainer: modelContainer
+        )
 
         // Stamp only what the model actually pulled, only after success.
         let fetched = collector.ids.compactMap { repository.reminder(withID: $0) }

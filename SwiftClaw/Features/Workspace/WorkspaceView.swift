@@ -27,7 +27,7 @@ private enum WorkspaceItem: String, CaseIterable, Hashable, Identifiable {
         case .calendar: .calendar
         case .reminders: .reminders
         case .notes: .notes
-        case .memory: nil
+        case .memory: .memory
         }
     }
 }
@@ -49,10 +49,12 @@ struct WorkspaceView: View {
     @AppStorage(SettingsKeys.calendarEnabled) private var isCalendarEnabled = SettingsStorage.defaultCalendarEnabled
     @AppStorage(SettingsKeys.remindersEnabled) private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
     @AppStorage(SettingsKeys.notesEnabled) private var isNotesEnabled = SettingsStorage.defaultNotesEnabled
+    @AppStorage(SettingsKeys.memoryEnabled) private var isMemoryEnabled = SettingsStorage.defaultMemoryEnabled
 
     @State private var navigationPath = NavigationPath()
     @State private var hasAppliedLaunchSelection = false
     @State private var notesModel = NotesFeatureModel.shared
+    @State private var memoryModel = MemoryFeatureModel.shared
     @State private var hasActivatedNotesModel = false
     @State private var isShowingNotesQuickCapture = false
 
@@ -72,6 +74,7 @@ struct WorkspaceView: View {
         case .calendar: isCalendarEnabled
         case .reminders: isRemindersEnabled
         case .notes: isNotesEnabled
+        case .memory: isMemoryEnabled
         }
     }
 
@@ -103,7 +106,8 @@ struct WorkspaceView: View {
                                     WorkspaceWidgetPanel(
                                         item: item,
                                         emailContent: emailContent,
-                                        notesModel: notesModel
+                                        notesModel: notesModel,
+                                        memoryModel: memoryModel
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -305,6 +309,7 @@ private struct WorkspaceWidgetPanel: View {
     let item: WorkspaceItem
     let emailContent: WorkspaceEmailWidgetContent
     let notesModel: NotesFeatureModel
+    let memoryModel: MemoryFeatureModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -338,9 +343,7 @@ private struct WorkspaceWidgetPanel: View {
             case .notes:
                 WorkspaceNotesStatsView(model: notesModel)
             case .memory:
-                Text("Coming soon")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                WorkspaceMemoryStatsView(model: memoryModel)
             }
         }
         .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
@@ -353,6 +356,42 @@ private struct WorkspaceWidgetPanel: View {
     private var accountCountLabel: String {
         let count = emailContent.completeAccountCount
         return "\(count) \(count == 1 ? "account" : "accounts")"
+    }
+}
+
+/// Memory widget body: live entry and collection totals plus pending proposals
+/// when the assistant has changes waiting for review.
+private struct WorkspaceMemoryStatsView: View {
+    let model: MemoryFeatureModel
+
+    var body: some View {
+        Group {
+            if let summary = model.tileSummary {
+                VStack(alignment: .leading, spacing: 12) {
+                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 12) {
+                        GridRow(alignment: .firstTextBaseline) {
+                            WorkspaceEmailStatTile(count: summary.activeEntryCount, label: "Entries")
+                            WorkspaceEmailStatTile(count: summary.collectionCount, label: "Collections")
+                        }
+                    }
+
+                    if summary.pendingProposalCount > 0 {
+                        Label(
+                            "\(summary.pendingProposalCount) pending \(summary.pendingProposalCount == 1 ? "proposal" : "proposals")",
+                            systemImage: "tray.full"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
+                }
+            } else {
+                ProgressView("Loading Memory…")
+            }
+        }
+        .onAppear {
+            model.refreshTileSummary()
+        }
+        .accessibilityIdentifier("workspace.memory.stats")
     }
 }
 

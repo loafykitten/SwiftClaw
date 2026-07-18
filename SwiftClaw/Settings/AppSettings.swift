@@ -131,6 +131,7 @@ nonisolated extension SettingsKeys {
     static let calendarEnabled = "settings.calendar.enabled"
     static let remindersEnabled = "settings.reminders.enabled"
     static let notesEnabled = "settings.notes.enabled"
+    static let memoryEnabled = "settings.memory.enabled"
 }
 
 // MARK: - Calendar keys
@@ -1097,6 +1098,7 @@ enum SettingsStorage {
     static let defaultCalendarEnabled = false
     static let defaultRemindersEnabled = false
     static let defaultNotesEnabled = false
+    static let defaultMemoryEnabled = false
 
     static func isCalendarEnabled(userDefaults: UserDefaults = .standard) -> Bool {
         toolEnabled(
@@ -1201,6 +1203,14 @@ enum SettingsStorage {
         )
     }
 
+    static func isMemoryEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        toolEnabled(
+            forKey: SettingsKeys.memoryEnabled,
+            defaultValue: defaultMemoryEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
     private static let notesVaultLocationTypeAppManaged = "appManaged"
     private static let notesVaultLocationTypeExternal = "external"
 
@@ -1301,6 +1311,7 @@ enum SettingsStorage {
         case .calendar: isCalendarEnabled(userDefaults: userDefaults)
         case .reminders: isRemindersEnabled(userDefaults: userDefaults)
         case .notes: isNotesEnabled(userDefaults: userDefaults)
+        case .memory: isMemoryEnabled(userDefaults: userDefaults)
         }
     }
 
@@ -1310,6 +1321,7 @@ enum SettingsStorage {
         case .calendar: defaultCalendarEnabled
         case .reminders: defaultRemindersEnabled
         case .notes: defaultNotesEnabled
+        case .memory: defaultMemoryEnabled
         }
     }
 

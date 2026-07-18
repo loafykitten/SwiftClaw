@@ -70,6 +70,22 @@ enum ChatCompletionService {
             $0.inferenceMessage(includingImages: canUseImages)
         }
 
+        // Memory store injection — appended before the per-turn transient
+        // hints below so the (deterministic, mutation-cached) block sits as
+        // early and as stably as possible in the hoisted system prompt; the
+        // per-message recall block is inherently per-turn and rides last.
+        let isMemoryInjectionEnabled = SettingsStorage.isMemoryEnabled()
+            && MemoryFeatureModel.shared.repository != nil
+        if isMemoryInjectionEnabled, let promptBuilder = MemoryFeatureModel.shared.promptBuilder {
+            let exposure = promptBuilder.exposure()
+            messages.append(.system(exposure.block))
+            if exposure.tier == .index,
+               let latestUserMessage = chat.sortedMessages.last(where: { $0.role == .user })?.content,
+               let recall = promptBuilder.recallBlock(for: latestUserMessage) {
+                messages.append(.system(recall))
+            }
+        }
+
         if canInvestigate {
             // Transient steering hint; deliberately not persisted to the chat.
             messages.append(.system("""
@@ -114,6 +130,15 @@ enum ChatCompletionService {
                 tools.append(ProposeNoteEditTool(modelContainer: modelContext.container, chatID: chat.id))
                 tools.append(ProposeNoteCreateTool(modelContainer: modelContext.container, chatID: chat.id))
             }
+            // Memory write tools are request-bound for the same reason as
+            // the Notes proposal tools: they need the chat id + container to
+            // route disclosures/proposals onto the right chat. The read
+            // tools (search/open) live on `ToolRegistry.shared`.
+            if MemoryFeatureModel.shared.isAvailable {
+                tools.append(AddMemoryTool(modelContainer: modelContext.container, chatID: chat.id))
+                tools.append(SupersedeMemoryTool(modelContainer: modelContext.container, chatID: chat.id))
+                tools.append(CreateMemoryCollectionTool(modelContainer: modelContext.container, chatID: chat.id))
+            }
         }
 
         var assistantResponse: String?
@@ -132,6 +157,7 @@ enum ChatCompletionService {
             // before `modelContext.save()` below, so the reply and every
             // proposal card land in the same save/turn.
             NotesProposalCoordinator.shared.drain(for: chat, using: modelContext)
+            MemoryCardCoordinator.shared.drain(for: chat, using: modelContext)
             chat.isGenerating = false
             chat.errorMessage = nil
         } catch is CancellationError {

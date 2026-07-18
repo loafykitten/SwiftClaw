@@ -50,6 +50,10 @@ final class AppBootstrap {
         if SettingsStorage.isNotesEnabled() {
             NotesWorkflowManager.shared.start(modelContainer: modelContainer)
         }
+        // Unconditional (unlike the workflow managers above): configuring is
+        // a container handoff with no I/O, and the repository must exist for
+        // a cold-launch tool prepare even before any Memory view appears.
+        MemoryFeatureModel.shared.configure(modelContainer: modelContainer)
         Self.logger.info("App bootstrap complete")
     }
 }

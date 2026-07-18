@@ -13,6 +13,7 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
     case calendar = "Calendar"
     case reminders = "Reminders"
     case notes = "Notes"
+    case memory = "Memory"
     case tools = "Tools"
 
     var id: String { rawValue }
@@ -29,6 +30,7 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .calendar: "calendar"
         case .reminders: "checklist"
         case .notes: "note.text"
+        case .memory: "brain"
         case .tools: "wrench.and.screwdriver"
         }
     }
@@ -41,6 +43,7 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .calendar: .calendar
         case .reminders: .reminders
         case .notes: .notes
+        case .memory: .memory
         default: nil
         }
     }
@@ -70,6 +73,8 @@ private extension SettingsSection {
             self = .reminders
         case "note", "notes":
             self = .notes
+        case "memory":
+            self = .memory
         case "tools":
             self = .tools
         default:
@@ -96,6 +101,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKeys.calendarEnabled) private var isCalendarEnabled = SettingsStorage.defaultCalendarEnabled
     @AppStorage(SettingsKeys.remindersEnabled) private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
     @AppStorage(SettingsKeys.notesEnabled) private var isNotesEnabled = SettingsStorage.defaultNotesEnabled
+    @AppStorage(SettingsKeys.memoryEnabled) private var isMemoryEnabled = SettingsStorage.defaultMemoryEnabled
 
     private var visibleSections: [SettingsSection] {
         SettingsSection.allCases.filter { section in
@@ -109,6 +115,7 @@ struct SettingsView: View {
         case .calendar: isCalendarEnabled
         case .reminders: isRemindersEnabled
         case .notes: isNotesEnabled
+        case .memory: isMemoryEnabled
         }
     }
 
@@ -283,6 +290,8 @@ struct SettingsView: View {
             RemindersSettingsView()
         case .notes:
             NotesSettingsView()
+        case .memory:
+            MemorySettingsView()
         case .tools:
             ToolsView()
         }

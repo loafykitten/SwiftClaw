@@ -59,6 +59,12 @@ Coordinates are logical points (iPhone 17: 402×874); screenshot pixels ÷ 3
 
 ## Caveats
 
+- **Stale CoreSimulatorService after host sleep/lock**: taps (and even
+  `ui button HOME`) silently no-op on every simulator while AX reads and
+  `simctl io screenshot` keep working, and the companion still logs
+  "hid succeeded". Fix: `xcrun simctl shutdown all`, kill the
+  `CoreSimulatorService.xpc` process (it relaunches on demand), reboot the
+  device, restart the companion. Rebooting only the simulator does NOT help.
 - SwiftUI sheets sometimes collapse `ui describe-all` to just the app root
   element — fall back to a screenshot plus coordinate math.
 - An occasional tap silently misses; re-tap once before concluding a control

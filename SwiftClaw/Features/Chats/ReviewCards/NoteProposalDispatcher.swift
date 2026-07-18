@@ -95,7 +95,7 @@ final class NoteProposalDispatcher: ReviewActionDispatcher {
             await approve(proposal, in: context)
         case .reject:
             reject(proposal, in: context)
-        case .review, .flag, .reply, .delete, .archive:
+        case .review, .flag, .reply, .delete, .archive, .edit, .undo:
             break
         }
     }

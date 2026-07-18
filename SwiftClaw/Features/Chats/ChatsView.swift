@@ -10,6 +10,8 @@ struct ChatsView: View {
     @Environment(AppRouter.self) private var router
     var emailDispatcher: AnyHashableReviewActionDispatcher?
     var noteProposalDispatcher: AnyHashableReviewActionDispatcher?
+    var memoryWriteDispatcher: AnyHashableReviewActionDispatcher?
+    var memoryProposalDispatcher: AnyHashableReviewActionDispatcher?
 
     @Binding private var selectedChatID: UUID?
     @Query(sort: \Chat.updatedAt, order: .reverse) private var chats: [Chat]
@@ -72,11 +74,15 @@ struct ChatsView: View {
     init(
         selectedChatID: Binding<UUID?> = .constant(nil),
         emailDispatcher: AnyHashableReviewActionDispatcher? = nil,
-        noteProposalDispatcher: AnyHashableReviewActionDispatcher? = nil
+        noteProposalDispatcher: AnyHashableReviewActionDispatcher? = nil,
+        memoryWriteDispatcher: AnyHashableReviewActionDispatcher? = nil,
+        memoryProposalDispatcher: AnyHashableReviewActionDispatcher? = nil
     ) {
         _selectedChatID = selectedChatID
         self.emailDispatcher = emailDispatcher
         self.noteProposalDispatcher = noteProposalDispatcher
+        self.memoryWriteDispatcher = memoryWriteDispatcher
+        self.memoryProposalDispatcher = memoryProposalDispatcher
     }
 
     /// Resolves the right dispatcher for a card's `ReviewType` — never falls
@@ -87,6 +93,8 @@ struct ChatsView: View {
         switch reviewType {
         case .email: emailDispatcher
         case .noteProposal: noteProposalDispatcher
+        case .memoryWrite: memoryWriteDispatcher
+        case .memoryProposal: memoryProposalDispatcher
         case .calendar, .reminders, .notes, .unknown: nil
         }
     }
@@ -1210,9 +1218,10 @@ private struct ChatMessageRow: View {
                                 router.showReminders(focusing: itemID)
                             case .email:
                                 router.showEmail(itemID)
-                            case .noteProposal, .notes, .unknown:
+                            case .noteProposal, .notes, .memoryWrite, .memoryProposal, .unknown:
                                 // The card itself is the whole interaction
-                                // (approval diff or read-only Notes digest).
+                                // (approval diff, read-only Notes digest, or
+                                // the memory chip's own peek sheet).
                                 break
                             }
                         },
@@ -1226,8 +1235,8 @@ private struct ChatMessageRow: View {
                                 await EmailWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
                             case .notes:
                                 await NotesWorkflowManager.shared.reviewNow(appendingTo: message.chat?.id)
-                            case .noteProposal, .unknown:
-                                // No refresh action on a proposal/unknown card.
+                            case .noteProposal, .memoryWrite, .memoryProposal, .unknown:
+                                // No refresh action on a proposal/chip/unknown card.
                                 break
                             }
                         }

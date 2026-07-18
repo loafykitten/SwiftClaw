@@ -23,6 +23,14 @@ final class EmailReviewService {
     private let modelContainer: ModelContainer
     private let userDefaults: UserDefaults
 
+    /// Memory availability through this service's injected defaults — the
+    /// global `MemoryFeatureModel.shared.isAvailable` reads `.standard`,
+    /// which tests must not depend on.
+    private var isMemoryAvailable: Bool {
+        SettingsStorage.isMemoryEnabled(userDefaults: userDefaults)
+            && MemoryFeatureModel.shared.repository != nil
+    }
+
     /// Closure invoked when a review chat is created, so the caller can route
     /// the user to it (or fire a dock badge / toast / notification). Carries
     /// the model's summary `message` for the notification body.
@@ -157,11 +165,14 @@ final class EmailReviewService {
 
         Self.logger.info("review: starting pass (force: \(force, privacy: .public))")
 
-        let systemPrompt = Self.systemPrompt(
+        var systemPrompt = Self.systemPrompt(
             isContinuation: targetChatID != nil,
             userDefaults: userDefaults,
             context: context
         )
+        if let memoryBlock = MemoryReviewContextBuilder.block(for: .email, isEnabled: isMemoryAvailable) {
+            systemPrompt += "\n\n\(memoryBlock)"
+        }
         let userPrompt = Self.userPrompt()
 
         // When appending to an existing review chat, replay that chat's history
@@ -178,6 +189,8 @@ final class EmailReviewService {
         // passes and off when forced (so a steered conversational refresh can
         // reach the whole inbox).
         let collector = FetchedThreadCollector()
+        let memoryCollector = MemoryProposalRunCollector()
+        let reviewChatCapture = MemoryReviewChatCapture()
         let fetchTool = EmailReviewFetchTool(
             modelContainer: modelContainer,
             applySuppression: !force,
@@ -189,6 +202,7 @@ final class EmailReviewService {
             targetChatID: targetChatID,
             suppressInlineSummary: suppressInlineSummary,
             onReviewCreated: { [weak self] chatID, summary in
+                reviewChatCapture.chatID = chatID
                 if targetChatID == nil {
                     self?.onReviewCreated?(chatID, summary)
                 }
@@ -197,7 +211,15 @@ final class EmailReviewService {
                 self?.lastSummaryMessage = message
             }
         )
-        let registry = ToolRegistry(tools: [fetchTool, notifyTool])
+        var reviewTools: [any Tool] = [fetchTool, notifyTool]
+        if isMemoryAvailable {
+            reviewTools.append(ProposeMemoryTool(
+                feature: .email,
+                modelContainer: modelContainer,
+                collector: memoryCollector
+            ))
+        }
+        let registry = ToolRegistry(tools: reviewTools)
 
         do {
             _ = try await completeProvider(
@@ -216,6 +238,17 @@ final class EmailReviewService {
             lastStatusMessage = "Review failed"
             return false
         }
+
+        // Any memory proposals this run raised get their cards now — into
+        // the run's review chat when one exists, else the shared
+        // "Memory suggestions" chat. The router also sweeps this source's
+        // orphans from runs that were interrupted before routing.
+        MemoryReviewProposalRouter.route(
+            proposalIDs: memoryCollector.proposalIDs,
+            for: .email,
+            preferredChatID: targetChatID ?? reviewChatCapture.chatID,
+            modelContainer: modelContainer
+        )
 
         // Stamp ONLY the threads the model actually fetched (and only after a
         // successful pass), advancing each thread's resurface-decay counter. A

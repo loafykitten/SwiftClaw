@@ -72,8 +72,9 @@ final class EmailReviewActionDispatcher: ReviewActionDispatcher {
             await EmailServerAction.delete(
                 email: email, repository: repository, mailClient: mailClient
             )
-        case .approve, .reject:
-            // Note-proposal-only tokens — routed through `NoteProposalDispatcher`,
+        case .approve, .reject, .edit, .undo:
+            // Proposal/memory-card tokens — routed through their own
+            // dispatchers (`NoteProposalDispatcher`, the memory dispatchers),
             // never here.
             break
         }

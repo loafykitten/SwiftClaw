@@ -51,6 +51,16 @@ struct ReviewCardRendererRegistry {
                 payload: payload,
                 dispatcher: dispatcherProvider(.noteProposal) ?? AnyHashableReviewActionDispatcher(NoOpReviewActionDispatcher())
             )
+        case .memoryWrite:
+            MemoryWriteChipRenderer(
+                payload: payload,
+                dispatcher: dispatcherProvider(.memoryWrite) ?? AnyHashableReviewActionDispatcher(NoOpReviewActionDispatcher())
+            )
+        case .memoryProposal:
+            MemoryProposalCardRenderer(
+                payload: payload,
+                dispatcher: dispatcherProvider(.memoryProposal) ?? AnyHashableReviewActionDispatcher(NoOpReviewActionDispatcher())
+            )
         case .notes:
             NotesReviewCardRenderer(
                 payload: payload,

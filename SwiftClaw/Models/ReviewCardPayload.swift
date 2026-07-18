@@ -10,6 +10,14 @@ nonisolated enum ReviewType: String, Codable, Sendable {
     /// Reserved for a future Notes vault-hygiene digest card (broken links,
     /// conflict copies, freshness) — not produced anywhere yet.
     case notes
+    /// Disclosure chip for autonomous memory writes to "AI writes freely"
+    /// collections — "Memory added to X", View + one-tap Undo. See
+    /// `MemoryCardCoordinator`.
+    case memoryWrite
+    /// A single AI-proposed memory write gated behind explicit approval
+    /// (asks-first collections and background `propose_memory`) — Accept /
+    /// Edit / Dismiss. See `MemoryProposal`/`MemoryProposalDispatcher`.
+    case memoryProposal
     /// Forward-compat bucket for review types this build doesn't know about.
     /// An unknown `reviewType` decodes to `.unknown` instead of throwing —
     /// that way the whole payload isn't silently dropped (`try?` returns nil)
@@ -38,6 +46,12 @@ nonisolated enum ReviewActionToken: String, Codable, Sendable, CaseIterable, Ide
     /// than a domain-specific token per card type.
     case approve
     case reject
+    /// Open the proposal's content for modification before applying —
+    /// memory proposal cards' Edit (saving is accept-with-modified-text).
+    case edit
+    /// Reverse a disclosed autonomous write — memory write chips' one-tap
+    /// Undo (a hard delete; the activity feed keeps the audit snapshot).
+    case undo
 
     var id: String { rawValue }
 
@@ -51,6 +65,8 @@ nonisolated enum ReviewActionToken: String, Codable, Sendable, CaseIterable, Ide
         case .archive: "Archive"
         case .approve: "Approve"
         case .reject: "Reject"
+        case .edit: "Edit"
+        case .undo: "Undo"
         }
     }
 

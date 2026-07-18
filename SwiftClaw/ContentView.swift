@@ -72,6 +72,9 @@ struct ContentView: View {
     /// Lazily-constructed note-proposal dispatcher, cached the same way as
     /// `emailDispatcherState` — see `noteProposalDispatcher(for:)`.
     @State private var noteProposalDispatcherState: NoteProposalDispatcherCache? = NoteProposalDispatcherCache()
+    /// Lazily-constructed memory dispatchers (write-chip undo + proposal
+    /// approval), cached the same way — see `memoryDispatchers(for:)`.
+    @State private var memoryDispatcherState: MemoryDispatcherCache? = MemoryDispatcherCache()
 
     private var visibleNavigationItems: [NavigationItem] {
         NavigationItem.allCases.filter { item in
@@ -228,7 +231,9 @@ struct ContentView: View {
                     set: { router.selectedChatID = $0 }
                 ),
                 emailDispatcher: emailDispatcher(for: modelContext.container),
-                noteProposalDispatcher: noteProposalDispatcher(for: modelContext.container)
+                noteProposalDispatcher: noteProposalDispatcher(for: modelContext.container),
+                memoryWriteDispatcher: memoryDispatchers(for: modelContext.container).write,
+                memoryProposalDispatcher: memoryDispatchers(for: modelContext.container).proposal
             )
         case .workspace:
             WorkspaceView(
@@ -348,6 +353,27 @@ struct ContentView: View {
         return dispatcher
     }
 
+    /// Returns the cached memory dispatchers — same rationale as
+    /// `emailDispatcher(for:)`; two distinct instances because `.memoryWrite`
+    /// (chip undo) and `.memoryProposal` (approval) are separate card types
+    /// with separate action surfaces.
+    @MainActor
+    private func memoryDispatchers(
+        for container: ModelContainer
+    ) -> (write: AnyHashableReviewActionDispatcher, proposal: AnyHashableReviewActionDispatcher) {
+        if let write = memoryDispatcherState?.writeDispatcher,
+           let proposal = memoryDispatcherState?.proposalDispatcher {
+            return (write, proposal)
+        }
+        let write = AnyHashableReviewActionDispatcher(MemoryWriteDispatcher())
+        let proposal = AnyHashableReviewActionDispatcher(
+            MemoryProposalDispatcher(modelContainer: container)
+        )
+        memoryDispatcherState?.writeDispatcher = write
+        memoryDispatcherState?.proposalDispatcher = proposal
+        return (write, proposal)
+    }
+
     private func startNotificationBridge() {
         guard !isNotificationBridgeStarted else { return }
         isNotificationBridgeStarted = true
@@ -422,6 +448,13 @@ private final class EmailDispatcherCache {
 @MainActor
 private final class NoteProposalDispatcherCache {
     var dispatcher: AnyHashableReviewActionDispatcher?
+}
+
+/// Holder for both memory dispatchers — see `NoteProposalDispatcherCache`.
+@MainActor
+private final class MemoryDispatcherCache {
+    var writeDispatcher: AnyHashableReviewActionDispatcher?
+    var proposalDispatcher: AnyHashableReviewActionDispatcher?
 }
 
 #if DEBUG

@@ -1,0 +1,623 @@
+import Foundation
+import SwiftData
+
+nonisolated enum MemoryError: LocalizedError {
+    case collectionNotFound
+    case cannotDeleteInbox
+    case cannotScopeInbox
+    case entryNotFound(handle: String)
+    case ambiguousHandle(handle: String, matchCount: Int)
+    case alreadySuperseded
+    case notUndoable
+
+    var errorDescription: String? {
+        switch self {
+        case .collectionNotFound:
+            "That memory collection no longer exists."
+        case .cannotDeleteInbox:
+            "The Inbox is built in and can't be deleted."
+        case .cannotScopeInbox:
+            "The Inbox is built in and can't be scoped to a feature."
+        case .entryNotFound(let handle):
+            "No memory entry matches the handle \"\(handle)\"."
+        case .ambiguousHandle(let handle, let matchCount):
+            "The handle \"\(handle)\" matches \(matchCount) memory entries — use more characters."
+        case .alreadySuperseded:
+            "That memory entry was already superseded; supersede the current entry instead."
+        case .notUndoable:
+            "That memory entry has been edited or superseded since it was added, so the write can no longer be undone."
+        }
+    }
+}
+
+/// Single mutation boundary for all Memory/SwiftData writes (the
+/// `EmailRepository` precedent). Every mutation records its
+/// `MemoryActivityEvent` in the same save — the activity feed is the audit
+/// trail behind hard-delete undo — and bumps `mutationGeneration` so the
+/// Phase-2 `MemoryPromptBuilder` can key its cached serialization on it.
+///
+/// Reads intended for the UI go through `@Query` in views; this repository
+/// serves mutations, tool calls, search, and the Workspace tile summary.
+@MainActor
+final class MemoryRepository {
+    private static let logger = AppLog.make("memory")
+
+    let modelContext: ModelContext
+
+    /// Incremented on every successful mutation save. The prompt builder's
+    /// cache invalidation: a cached serialized store is valid only while
+    /// this value is unchanged (mutation-batched, per the design's
+    /// prefix-stability requirement).
+    private(set) var mutationGeneration = 0
+
+    init(modelContext: ModelContext) {
+        self.modelContext = modelContext
+    }
+
+    // MARK: - Inbox
+
+    static let inboxTitle = "Inbox"
+
+    /// Fetches the built-in Inbox, creating it on first use. The Inbox is
+    /// the pressure valve for uncertain classification — undeletable,
+    /// unscopable, and always `writesFreely` (a proposal the user accepted
+    /// or a low-confidence AI save must never be blocked from landing).
+    @discardableResult
+    func ensureInbox() -> MemoryCollection {
+        if let inbox = fetchInbox() {
+            return inbox
+        }
+        let inbox = MemoryCollection(
+            title: Self.inboxTitle,
+            details: "Memories the assistant couldn't confidently file into a collection.",
+            accessLevel: .writesFreely,
+            isInbox: true,
+            createdBy: .user
+        )
+        modelContext.insert(inbox)
+        save()
+        return inbox
+    }
+
+    private func fetchInbox() -> MemoryCollection? {
+        var descriptor = FetchDescriptor<MemoryCollection>(
+            predicate: #Predicate { $0.isInbox },
+            sortBy: [SortDescriptor(\.createdAt)]
+        )
+        descriptor.fetchLimit = 1
+        return (try? modelContext.fetch(descriptor))?.first
+    }
+
+    // MARK: - Collections
+
+    func collection(id: UUID) -> MemoryCollection? {
+        var descriptor = FetchDescriptor<MemoryCollection>(
+            predicate: #Predicate { $0.id == id }
+        )
+        descriptor.fetchLimit = 1
+        return (try? modelContext.fetch(descriptor))?.first
+    }
+
+    func collections() -> [MemoryCollection] {
+        let descriptor = FetchDescriptor<MemoryCollection>(
+            sortBy: [SortDescriptor(\.createdAt)]
+        )
+        let fetched = (try? modelContext.fetch(descriptor)) ?? []
+        // In-memory id tie-break (UUID isn't SortDescriptor-comparable):
+        // rows sharing a createdAt must not reorder between fetches — the
+        // prompt builder's "deterministic prefix" depends on this ordering.
+        return fetched.sorted {
+            ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString)
+        }
+    }
+
+    @discardableResult
+    func createCollection(
+        title: String,
+        details: String? = nil,
+        tags: [String] = [],
+        accessLevel: MemoryCollection.AccessLevel = .writesFreely,
+        scope: WorkspaceFeature? = nil,
+        isPinned: Bool = false,
+        createdBy: MemoryActor,
+        chatID: UUID? = nil
+    ) -> MemoryCollection {
+        let collection = MemoryCollection(
+            title: title,
+            details: details,
+            tags: tags,
+            accessLevel: accessLevel,
+            scope: scope,
+            isPinned: isPinned,
+            createdBy: createdBy
+        )
+        modelContext.insert(collection)
+        recordEvent(
+            kind: .added,
+            collectionID: collection.id,
+            snapshotText: title,
+            actor: createdBy,
+            chatID: chatID
+        )
+        save()
+        return collection
+    }
+
+    /// User edits to a collection's descriptive fields. Access level and
+    /// scope have dedicated methods below because they carry extra rules.
+    func updateCollection(
+        _ collection: MemoryCollection,
+        title: String? = nil,
+        details: String?? = nil,
+        tags: [String]? = nil,
+        isPinned: Bool? = nil,
+        actor: MemoryActor
+    ) {
+        if let title { collection.title = title }
+        if let details { collection.details = details }
+        if let tags { collection.tags = tags }
+        if let isPinned { collection.isPinned = isPinned }
+        collection.updatedAt = .now
+        recordEvent(
+            kind: .edited,
+            collectionID: collection.id,
+            snapshotText: collection.title,
+            actor: actor
+        )
+        save()
+    }
+
+    /// Always a user action — the AI never changes a collection's access
+    /// level (the asksFirst → writesFreely switch is additionally
+    /// confirmation-gated in the UI).
+    func setAccessLevel(
+        _ accessLevel: MemoryCollection.AccessLevel,
+        for collection: MemoryCollection
+    ) {
+        guard collection.accessLevel != accessLevel else { return }
+        collection.accessLevel = accessLevel
+        collection.updatedAt = .now
+        recordEvent(
+            kind: .accessChanged,
+            collectionID: collection.id,
+            snapshotText: collection.title,
+            actor: .user
+        )
+        save()
+    }
+
+    func setScope(
+        _ scope: WorkspaceFeature?,
+        for collection: MemoryCollection,
+        actor: MemoryActor
+    ) throws {
+        guard !collection.isInbox else { throw MemoryError.cannotScopeInbox }
+        guard collection.scope != scope else { return }
+        collection.scope = scope
+        collection.updatedAt = .now
+        recordEvent(
+            kind: .edited,
+            collectionID: collection.id,
+            snapshotText: collection.title,
+            actor: actor
+        )
+        save()
+    }
+
+    func deleteCollection(_ collection: MemoryCollection, actor: MemoryActor) throws {
+        guard !collection.isInbox else { throw MemoryError.cannotDeleteInbox }
+        let title = collection.title
+        let collectionID = collection.id
+        // Cascade deletion is about to remove these entries; any fact
+        // elsewhere that one of them superseded becomes current again
+        // rather than staying stamped by (and hidden behind) a dead entry.
+        for entry in collection.entries {
+            clearSupersededStamps(pointingTo: entry.id)
+        }
+        modelContext.delete(collection)
+        recordEvent(
+            kind: .deleted,
+            collectionID: collectionID,
+            snapshotText: title,
+            actor: actor
+        )
+        save()
+    }
+
+    // MARK: - Entries
+
+    /// `disclosedAt` is non-nil only for writes whose disclosure already
+    /// happened at write time (a proposal card the user just accepted) — it
+    /// must land in the same save as the entry, or a crash in between
+    /// leaves an "undisclosed" AI entry that `MemoryCardCoordinator` would
+    /// rehydrate into a duplicate chip.
+    @discardableResult
+    func addEntry(
+        body: String,
+        tags: [String] = [],
+        to collection: MemoryCollection,
+        createdBy: MemoryActor,
+        sourceChatID: UUID? = nil,
+        disclosedAt: Date? = nil
+    ) -> MemoryEntry {
+        let entry = MemoryEntry(
+            body: body,
+            tags: tags,
+            createdBy: createdBy,
+            sourceChatID: sourceChatID,
+            disclosedAt: disclosedAt
+        )
+        entry.collection = collection
+        modelContext.insert(entry)
+        collection.updatedAt = .now
+        recordEvent(
+            kind: .added,
+            entryID: entry.id,
+            collectionID: collection.id,
+            snapshotText: body,
+            actor: createdBy,
+            chatID: sourceChatID
+        )
+        save()
+        return entry
+    }
+
+    func editEntry(
+        _ entry: MemoryEntry,
+        body: String? = nil,
+        tags: [String]? = nil,
+        actor: MemoryActor
+    ) {
+        let previousBody = entry.body
+        if let body { entry.body = body }
+        if let tags { entry.tags = tags }
+        entry.updatedAt = .now
+        entry.collection?.updatedAt = .now
+        recordEvent(
+            kind: .edited,
+            entryID: entry.id,
+            collectionID: entry.collection?.id,
+            snapshotText: previousBody,
+            actor: actor
+        )
+        save()
+    }
+
+    func moveEntry(
+        _ entry: MemoryEntry,
+        to collection: MemoryCollection,
+        actor: MemoryActor
+    ) {
+        guard entry.collection?.id != collection.id else { return }
+        entry.collection?.updatedAt = .now
+        entry.collection = collection
+        entry.updatedAt = .now
+        collection.updatedAt = .now
+        recordEvent(
+            kind: .movedCollection,
+            entryID: entry.id,
+            collectionID: collection.id,
+            snapshotText: entry.body,
+            actor: actor
+        )
+        save()
+    }
+
+    /// The only way an established fact changes: a replacement entry is
+    /// added and the old one is stamped `supersededByID` — never an in-place
+    /// rewrite. Contradictions stay visible with timestamps.
+    @discardableResult
+    func supersedeEntry(
+        _ old: MemoryEntry,
+        withBody body: String,
+        tags: [String]? = nil,
+        createdBy: MemoryActor,
+        sourceChatID: UUID? = nil,
+        disclosedAt: Date? = nil
+    ) throws -> MemoryEntry {
+        guard old.supersededByID == nil else { throw MemoryError.alreadySuperseded }
+        let replacement = MemoryEntry(
+            body: body,
+            tags: tags ?? old.tags,
+            createdBy: createdBy,
+            sourceChatID: sourceChatID,
+            disclosedAt: disclosedAt
+        )
+        replacement.collection = old.collection
+        modelContext.insert(replacement)
+        old.supersededByID = replacement.id
+        old.updatedAt = .now
+        old.collection?.updatedAt = .now
+        recordEvent(
+            kind: .superseded,
+            entryID: replacement.id,
+            collectionID: old.collection?.id,
+            snapshotText: old.body,
+            actor: createdBy,
+            chatID: sourceChatID
+        )
+        save()
+        return replacement
+    }
+
+    func deleteEntry(_ entry: MemoryEntry, actor: MemoryActor) {
+        let body = entry.body
+        let entryID = entry.id
+        let collection = entry.collection
+        clearSupersededStamps(pointingTo: entryID)
+        modelContext.delete(entry)
+        collection?.updatedAt = .now
+        recordEvent(
+            kind: .deleted,
+            entryID: entryID,
+            collectionID: collection?.id,
+            snapshotText: body,
+            actor: actor
+        )
+        save()
+    }
+
+    /// The disclosure chip's Undo: the write never happened, so this is a
+    /// hard delete (no tombstone — the activity event's snapshot is the
+    /// audit trail). Only allowed while the entry is unmodified and
+    /// unsuperseded; a supersession write that's undone also un-stamps the
+    /// fact it replaced, restoring it as current.
+    func undoEntryWrite(_ entry: MemoryEntry) throws {
+        guard entry.isUndoableWrite else { throw MemoryError.notUndoable }
+        let body = entry.body
+        let entryID = entry.id
+        let collection = entry.collection
+        clearSupersededStamps(pointingTo: entryID)
+        modelContext.delete(entry)
+        collection?.updatedAt = .now
+        recordEvent(
+            kind: .undone,
+            entryID: entryID,
+            collectionID: collection?.id,
+            snapshotText: body,
+            actor: .user
+        )
+        save()
+    }
+
+    /// Removing an entry (delete or undo) must not leave dangling
+    /// `supersededByID` stamps: the fact it replaced becomes current again.
+    private func clearSupersededStamps(pointingTo entryID: UUID) {
+        let predicate = #Predicate<MemoryEntry> { $0.supersededByID == entryID }
+        let stamped = (try? modelContext.fetch(FetchDescriptor(predicate: predicate))) ?? []
+        for entry in stamped {
+            entry.supersededByID = nil
+        }
+    }
+
+    // MARK: - Handle resolution
+
+    /// Resolves a model-facing entry handle — a prefix of the entry UUID's
+    /// hex form, canonically the first 8 characters (`MemoryEntry.handle`).
+    /// Errors on no match and on ambiguity rather than guessing.
+    func resolveEntry(handle: String) throws -> MemoryEntry {
+        try Self.resolve(handle: handle, in: allEntries(), id: \.id) {
+            switch $0 {
+            case .empty, .notFound: MemoryError.entryNotFound(handle: handle)
+            case .ambiguous(let count): MemoryError.ambiguousHandle(handle: handle, matchCount: count)
+            }
+        }
+    }
+
+    /// `resolveEntry(handle:)`'s counterpart for collections — used by
+    /// `open_memory_collection`, which also accepts a title (resolved at the
+    /// tool layer); this handles the handle form.
+    func resolveCollection(handle: String) throws -> MemoryCollection {
+        try Self.resolve(handle: handle, in: collections(), id: \.id) {
+            switch $0 {
+            case .empty, .notFound: MemoryError.collectionNotFound
+            case .ambiguous(let count): MemoryError.ambiguousHandle(handle: handle, matchCount: count)
+            }
+        }
+    }
+
+    private enum HandleResolutionFailure {
+        case empty
+        case notFound
+        case ambiguous(Int)
+    }
+
+    private static func resolve<T>(
+        handle: String,
+        in candidates: [T],
+        id: KeyPath<T, UUID>,
+        error: (HandleResolutionFailure) -> MemoryError
+    ) throws -> T {
+        let normalized = handle
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: "")
+        guard !normalized.isEmpty else { throw error(.empty) }
+        let matches = candidates.filter {
+            $0[keyPath: id].uuidString.lowercased()
+                .replacingOccurrences(of: "-", with: "")
+                .hasPrefix(normalized)
+        }
+        switch matches.count {
+        case 0: throw error(.notFound)
+        case 1: return matches[0]
+        default: throw error(.ambiguous(matches.count))
+        }
+    }
+
+    func entry(id: UUID) -> MemoryEntry? {
+        var descriptor = FetchDescriptor<MemoryEntry>(
+            predicate: #Predicate { $0.id == id }
+        )
+        descriptor.fetchLimit = 1
+        return (try? modelContext.fetch(descriptor))?.first
+    }
+
+    func allEntries() -> [MemoryEntry] {
+        let descriptor = FetchDescriptor<MemoryEntry>(
+            sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
+        )
+        return (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    // MARK: - Search
+
+    /// Which collections a search covers, by scope.
+    enum ScopeFilter: Hashable {
+        case any
+        case global
+        case feature(WorkspaceFeature)
+    }
+
+    struct SearchFilter {
+        var tags: [String] = []
+        var accessLevel: MemoryCollection.AccessLevel?
+        var scope: ScopeFilter = .any
+        var aiCreatedOnly = false
+
+        nonisolated init(
+            tags: [String] = [],
+            accessLevel: MemoryCollection.AccessLevel? = nil,
+            scope: ScopeFilter = .any,
+            aiCreatedOnly: Bool = false
+        ) {
+            self.tags = tags
+            self.accessLevel = accessLevel
+            self.scope = scope
+            self.aiCreatedOnly = aiCreatedOnly
+        }
+    }
+
+    /// The single search seam shared by the Memory UI and the
+    /// `search_memory` tool — in-memory lexical matching via the shared
+    /// `SearchQuery` over entry bodies, entry/collection tags, collection
+    /// titles, and provenance. Deliberately not `SearchIndex` (see
+    /// `docs/MEMORY_PLAN.md`); this method is where a future index-backed
+    /// swap would land. Superseded entries are included — search and the UI
+    /// see everything; only prompt injection excludes them.
+    func search(_ text: String, filter: SearchFilter = SearchFilter()) -> [MemoryEntry] {
+        allEntries().filter { entry in
+            guard matchesFilter(entry, filter: filter) else { return false }
+            guard SearchQuery.isActive(text) else { return true }
+            return SearchQuery.matches(text, in: searchValues(for: entry))
+        }
+    }
+
+    private func matchesFilter(_ entry: MemoryEntry, filter: SearchFilter) -> Bool {
+        if filter.aiCreatedOnly, entry.createdBy != .ai { return false }
+        if let accessLevel = filter.accessLevel,
+           entry.collection?.accessLevel != accessLevel { return false }
+        switch filter.scope {
+        case .any:
+            break
+        case .global:
+            guard entry.collection?.scope == nil else { return false }
+        case .feature(let feature):
+            guard entry.collection?.scope == feature else { return false }
+        }
+        if !filter.tags.isEmpty {
+            let entryTags = Set(entry.tags + (entry.collection?.tags ?? []))
+            guard filter.tags.allSatisfy(entryTags.contains) else { return false }
+        }
+        return true
+    }
+
+    private func searchValues(for entry: MemoryEntry) -> [String] {
+        var values = [entry.body, entry.handle, entry.createdBy.rawValue]
+        values.append(contentsOf: entry.tags)
+        if let collection = entry.collection {
+            values.append(collection.title)
+            values.append(contentsOf: collection.tags)
+        }
+        return values
+    }
+
+    /// Records the resolution of a memory proposal in the activity feed
+    /// (`MemoryProposalDispatcher` calls this after the terminal status
+    /// save succeeds). Entry/collection writes an acceptance performed have
+    /// their own events already; this row records the decision itself.
+    func recordProposalResolution(
+        accepted: Bool,
+        proposal: MemoryProposal,
+        collectionID: UUID?
+    ) {
+        recordEvent(
+            kind: accepted ? .proposalAccepted : .proposalDismissed,
+            collectionID: collectionID,
+            snapshotText: proposal.entryText.isEmpty ? proposal.summary : proposal.entryText,
+            actor: .user,
+            chatID: proposal.chatID
+        )
+        save()
+    }
+
+    // MARK: - Activity & summary
+
+    func recentActivity(limit: Int = 100) -> [MemoryActivityEvent] {
+        var descriptor = FetchDescriptor<MemoryActivityEvent>(
+            sortBy: [SortDescriptor(\.createdAt, order: .reverse)]
+        )
+        descriptor.fetchLimit = limit
+        return (try? modelContext.fetch(descriptor)) ?? []
+    }
+
+    nonisolated struct Summary: Sendable {
+        let collectionCount: Int
+        let activeEntryCount: Int
+        let pendingProposalCount: Int
+        let lastActivityAt: Date?
+    }
+
+    /// The Workspace tile's numbers.
+    func summary() -> Summary {
+        let pendingRawValue = MemoryProposal.Status.pending.rawValue
+        let pendingDescriptor = FetchDescriptor<MemoryProposal>(
+            predicate: #Predicate { $0.statusRawValue == pendingRawValue }
+        )
+        let entryDescriptor = FetchDescriptor<MemoryEntry>(
+            predicate: #Predicate { $0.supersededByID == nil }
+        )
+        return Summary(
+            collectionCount: (try? modelContext.fetchCount(FetchDescriptor<MemoryCollection>())) ?? 0,
+            activeEntryCount: (try? modelContext.fetchCount(entryDescriptor)) ?? 0,
+            pendingProposalCount: (try? modelContext.fetchCount(pendingDescriptor)) ?? 0,
+            lastActivityAt: recentActivity(limit: 1).first?.createdAt
+        )
+    }
+
+    // MARK: - Persistence
+
+    private func recordEvent(
+        kind: MemoryActivityEvent.Kind,
+        entryID: UUID? = nil,
+        collectionID: UUID? = nil,
+        snapshotText: String? = nil,
+        actor: MemoryActor,
+        chatID: UUID? = nil
+    ) {
+        modelContext.insert(MemoryActivityEvent(
+            kind: kind,
+            entryID: entryID,
+            collectionID: collectionID,
+            snapshotText: snapshotText,
+            actor: actor,
+            chatID: chatID
+        ))
+    }
+
+    /// Persists the current context and bumps `mutationGeneration`. Every
+    /// mutation method above funnels through this so the activity event and
+    /// the mutation land in one save and the prompt cache invalidates once.
+    /// Failures log-and-continue (the `EmailRepository` precedent) but roll
+    /// the context back so unsaved mutations don't linger as ghosts that
+    /// `@Query` UI and the prompt builder would show as if persisted.
+    func save() {
+        do {
+            try modelContext.save()
+            mutationGeneration += 1
+        } catch {
+            modelContext.rollback()
+            Self.logger.error("MemoryRepository save failed: \(String(describing: error))")
+        }
+    }
+}

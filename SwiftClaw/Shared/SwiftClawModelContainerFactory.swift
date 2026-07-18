@@ -47,6 +47,10 @@ enum SwiftClawModelContainerFactory {
             EmailNote.self,
             EmailAttachment.self,
             NoteEditProposal.self,
+            MemoryCollection.self,
+            MemoryEntry.self,
+            MemoryProposal.self,
+            MemoryActivityEvent.self,
         ])
         let calendarSchema = Schema([
             CalendarEvent.self,
@@ -63,6 +67,10 @@ enum SwiftClawModelContainerFactory {
             EmailNote.self,
             EmailAttachment.self,
             NoteEditProposal.self,
+            MemoryCollection.self,
+            MemoryEntry.self,
+            MemoryProposal.self,
+            MemoryActivityEvent.self,
             CalendarEvent.self,
             UserCalendar.self,
             Reminder.self,
@@ -201,6 +209,7 @@ enum SwiftClawModelContainerFactory {
             SampleChatSeeder.seedIfRequested(into: container)
             SampleEmailSeeder.seedIfRequested(into: container)
             NoteProposalFixtureSeeder.seedIfRequested(into: container, fixtureRoot: fixtureRoot)
+            MemoryCardFixtureSeeder.seedIfRequested(into: container)
         }
     }
     #else

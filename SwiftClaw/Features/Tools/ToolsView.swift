@@ -24,6 +24,8 @@ struct ToolsView: View {
     private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
     @AppStorage(SettingsKeys.notesEnabled)
     private var isNotesEnabled = SettingsStorage.defaultNotesEnabled
+    @AppStorage(SettingsKeys.memoryEnabled)
+    private var isMemoryEnabled = SettingsStorage.defaultMemoryEnabled
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -63,6 +65,11 @@ struct ToolsView: View {
             // `search_notes`/`read_note`'s `isConfigured` reads — but `tools`
             // is a snapshot from the last `refresh()`, so without this the
             // Ready/Needs setup badges go stale until the view reappears.
+            refresh()
+        }
+        .onChange(of: isMemoryEnabled) { _, _ in
+            // Same staleness for the memory tools' `isConfigured`, which
+            // reads `MemoryFeatureModel.shared.isAvailable`.
             refresh()
         }
         .task {
@@ -215,6 +222,7 @@ struct ToolsView: View {
         case .calendar: $isCalendarEnabled
         case .reminders: $isRemindersEnabled
         case .notes: $isNotesEnabled
+        case .memory: $isMemoryEnabled
         }
     }
 

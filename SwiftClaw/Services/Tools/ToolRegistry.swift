@@ -7,6 +7,8 @@ struct ToolRegistry: Sendable {
         InvestigateTool(),
         SearchNotesTool(),
         ReadNoteTool(),
+        SearchMemoryTool(),
+        OpenMemoryCollectionTool(),
     ])
 
     let tools: [any Tool]

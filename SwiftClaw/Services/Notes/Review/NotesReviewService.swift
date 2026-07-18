@@ -9,6 +9,14 @@ final class NotesReviewService {
     private static let logger = AppLog.make("notes.review")
     private let modelContainer: ModelContainer
     private let userDefaults: UserDefaults
+
+    /// Memory availability through this service's injected defaults — the
+    /// global `MemoryFeatureModel.shared.isAvailable` reads `.standard`,
+    /// which tests must not depend on.
+    private var isMemoryAvailable: Bool {
+        SettingsStorage.isMemoryEnabled(userDefaults: userDefaults)
+            && MemoryFeatureModel.shared.repository != nil
+    }
     private let dataSource: any NotesReviewDataSource
     var onReviewCreated: ((UUID, String) -> Void)?
     private(set) var lastStatusMessage: String?
@@ -44,14 +52,29 @@ final class NotesReviewService {
         guard usesFixtureInference || !model.isEmpty else { lastStatusMessage = "Review needs a model in Settings"; return false }
 
         let collector = NotesReviewFindingCollector()
+        let memoryCollector = MemoryProposalRunCollector()
+        let reviewChatCapture = MemoryReviewChatCapture()
         let fetch = NotesReviewFetchTool(dataSource: dataSource, collector: collector, userDefaults: userDefaults)
         let notify = NotesReviewNotifyTool(modelContainer: modelContainer, collector: collector, targetChatID: targetChatID) { [weak self] chatID, summary in
+            reviewChatCapture.chatID = chatID
             if targetChatID == nil {
                 self?.onReviewCreated?(chatID, summary)
             }
         }
-        let tools = ToolRegistry(tools: [fetch, notify]).availableTools
-        let messages: [InferenceMessage] = [.system(Self.systemPrompt(userDefaults: userDefaults)), .user(Self.userPrompt())]
+        var reviewTools: [any Tool] = [fetch, notify]
+        if isMemoryAvailable {
+            reviewTools.append(ProposeMemoryTool(
+                feature: .notes,
+                modelContainer: modelContainer,
+                collector: memoryCollector
+            ))
+        }
+        let tools = ToolRegistry(tools: reviewTools).availableTools
+        var systemPrompt = Self.systemPrompt(userDefaults: userDefaults)
+        if let memoryBlock = MemoryReviewContextBuilder.block(for: .notes, isEnabled: isMemoryAvailable) {
+            systemPrompt += "\n\n\(memoryBlock)"
+        }
+        let messages: [InferenceMessage] = [.system(systemPrompt), .user(Self.userPrompt())]
         do {
             #if DEBUG
                 if usesFixtureInference {
@@ -67,6 +90,16 @@ final class NotesReviewService {
             lastStatusMessage = "Review failed"
             return false
         }
+        // Any memory proposals this run raised get their cards now — into
+        // the run's review chat when one exists, else the shared
+        // "Memory suggestions" chat. The router also sweeps this source's
+        // orphans from runs that were interrupted before routing.
+        MemoryReviewProposalRouter.route(
+            proposalIDs: memoryCollector.proposalIDs,
+            for: .notes,
+            preferredChatID: targetChatID ?? reviewChatCapture.chatID,
+            modelContainer: modelContainer
+        )
         // Completion is recorded only after inference returns successfully;
         // failures remain eligible for retry.
         SettingsStorage.saveNotesLastReviewCompletedAt(.now, userDefaults: userDefaults)

@@ -282,6 +282,8 @@ extension ReviewActionToken {
         case .archive: "archivebox.fill"
         case .approve: "checkmark.circle.fill"
         case .reject: "xmark.circle.fill"
+        case .edit: "pencil.circle.fill"
+        case .undo: "arrow.uturn.backward.circle.fill"
         }
     }
 
@@ -294,6 +296,8 @@ extension ReviewActionToken {
         case .archive: .gray
         case .approve: .green
         case .reject: .red
+        case .edit: .blue
+        case .undo: .gray
         }
     }
 }

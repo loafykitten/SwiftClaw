@@ -507,8 +507,8 @@ private struct WindowedEmailContent: View {
                     repository: repository,
                     mailClient: mailClient
                 )
-            case .approve, .reject:
-                // Note-proposal-only tokens; never offered as an email quick action.
+            case .approve, .reject, .edit, .undo:
+                // Proposal/memory-card tokens; never offered as an email quick action.
                 break
             }
         }

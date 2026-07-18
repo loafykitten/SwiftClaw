@@ -256,6 +256,30 @@ that platform; otherwise cover both where the behavior exists on both.
   must appear in one clearly named sibling conflict copy that can be compared
   and merged manually.
 
+### Memory
+
+- **H-MEM-001 — Autonomous capture judgment.** With Memory enabled and a
+  configured model, share durable preferences in normal chats and judge what
+  the assistant chooses to save: facts should be atomic and short, filed into
+  sensible collections (Inbox when uncertain, never a wrong home), each save
+  disclosed with a chip, and trivial one-off statements should not be saved.
+- **H-MEM-002 — Asks-first flow quality.** With an asks-first collection,
+  ask the assistant to remember something belonging there. Judge the proposal
+  card's clarity (entry text, target, reason), the Edit sheet's wording flow,
+  and that dismissed proposals are not re-proposed in later conversations.
+- **H-MEM-003 — Review-run proposal restraint.** Over several days of email/
+  calendar/reminders/notes reviews with representative data, confirm
+  `propose_memory` suggestions are rare (cap two per run), genuinely durable
+  patterns, land in the run's review chat or a Memory suggestions chat, and
+  that declined suggestions stop reappearing.
+- **H-MEM-004 — Recall usefulness.** With a seeded store, confirm the
+  assistant naturally applies stored facts in chats without being reminded,
+  including scoped collections during feature discussions, and never recites
+  entry handles to the user.
+- **H-MEM-005 — Accessibility pass.** VoiceOver across collection rows
+  (access description spoken), entry rows, chip and proposal cards, editor
+  sheets, and confirmation dialogs. Badge meaning must never rely on color.
+
 ### Settings
 
 - **H-SET-001 — Theme quality and propagation.** Judge System/Light/Dark and
@@ -290,11 +314,11 @@ that platform; otherwise cover both where the behavior exists on both.
   email. Chats and Workspace badges and the Dock count must agree with visible
   state and update after viewing, archive, or delete.
 - **CU-SHELL-004 — Feature gating.** Disable and re-enable Email, Calendar,
-  Reminders, and Notes. Workspace widgets and feature-backed Settings sections
-  must update immediately, and hidden destinations must be pruned from selection
-  and navigation history.
-- **CU-SHELL-005 — Placeholder features.** Deep Research and Memory must
-  show intentional Coming Soon states with correct titles rather than blank or
+  Reminders, Notes, and Memory. Workspace widgets and feature-backed Settings
+  sections must update immediately, and hidden destinations must be pruned from
+  selection and navigation history.
+- **CU-SHELL-005 — Placeholder features.** Deep Research must show an
+  intentional Coming Soon state with a correct title rather than blank or
   interactive-looking unfinished UI.
 - **CU-SHELL-006 — Theme persistence.** Change theme/accent, open both windows,
   relaunch, and confirm appearance remains consistent.
@@ -429,7 +453,7 @@ that platform; otherwise cover both where the behavior exists on both.
 ### Workspace and Widgets
 
 - **CU-WORK-001 — Grid and feature navigation.** Enabled Email, Calendar,
-  Reminders, and Notes tiles appear with Memory in an adaptive readable grid.
+  Reminders, Notes, and Memory tiles appear in an adaptive readable grid.
   Each tile opens its feature.
 - **CU-WORK-002 — Disabled feature affordance.** Disabled features move to More
   Features. Selecting one opens Settings > Tools with the correct row centered
@@ -449,6 +473,10 @@ that platform; otherwise cover both where the behavior exists on both.
   count, Captured Today, and health without clipping on macOS or compact iOS.
   Its Quick Capture action must append through the configured vault and update
   both counts immediately without navigating first.
+- **CU-WORK-008 — Memory tile.** With Memory enabled, the tile must show live
+  entry and collection counts, and a pending-proposals line only when
+  proposals await review; counts must refresh on reappearance after
+  adding/removing entries.
 
 ### Email
 
@@ -699,6 +727,46 @@ that platform; otherwise cover both where the behavior exists on both.
   cards are distinguishable. Restore a revision and confirm the success path names one
   new conflict copy containing the historical content while the live note stays
   unchanged. Close the sheet and confirm the copy is visible and searchable.
+
+### Memory
+
+- **CU-MEM-001 — Landing, Inbox, and badges.** With Memory freshly enabled,
+  the landing (iOS) / sidebar (macOS) must show All Memory, Recent, Activity,
+  and a Collections group containing an auto-created Inbox. Every collection
+  row must carry an explicit labeled access badge ("AI asks first" /
+  "AI writes freely" with distinct symbols), tag chips, entry count, and
+  last-changed date.
+- **CU-MEM-002 — Collection lifecycle and confirmations.** Create a collection
+  with details, tags, access level, scope, and pinned; edit it; verify the
+  asksFirst → writesFreely switch requires a confirmation dialog while the
+  reverse does not; delete it via its confirmation naming the entry count.
+  The Inbox must refuse delete/scope affordances.
+- **CU-MEM-003 — Entry lifecycle and activity feed.** Add, edit, move, and
+  delete entries; verify superseded entries render with their marker and stay
+  out of a collection's active count. Every mutation must appear in Activity
+  with the right verb, actor, snapshot text, and collection-level events
+  phrased as "Created/Edited/Deleted collection".
+- **CU-MEM-004 — Search and filters.** The search field must be labeled for
+  its scope ("Search All Memory" vs. the collection name); queries must match
+  entry bodies, tags, and collection titles; the filter menu (Added by AI,
+  access level, scope) must combine with search; no-result and empty states
+  must be distinct.
+- **CU-MEM-005 — Write chip cards.** Launch with `-SwiftClawSeedMemoryCards`.
+  The seeded chat's "Memory updated" chip must show the entry, its
+  collection, and View + Undo. View opens a read-only peek sheet with the
+  access badge. Undo flips the row to "No longer in memory" and removes the
+  entry from Memory; an edited-since entry must show Undo disabled with an
+  explanation instead.
+- **CU-MEM-006 — Proposal cards.** With the same fixture, Accept must flip a
+  card to "Saved to memory" and create the entry in its target; Edit must
+  open prefilled, and Save & Accept must apply the modified wording;
+  Dismiss must flip to "Dismissed" and write nothing. New-collection
+  proposals must create the collection with its seed entries on accept.
+  States must survive relaunch.
+- **CU-MEM-007 — Tool listing and gating.** With Memory enabled, Search
+  Memory and Open Memory Collection must show Ready in Settings › Tools
+  without per-tool switches; disabling Memory must immediately flip them to
+  Needs setup and remove all memory tools from chat.
 
 ### Settings
 
