@@ -165,7 +165,5 @@ Live checks still open:
 Possible follow-ups:
 
 - iOS background mail sync with `BGTaskScheduler`.
-- Memory-backed email review context (e.g. sender-level preferences), once
-  there are concrete preferences worth remembering.
 - More review follow-up tools (reply/delete) if the review-chat workflow needs
   them.

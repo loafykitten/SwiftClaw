@@ -153,6 +153,11 @@ struct SettingsStorageTests {
 
         fixture.defaults.set("bogus", forKey: SettingsKeys.clawReasoningEffort)
         #expect(SettingsStorage.loadClawReasoningEffort(userDefaults: fixture.defaults) == .medium)
+
+        // The Claw model is reasoning-designated: a persisted `off` (from
+        // before the pickers stopped offering it) coerces to the default.
+        fixture.defaults.set(ModelReasoningEffort.off.rawValue, forKey: SettingsKeys.clawReasoningEffort)
+        #expect(SettingsStorage.loadClawReasoningEffort(userDefaults: fixture.defaults) == .medium)
     }
 
     @Test func chatContextTokenBudgetUsesDefaultStoredAndClampedValues() throws {

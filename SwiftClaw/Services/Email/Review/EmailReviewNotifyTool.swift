@@ -155,21 +155,28 @@ final class EmailReviewNotifyTool: Tool {
 
             // Batch-fetch subjects + senders in the same context the chat
             // insert will use — one `ModelContext` for the whole tool call.
-            var emailMetadata: [UUID: (subject: String, sender: String, date: String, accountLabel: String?)] = [:]
+            var emailMetadata: [UUID: (subject: String, sender: String, date: String, accountLabel: String?, isFlagged: Bool)] = [:]
             for (_, uuid) in actionsWithGUIDs where emailMetadata[uuid] == nil {
                 if let email = repository.fetchEmail(by: uuid) {
                     emailMetadata[uuid] = (
                         email.subject,
                         email.displayFromAddress,
                         EmailReviewDateFormatter.string(from: email.date),
-                        self.accountLabelProvider(email.accountID)
+                        self.accountLabelProvider(email.accountID),
+                        email.isFlagged
                     )
                 }
             }
 
             let reviewItems: [ReviewItem] = actionsWithGUIDs.map { action, uuid in
-                let token = ReviewActionToken(rawValue: action.actionToken) ?? .review
+                var token = ReviewActionToken(rawValue: action.actionToken) ?? .review
                 let meta = emailMetadata[uuid]
+                // Flagging an already-flagged email is a no-op the user reads
+                // as the review repeating itself; downgrade to a plain review
+                // suggestion regardless of what the model proposed.
+                if token == .flag, meta?.isFlagged == true {
+                    token = .review
+                }
                 return ReviewItem(
                     itemID: uuid,
                     actionToken: token,

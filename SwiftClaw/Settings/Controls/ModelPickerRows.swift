@@ -50,9 +50,26 @@ struct ReasoningEffortRow: View {
     @Binding var selection: String
     var isDisabled: Bool = false
 
+    // The Claw model is reasoning-designated, so a stale persisted `off`
+    // (or an unknown raw value) displays as the default effort instead of
+    // an empty picker.
+    private var normalizedSelection: ModelReasoningEffort {
+        let stored = ModelReasoningEffort(rawValue: selection)
+        guard let stored, stored.isReasoningEnabled else {
+            return SettingsStorage.defaultClawReasoningEffort
+        }
+        return stored
+    }
+
     var body: some View {
         LabeledContent {
-            Picker("Reasoning Effort", selection: $selection) {
+            Picker(
+                "Reasoning Effort",
+                selection: Binding(
+                    get: { normalizedSelection.rawValue },
+                    set: { selection = $0 }
+                )
+            ) {
                 ForEach(ModelReasoningEffort.selectableCases) { effort in
                     Text(effort.displayName).tag(effort.rawValue)
                 }
@@ -66,6 +83,6 @@ struct ReasoningEffortRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Claw reasoning effort")
-        .accessibilityValue(ModelReasoningEffort(rawValue: selection)?.displayName ?? "Off")
+        .accessibilityValue(normalizedSelection.displayName)
     }
 }

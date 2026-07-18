@@ -83,7 +83,8 @@ is never the signal.
 A collection is global (default) or scoped to one workspace feature. Scope
 is an injection-priority hint, not a silo: chat sees scoped collections
 under the normal exposure rules; search and the Memory UI cover everything;
-background reviews use scope to build a small targeted context. Pinned
+background reviews inject everything except collections scoped to a
+different feature. Pinned
 collections are always injected — first in every chat exposure tier and in
 every review run regardless of scope — the home for cross-cutting durable
 context.
@@ -152,9 +153,12 @@ Review services are memory *consumers and proposers*, never direct writers:
 
 - **Read recipe** (`MemoryReviewContextBuilder.block(for:)`): pinned
   collections (regardless of scope) + collections scoped to the service's
-  feature + recent declined proposal texts ("do not re-propose") — the
-  injected text is the dedup. Appended to each service's standalone system
-  prompt.
+  feature + global (unscoped) collections including the Inbox — only
+  collections scoped to a *different* feature are excluded, because
+  chat-created memories usually land unscoped and a missed relevant memory
+  is worse than spent tokens — + recent declined proposal texts ("do not
+  re-propose") — the injected text is the dedup. Appended to each service's
+  standalone system prompt.
 - **`propose_memory`** (`ProposeMemoryTool`) — system-only, built per run
   into each service's scoped registry, never `ToolRegistry.shared`.
   Proposes a finished artifact (exact text, target or new-collection
