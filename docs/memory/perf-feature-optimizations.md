@@ -13,10 +13,26 @@ and full test suite green, findings below addressed or explicitly skipped.
 
 ## Current state
 
-Seven per-feature audits (gpt-5.6-sol, read-only) completed; every accepted
-finding was verified against source at the cited location by Claude before
-inclusion. No implementation yet. Audit reports live in the session
-scratchpad (`perf-explore/report-*.md`); this file is the durable record.
+Wave 0 plus batches W1 (Notes editor), W3 (Memory), W4 (Reminders),
+W5 (Calendar), and W6 (Email) are implemented, reviewed, tested, and merged
+onto `perf/feature-optimizations`; the full macOS test suite passed on the
+integrated branch at the W1+W3+W4+W5 point, and W6's ten covering suites
+passed after merge-time fixes. W2 (Notes services) and W7 (Chat) codex runs
+are in flight; W8 (Home/Workspace) waits on W7's async attachment API.
+
+Merge-time findings worth remembering:
+- codex's sandbox cannot run xcodebuild (CoreSimulatorService); every batch
+  is built/tested by the reviewer afterwards. Expect small compile fixes:
+  default MainActor isolation inference (`nonisolated` needed on helper
+  classes), missing `return` after adding statements to implicit-return
+  bodies, `nil` needing contextual types.
+- Email review selection: threads fetched via relationship predicates can
+  serve stale attribute snapshots — archived/trashed exclusion must live in
+  the fetch predicate, not in-memory rechecks (regression was caught by
+  `EmailReviewFetchTests`, fixed by restoring visibility conditions with a
+  folders-requested fallback).
+- W5's ICS COUNT regression tests had swapped fixtures/expectations
+  (fixed); recurrence-end predicate is now `>=` at the window edge.
 
 ## User decisions (do not re-litigate)
 
