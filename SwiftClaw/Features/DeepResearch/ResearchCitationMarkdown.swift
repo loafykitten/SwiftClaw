@@ -5,7 +5,9 @@ import Foundation
 /// inline code, and existing `[label](url)` links pass through untouched.
 enum ResearchCitationMarkdown {
     /// Also derives which sources back a ⚠-flagged claim: any citation index
-    /// appearing on a line that carries the marker.
+    /// in the same *sentence* as the marker. Paragraphs are single markdown
+    /// lines, so line granularity would smear one flagged claim over every
+    /// verified citation in the paragraph.
     struct Rendering {
         let markdown: String
         let flaggedSourceIndices: Set<Int>
@@ -39,7 +41,11 @@ enum ResearchCitationMarkdown {
             let converted = convertLine(line, validIndices: validIndices)
             output += converted
             if line.contains("⚠") {
-                flagged.formUnion(citationIndices(in: line, validIndices: validIndices))
+                for sentence in sentences(in: line) where sentence.contains("⚠") {
+                    flagged.formUnion(
+                        citationIndices(in: String(sentence), validIndices: validIndices)
+                    )
+                }
             }
         }
 
@@ -84,6 +90,27 @@ enum ResearchCitationMarkdown {
         }
 
         return output
+    }
+
+    /// Splits a line on sentence terminators (`.` `!` `?` followed by a
+    /// space or end of line). The ⚠ marker precedes its sentence's closing
+    /// period ("… BCE [2] ⚠."), so it stays inside the right segment.
+    private static func sentences(in line: String) -> [Substring] {
+        var result = [Substring]()
+        var start = line.startIndex
+        var index = line.startIndex
+        while index < line.endIndex {
+            let next = line.index(after: index)
+            if ".!?".contains(line[index]), next == line.endIndex || line[next] == " " {
+                result.append(line[start..<next])
+                start = next
+            }
+            index = next
+        }
+        if start < line.endIndex {
+            result.append(line[start...])
+        }
+        return result
     }
 
     private static func citationIndices(in line: String, validIndices: Set<Int>) -> Set<Int> {

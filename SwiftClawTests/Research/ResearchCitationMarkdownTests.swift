@@ -40,13 +40,16 @@ struct ResearchCitationMarkdownTests {
         #expect(rendering.markdown == "See [1](https://example.org) and cite \(link(2)).")
     }
 
-    @Test func flagsSourcesOnWarningLines() {
+    @Test func flagsOnlySourcesInTheWarnedSentence() {
+        // One markdown line is a whole paragraph — only the ⚠ sentence's
+        // citations may be flagged, or verified sources in the same
+        // paragraph would show a false "not verified" note.
         let input = """
             Supported claim [1].
-            Dubious claim [2] ⚠. Another [3].
+            Fine here [1]. Dubious claim [2] ⚠. Another fine one [3].
             """
         let rendering = ResearchCitationMarkdown.linkingCitations(in: input, validIndices: valid)
-        #expect(rendering.flaggedSourceIndices == [2, 3])
+        #expect(rendering.flaggedSourceIndices == [2])
         #expect(rendering.markdown.contains("\(link(2)) ⚠."))
     }
 

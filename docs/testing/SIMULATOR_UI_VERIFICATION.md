@@ -92,6 +92,18 @@ before launching. `NoteProposalFixtureLaunch` is the equivalent for Notes.
   companions, and a device reboot; only screenshots and AX kept working.
   When input dies mid-session, don't burn time on restarts — switch to
   launch-argument driving (below) and screenshot verification.
+  **2026-07-19: confirmed host-level and reboot-proof** — after a full
+  machine reboot, fresh boots of two different devices, and a fresh
+  companion, no HID landed at all (taps, HOME, swipes) while AX reads and
+  screenshots worked and the companion logged "hid succeeded" throughout.
+  Xcode (27A5218g) and idb-companion (1.1.8) versions unchanged from when
+  it worked, so treat idb HID injection as unreliable on this setup.
+  **Working alternative: drive through Device Hub via codex computer use**
+  (`/Applications/Xcode.app/Contents/Applications/DeviceHub.app`) — clicks
+  and typing into its streamed simulator display work, combined with
+  `simctl io ... screenshot` for framebuffer captures. One caveat: typed
+  text can drop keystrokes (a trailing character went missing), so avoid
+  asserting on exact typed strings.
 - SwiftUI sheets sometimes collapse `ui describe-all` to just the app root
   element — fall back to a screenshot plus coordinate math.
 - An occasional tap silently misses; re-tap once before concluding a control
