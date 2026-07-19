@@ -462,6 +462,47 @@ person has to do it), followed by the technical detail for reference.
   *Detail:* The access-level description must be spoken, and badge meaning
   must never rely on color alone.
 
+### Deep Research
+
+- **H-DR-001 — Full deep-research run quality.**
+  **Do:** With real Brave and model keys, run Deep Research on a topic you
+  know well: answer or skip the clarifying questions, edit the plan (rewrite
+  one question, delete one, add one), start the run, and read the finished
+  report end to end.
+  **Why:** Report quality, citation accuracy, and whether the ⚠ flags and
+  Open questions feel honest are judgment calls only a person can make.
+  *Detail:* The report should be concise (screens, not pages), every [n]
+  citation popover must show a believable excerpt from that source, and the
+  run should finish inside the promised time scale.
+- **H-DR-002 — Mid-run behavior on a real run.**
+  **Do:** Start a run, watch the stage timeline and activity feed, navigate
+  away and back, then stop a later run mid-flight.
+  **Why:** Whether progress feels alive and cancel feels safe is subjective;
+  real runs pace differently than fixtures.
+  *Detail:* Stopping must produce a partial report with a visible
+  stopped-early banner and run notes, never a lost session.
+- **H-DR-003 — Completion notification.**
+  **Do:** Start a run, switch to another tab (macOS: another app), wait for
+  the completion notification, and tap it.
+  **Why:** Real notification delivery and foreground suppression need a live
+  run and OS permission.
+  *Detail:* The notification must not appear if the Research tab is
+  frontmost; tapping must land on the finished session's report.
+- **H-DR-004 — Follow-up chat grounding.**
+  **Do:** From a finished report, use Ask a follow-up; ask about a detail
+  from a middle section of the report.
+  **Why:** Whether the model actually uses the research_report tool and
+  answers from the report (with [n] citations) is an AI-quality check.
+  *Detail:* The chat's first answer should draw on report content without
+  you pasting anything.
+- **H-DR-005 — Investigation vs Deep Research positioning.**
+  **Do:** Run the composer's Investigation toggle on a question, then run
+  Deep Research on the same topic; compare tone and depth.
+  **Why:** The casual-vs-deep contrast (conversational bullets vs cited
+  document) is a subjective read.
+  *Detail:* Investigation stays in-chat, short and conversational with [n]
+  cites; Deep Research produces the structured, verified report.
+
 ### Settings
 
 - **H-SET-001 — Theme quality and propagation.**
@@ -518,9 +559,10 @@ person has to do it), followed by the technical detail for reference.
   Reminders, Notes, and Memory. Workspace widgets and feature-backed Settings
   sections must update immediately, and hidden destinations must be pruned from
   selection and navigation history.
-- **CU-SHELL-005 — Placeholder features.** Deep Research must show an
-  intentional Coming Soon state with a correct title rather than blank or
-  interactive-looking unfinished UI.
+- **CU-SHELL-005 — Research tab badge.** Seed unviewed research sessions
+  (`-research-fixture`). The Research sidebar dot / tab badge count must match
+  the unviewed sessions, stay present while a run is active, and clear after
+  the report (or failed state) is viewed.
 - **CU-SHELL-006 — Theme persistence.** Change theme/accent, open both windows,
   relaunch, and confirm appearance remains consistent.
 
@@ -968,6 +1010,48 @@ person has to do it), followed by the technical detail for reference.
   Memory and Open Memory Collection must show Ready in Settings › Tools
   without per-tool switches; disabling Memory must immediately flip them to
   Needs setup and remove all memory tools from chat.
+
+### Deep Research
+
+- **CU-DR-001 — Session list states.** Launch with `-research-fixture`. The
+  list must show completed (green check), partial (orange triangle), failed
+  (red x), and plan-ready (dashed circle) rows with relative dates and
+  unviewed dots; the tab badge must match the unviewed count.
+- **CU-DR-002 — Report rendering and citations.** Open the completed fixture
+  session (`-research-fixture-open` deep-links it). The report must render
+  headings, tappable [n] citation links, the inline ⚠ marker, an unverified-
+  claims banner, Open questions, and the numbered Sources list. Tapping a
+  citation or source row must open the source sheet with excerpts or the
+  honest snippet-only note; sheet's link opens the source URL externally.
+- **CU-DR-003 — Partial report honesty.** Open the partial fixture session.
+  The stopped-early/fell-back banner must show with expandable run notes
+  listing the degradations.
+- **CU-DR-004 — Plan review editing.** Open the plan-ready fixture session.
+  Questions and queries must be editable inline; deleting all threads must
+  disable Start Research; adding a question row must re-enable it once
+  filled. The footer must state the time/search scale.
+- **CU-DR-005 — New session flow gating.** Create a session with a topic; the
+  Continue button must be disabled for whitespace-only topics. The clarify
+  step must always show a Skip button, even while questions load.
+- **CU-DR-006 — Failed session recovery.** Open the failed fixture session.
+  It must show the error message and a retry action (planning retry when no
+  plan was saved); viewing it must clear its unviewed dot and badge count.
+- **CU-DR-007 — Delete confirmation.** Deleting a session from the list must
+  ask for confirmation and mention run cancellation when the session is
+  running; confirming must remove the row and any open detail for it.
+- **CU-DR-008 — Notification deep link routing.** With the app running and a
+  seeded session, `AppRouter.showResearchSession` (fixture `-open` arg) must
+  select the Research tab and present that session on both macOS and iOS
+  compact.
+- **CU-DR-009 — Report exports.** Copy Report must put the full markdown
+  (title, body, sources) on the pasteboard; Save to Notes must appear only
+  with a configured vault and create a note titled after the session.
+- **CU-DR-010 — macOS outline inspector.** On a completed report, the
+  Outline toolbar button must toggle an inspector listing the report's
+  sections; selecting one must scroll the report to that heading.
+- **CU-DR-011 — Settings section.** Research settings must persist across
+  relaunch (time budget, thread cap, report length) and hiding the Research
+  tab must remove it from navigation, pruning history, until re-enabled.
 
 ### Settings
 

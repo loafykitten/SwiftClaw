@@ -1060,7 +1060,7 @@ nonisolated struct ResearchEngine: Sendable {
                 throw DeepPipelineError.modelNotConfigured
             }
             let outlinePrompt = """
-                You are outlining a concise deep research report. Today's date is \
+                You are outlining a deep research report. Today's date is \
                 \(Date.now.formatted(date: .long, time: .omitted)).
 
                 # Purpose
@@ -1082,9 +1082,9 @@ nonisolated struct ResearchEngine: Sendable {
                 {"sections": [{"heading": "specific section heading", \
                 "sourceIndices": [1, 3]}]}
 
-                Return 3-6 sections. Assign only source indices shown above. Keep the \
-                report concise: screens, not pages. Do not include introduction, \
-                conclusion, Open questions, or Sources sections.
+                Return 3-6 sections. Assign only source indices shown above. Length \
+                target: \(configuration.reportLengthDirective). Do not include \
+                introduction, conclusion, Open questions, or Sources sections.
                 """
             let response = try await withRetries(deadline: deadline, label: "outline") {
                 try await completeWithDeadline(
@@ -1124,7 +1124,7 @@ nonisolated struct ResearchEngine: Sendable {
                 }
 
                 let sectionPrompt = """
-                    You are drafting one section of a concise deep research report. \
+                    You are drafting one section of a deep research report. \
                     Today's date is \(Date.now.formatted(date: .long, time: .omitted)).
 
                     # Purpose
@@ -1139,9 +1139,10 @@ nonisolated struct ResearchEngine: Sendable {
                     Assigned evidence:
                     \(evidenceText(assignedEvidence))
 
-                    Write 1-3 concise paragraphs or a short bullet list. Cite source \
-                    numbers like [3] after claims. State gaps or contradictions plainly. \
-                    Reply with the section body only, without a heading or commentary.
+                    Length target: \(configuration.reportLengthDirective). Use paragraphs \
+                    or a focused bullet list when it presents the evidence more clearly. \
+                    Cite source numbers like [3] after claims. State gaps or contradictions \
+                    plainly. Reply with the section body only, without a heading or commentary.
                     """
 
                 do {
@@ -1174,7 +1175,7 @@ nonisolated struct ResearchEngine: Sendable {
             }
 
             let bookendsPrompt = """
-                You are finishing a concise deep research report. Today's date is \
+                You are finishing a deep research report. Today's date is \
                 \(Date.now.formatted(date: .long, time: .omitted)).
 
                 # Purpose
@@ -1555,13 +1556,30 @@ nonisolated struct ResearchEngine: Sendable {
         }
         .joined(separator: "\n\n")
 
+        let presentationDirective: String
+        switch configuration.reportStyle {
+        case .conversational:
+            presentationDirective = """
+                Write a short overview paragraph, then add "## Key findings" with the \
+                most useful facts as concise bullets. Keep it conversational and under \
+                ~400 words; do not use a rigid section template. Do not add a title or a \
+                Sources section.
+                """
+        case .document:
+            presentationDirective = """
+                Write a document-style report with a short overview, descriptive findings \
+                sections that connect the evidence across threads, and a conclusion. Use \
+                clear markdown headings. Length target: \(configuration.reportLengthDirective). \
+                Do not add a title, an Open questions section, or a Sources section.
+                """
+        }
+
         let prompt = """
-            You are the lead investigator writing the final report of a deep web \
+            You are the lead investigator writing the final report of a multi-search web \
             investigation. Today's date is \(Date.now.formatted(date: .long, time: .omitted)).
 
             # Purpose
-            Turn the surface results and follow-up findings into a concise, \
-            sourced investigation report.
+            Turn the surface results and follow-up findings into a sourced research report.
 
             Topic: \(subject)
 
@@ -1573,19 +1591,12 @@ nonisolated struct ResearchEngine: Sendable {
             Follow-up thread findings:
             \(threadSection)
 
-            Cross-reference everything above and write the report body in markdown \
-            with exactly these sections:
-            ## Overview — 2-3 sentences giving the broad picture.
-            ## Key Findings — the most important facts as concise bullets.
-            ## Deeper Findings — one "### <thread question>" subsection per \
-            follow-up thread, analyzing its outcome in context of the other \
-            threads; point out where sources agree, contradict, or leave gaps.
+            Cross-reference everything above and write the report body in markdown. \
+            \(presentationDirective)
 
-            Rules: cite source numbers like [3] after claims; only cite numbers \
-            that appear above; if a thread has a Status note, state plainly that \
-            its results are partial or missing and why. Do not add a title, a \
-            Sources section, or any sections beyond the three listed. Reply with \
-            the markdown only.
+            Rules: cite source numbers like [3] inline after claims; only cite numbers \
+            that appear above; if a thread has a Status note, state plainly that its \
+            results are partial or missing and why. Reply with the markdown only.
             """
 
         do {

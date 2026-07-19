@@ -238,6 +238,7 @@ struct DeepResearchPipelineTests {
         configuration.searchCallBudget = 10
         configuration.pageFetchBudget = 10
         configuration.pagesPerThread = 1
+        configuration.reportLength = .concise
         configuration.totalBudget = .seconds(30)
         configuration.finalizationReserve = 0
         return configuration

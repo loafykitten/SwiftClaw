@@ -53,6 +53,8 @@ struct ContentView: View {
     /// Set right before a programmatic assignment so the `onChange` observer
     /// knows not to treat that assignment as a new user navigation.
     @State private var isUpdatingSelectionWithoutRecording = false
+    @AppStorage(SettingsKeys.deepResearchEnabled)
+    private var isDeepResearchEnabled = SettingsStorage.defaultDeepResearchEnabled
     @AppStorage(SettingsKeys.emailEnabled) private var isEmailEnabled = SettingsStorage.defaultEmailEnabled
     @AppStorage(SettingsKeys.calendarEnabled) private var isCalendarEnabled = SettingsStorage.defaultCalendarEnabled
     @AppStorage(SettingsKeys.remindersEnabled) private var isRemindersEnabled = SettingsStorage.defaultRemindersEnabled
@@ -85,6 +87,10 @@ struct ContentView: View {
 
     private var visibleNavigationItems: [NavigationItem] {
         NavigationItem.allCases.filter { item in
+            if item == .deepResearch {
+                return isDeepResearchEnabled
+            }
+
             if item == .settings {
                 #if os(iOS)
                 return true
@@ -124,6 +130,10 @@ struct ContentView: View {
                         .keyboardShortcut("]", modifiers: .command)
                 }
                 #endif
+            }
+            .onChange(of: isDeepResearchEnabled) { _, _ in
+                pruneHiddenNavigationHistory()
+                ensureVisibleNavigationSelection()
             }
             .onChange(of: isEmailEnabled) { _, enabled in
                 pruneHiddenNavigationHistory()

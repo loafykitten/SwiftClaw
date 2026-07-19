@@ -57,6 +57,27 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 Coordinates are logical points (iPhone 17: 402×874); screenshot pixels ÷ 3
 (scale) = points.
 
+## Driving without input injection (launch arguments)
+
+DEBUG builds expose launch arguments that reach key screens with zero taps —
+the reliable path when HID input is broken (see Caveats):
+
+```bash
+xcrun simctl launch $UDID com.caffeineplz.SwiftClaw \
+  -SwiftClawInitialNavigationItem research   # land on a tab (home/chats/workspace/research/settings)
+# Research fixtures: seed 4 sessions (completed w/ citations+evidence+⚠,
+# partial w/ degradation notes, awaiting-plan-approval, failed):
+xcrun simctl launch $UDID com.caffeineplz.SwiftClaw -research-fixture
+# ...and deep-link straight to the completed report via the real
+# notification-routing path:
+xcrun simctl launch $UDID com.caffeineplz.SwiftClaw -research-fixture -research-fixture-open
+```
+
+Notes: fixtures only seed an empty store (uninstall the app or erase the
+sim to reseed); suppress the first-launch notification offer with
+`defaults write com.caffeineplz.SwiftClaw state.notifications.launchPromptCompleted -bool true`
+before launching. `NoteProposalFixtureLaunch` is the equivalent for Notes.
+
 ## Caveats
 
 - **Stale CoreSimulatorService after host sleep/lock**: taps (and even
@@ -65,6 +86,12 @@ Coordinates are logical points (iPhone 17: 402×874); screenshot pixels ÷ 3
   "hid succeeded". Fix: `xcrun simctl shutdown all`, kill the
   `CoreSimulatorService.xpc` process (it relaunches on demand), reboot the
   device, restart the companion. Rebooting only the simulator does NOT help.
+  **2026-07-18: the fix is not reliable.** One session had taps working but
+  `ui text` no-oping, and after the CoreSimulatorService restart *all*
+  input (taps included) stayed dead across app relaunches, fresh
+  companions, and a device reboot; only screenshots and AX kept working.
+  When input dies mid-session, don't burn time on restarts — switch to
+  launch-argument driving (below) and screenshot verification.
 - SwiftUI sheets sometimes collapse `ui describe-all` to just the app root
   element — fall back to a screenshot plus coordinate math.
 - An occasional tap silently misses; re-tap once before concluding a control

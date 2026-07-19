@@ -1,6 +1,6 @@
 # Deep Research & Investigation — Plan
 
-**Status:** ready for review · **Branch:** `feature/deep-research` · **Date:** 2026-07-18
+**Status:** implemented (all 6 phases) · **Branch:** `feature/deep-research` · **Date:** 2026-07-18
 
 SwiftClaw gains a real **Deep Research** feature (the currently-placeholder
 Research tab), and **Investigation** is repositioned as its lighter, in-chat

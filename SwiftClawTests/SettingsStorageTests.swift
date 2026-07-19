@@ -110,6 +110,46 @@ struct SettingsStorageTests {
         #expect(SettingsStorage.isInvestigationEnabled(userDefaults: fixture.defaults))
     }
 
+    @Test func deepResearchSettingsUseDefaultsAndStoredValues() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        #expect(SettingsStorage.isDeepResearchEnabled(userDefaults: fixture.defaults))
+        #expect(SettingsStorage.loadDeepResearchTimeBudgetMinutes(userDefaults: fixture.defaults) == 15)
+        #expect(SettingsStorage.loadDeepResearchMaxThreads(userDefaults: fixture.defaults) == 6)
+        #expect(SettingsStorage.loadDeepResearchReportLength(userDefaults: fixture.defaults) == .concise)
+
+        fixture.defaults.set(false, forKey: SettingsKeys.deepResearchEnabled)
+        fixture.defaults.set(20, forKey: SettingsKeys.deepResearchTimeBudgetMinutes)
+        fixture.defaults.set(7, forKey: SettingsKeys.deepResearchMaxThreads)
+        fixture.defaults.set(
+            DeepResearchReportLength.thorough.rawValue,
+            forKey: SettingsKeys.deepResearchReportLength
+        )
+
+        #expect(!SettingsStorage.isDeepResearchEnabled(userDefaults: fixture.defaults))
+        #expect(SettingsStorage.loadDeepResearchTimeBudgetMinutes(userDefaults: fixture.defaults) == 20)
+        #expect(SettingsStorage.loadDeepResearchMaxThreads(userDefaults: fixture.defaults) == 7)
+        #expect(SettingsStorage.loadDeepResearchReportLength(userDefaults: fixture.defaults) == .thorough)
+    }
+
+    @Test func deepResearchSettingsClampAndFallBackFromInvalidRawValues() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        fixture.defaults.set(1, forKey: SettingsKeys.deepResearchTimeBudgetMinutes)
+        fixture.defaults.set(100, forKey: SettingsKeys.deepResearchMaxThreads)
+        fixture.defaults.set("extended", forKey: SettingsKeys.deepResearchReportLength)
+        #expect(SettingsStorage.loadDeepResearchTimeBudgetMinutes(userDefaults: fixture.defaults) == 5)
+        #expect(SettingsStorage.loadDeepResearchMaxThreads(userDefaults: fixture.defaults) == 8)
+        #expect(SettingsStorage.loadDeepResearchReportLength(userDefaults: fixture.defaults) == .concise)
+
+        fixture.defaults.set(100, forKey: SettingsKeys.deepResearchTimeBudgetMinutes)
+        fixture.defaults.set(1, forKey: SettingsKeys.deepResearchMaxThreads)
+        #expect(SettingsStorage.loadDeepResearchTimeBudgetMinutes(userDefaults: fixture.defaults) == 30)
+        #expect(SettingsStorage.loadDeepResearchMaxThreads(userDefaults: fixture.defaults) == 2)
+    }
+
     @Test func workspaceFeaturesDefaultToDisabledAndReadStoredFlags() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }

@@ -17,6 +17,22 @@ enum AppTheme: String, CaseIterable, Identifiable {
     }
 }
 
+nonisolated enum DeepResearchReportLength: String, CaseIterable, Identifiable, Sendable {
+    case concise
+    case standard
+    case thorough
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .concise: "Concise"
+        case .standard: "Standard"
+        case .thorough: "Thorough"
+        }
+    }
+}
+
 /// HSL color model backing the chat blockquote accent (Settings > Appearance >
 /// Quote Accent). The app's primary accent follows the macOS system accent, so
 /// this only powers the quote styling.
@@ -112,6 +128,15 @@ nonisolated extension SettingsKeys {
     static let deepResearchModel = "settings.behaviors.deepResearchModel"
     static let homeModel = "settings.home.model"
     static let homeReasoningEffort = "settings.home.reasoningEffort"
+}
+
+// MARK: - Deep Research keys
+
+nonisolated extension SettingsKeys {
+    static let deepResearchEnabled = "settings.deepResearch.enabled"
+    static let deepResearchTimeBudgetMinutes = "settings.deepResearch.timeBudgetMinutes"
+    static let deepResearchMaxThreads = "settings.deepResearch.maxThreads"
+    static let deepResearchReportLength = "settings.deepResearch.reportLength"
 }
 
 // MARK: - Persona keys
@@ -996,6 +1021,13 @@ enum SettingsStorage {
     nonisolated static let defaultInvestigationMaxSubAgents = 3
     nonisolated static let investigationMaxSubAgentsRange: ClosedRange<Int> = 1...5
 
+    nonisolated static let defaultDeepResearchEnabled = true
+    nonisolated static let defaultDeepResearchTimeBudgetMinutes = 15
+    nonisolated static let deepResearchTimeBudgetMinutesRange: ClosedRange<Int> = 5...30
+    nonisolated static let defaultDeepResearchMaxThreads = 6
+    nonisolated static let deepResearchMaxThreadsRange: ClosedRange<Int> = 2...8
+    nonisolated static let defaultDeepResearchReportLength: DeepResearchReportLength = .concise
+
     static let defaultEmailEnabled = false
     nonisolated static let defaultEmailImapPort = 993
     nonisolated static let defaultEmailSmtpPort = 587
@@ -1592,6 +1624,48 @@ enum SettingsStorage {
             Swift.max(stored, investigationMaxSubAgentsRange.lowerBound),
             investigationMaxSubAgentsRange.upperBound
         )
+    }
+
+    nonisolated static func isDeepResearchEnabled(userDefaults: UserDefaults = .standard) -> Bool {
+        boolSetting(
+            forKey: SettingsKeys.deepResearchEnabled,
+            defaultValue: defaultDeepResearchEnabled,
+            userDefaults: userDefaults
+        )
+    }
+
+    nonisolated static func loadDeepResearchTimeBudgetMinutes(
+        userDefaults: UserDefaults = .standard
+    ) -> Int {
+        guard userDefaults.object(forKey: SettingsKeys.deepResearchTimeBudgetMinutes) != nil else {
+            return defaultDeepResearchTimeBudgetMinutes
+        }
+        let stored = userDefaults.integer(forKey: SettingsKeys.deepResearchTimeBudgetMinutes)
+        return Swift.min(
+            Swift.max(stored, deepResearchTimeBudgetMinutesRange.lowerBound),
+            deepResearchTimeBudgetMinutesRange.upperBound
+        )
+    }
+
+    nonisolated static func loadDeepResearchMaxThreads(
+        userDefaults: UserDefaults = .standard
+    ) -> Int {
+        guard userDefaults.object(forKey: SettingsKeys.deepResearchMaxThreads) != nil else {
+            return defaultDeepResearchMaxThreads
+        }
+        let stored = userDefaults.integer(forKey: SettingsKeys.deepResearchMaxThreads)
+        return Swift.min(
+            Swift.max(stored, deepResearchMaxThreadsRange.lowerBound),
+            deepResearchMaxThreadsRange.upperBound
+        )
+    }
+
+    nonisolated static func loadDeepResearchReportLength(
+        userDefaults: UserDefaults = .standard
+    ) -> DeepResearchReportLength {
+        userDefaults.string(forKey: SettingsKeys.deepResearchReportLength)
+            .flatMap(DeepResearchReportLength.init(rawValue:))
+            ?? defaultDeepResearchReportLength
     }
 
     nonisolated private static func toolEnabled(

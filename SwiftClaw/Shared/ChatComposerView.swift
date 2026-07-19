@@ -291,7 +291,7 @@ struct ChatComposerView: View {
                         isSelected: isInvestigationEnabled,
                         isDisabled: composerControlsDisabled || !canEnableInvestigation,
                         helpText: canEnableInvestigation
-                            ? "Investigate this message in depth"
+                            ? "Quick multi-search investigation — for a full cited report, use the Research tab."
                             : "Investigation needs Brave Search plus a selected model with Tools, Reasoning, and reasoning turned on",
                         accessibilityLabel: "Investigation mode"
                     ) {

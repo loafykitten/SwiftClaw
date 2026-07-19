@@ -84,6 +84,7 @@ struct ResearchBudgetTests {
             sourceMode: .fetchPages(maxBytesPerPage: 1_000),
             verification: .none,
             reportStyle: .conversational,
+            reportLength: .concise,
             clarify: false,
             planPreview: false,
             totalBudget: totalBudget,

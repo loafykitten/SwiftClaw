@@ -6,6 +6,7 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
     case personality = "Personality"
     case providers = "Providers"
     case behaviors = "Model Behaviors"
+    case deepResearch = "Deep Research"
     // Always visible (not feature-gated): notification sources span Chats +
     // Email, so no single feature section fits.
     case notifications = "Notifications"
@@ -25,6 +26,7 @@ enum SettingsSection: String, CaseIterable, Hashable, Identifiable {
         case .personality: "wand.and.sparkles"
         case .providers: "server.rack"
         case .behaviors: "slider.horizontal.3"
+        case .deepResearch: "doc.text.magnifyingglass"
         case .notifications: "bell.badge"
         case .email: "envelope"
         case .calendar: "calendar"
@@ -63,6 +65,8 @@ private extension SettingsSection {
             self = .providers
         case "behaviors", "modelbehaviors":
             self = .behaviors
+        case "deepresearch", "research":
+            self = .deepResearch
         case "notifications":
             self = .notifications
         case "email":
@@ -280,6 +284,8 @@ struct SettingsView: View {
             ProviderSettingsView()
         case .behaviors:
             BehaviorSettingsView()
+        case .deepResearch:
+            DeepResearchSettingsView()
         case .notifications:
             NotificationSettingsView()
         case .email:

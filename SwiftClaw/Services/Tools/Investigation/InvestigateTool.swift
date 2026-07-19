@@ -1,6 +1,6 @@
 import Foundation
 
-/// Runs a deep, multi-pass web investigation via ``ResearchEngine``.
+/// Runs a quick, multi-search web investigation via ``ResearchEngine``.
 ///
 /// Only offered to the model when the user explicitly toggles the search
 /// button in the chat composer for a message.
@@ -8,13 +8,13 @@ struct InvestigateTool: Tool {
     let name = "investigate"
     let displayName = "Investigation"
     let description = """
-        Run a deep, multi-pass web investigation of a topic: a surface search, \
-        follow-up lines of inquiry investigated in parallel, and a synthesized \
-        report (Overview, Key Findings, Deeper Findings, Sources). Use when the \
-        question benefits from depth and cross-referencing rather than a single \
-        quick search. When presenting the report, preserve its structure: the \
-        broad overview and key findings first, then the deeper findings, keeping \
-        the [n] source citations. The investigation may take a minute or two.
+        Run a quick, multi-search investigation for an in-chat question: a surface \
+        search, parallel follow-up lines of inquiry, and a conversational report. \
+        Use when the question needs cross-referencing beyond a single search but \
+        does not need a standalone report. For deeper needs, the standalone \
+        Research tab produces full cited, verified reports. When presenting the \
+        result, keep the overview and key findings easy to scan and preserve every \
+        [n] source citation. The investigation may take a minute or two.
         """
     let systemImage = "text.magnifyingglass"
     let requiresExplicitEnable = true

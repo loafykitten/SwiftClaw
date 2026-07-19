@@ -1,6 +1,6 @@
 # Deep Research feature + Investigation repositioning
 
-**Started:** 2026-07-18  **Status:** Phase 4 ready for Claude review
+**Started:** 2026-07-18  **Status:** all 6 phases implemented; final review + verification pass in progress
 
 ## Goal
 
@@ -10,54 +10,42 @@ shared parameterized `ResearchEngine`. Full plan: `docs/DEEP_RESEARCH_PLAN.md`.
 
 ## Current state
 
-Planning is complete on `feature/deep-research` (worktree
-`.claude/worktrees/deep-research`). Phases 1–3 provide the shared engine,
-configuration, budget, fetching, extraction, evidence ledger, and deep-only
-clarify/plan/run pipeline. Phase 4 adds durable `ResearchSession` records, a
-single-run `ResearchSessionCoordinator`, stage checkpoints, the observable
-progress monitor, relaunch interruption mapping, and completion notification
-routing. Focused tests cover blob persistence, coordinator completion/cancel/
-failure/relaunch behavior, and notification posting/routing/suppression. Build
-and test verification are delegated to Claude per the phase task.
+Phases 1-5 committed on `feature/deep-research` (e3ce9f4, f04e9db, b6b7095,
+edfcf9e, 6c8dd8c); Phase 6 (investigation refit + settings + docs) is in the
+working tree awaiting its final review before commit. Every phase passed:
+codex (gpt-5.6-sol) implementation -> Claude diff review + build/tests ->
+Opus review -> fixes -> commit. UI (phase 5) was Claude-built with an
+adversarial gpt-5.6-sol review (19 findings, all triaged and ~17 fixed).
+iOS visual verification done via the DEBUG fixture args (see below) because
+simulator HID input died mid-session.
 
 ## Next steps
 
-1. Claude: review the Phase 4 diff and run the focused `ResearchSessionTests`,
-   `ResearchSessionCoordinatorTests`, and notification suites plus macOS/iOS
-   builds.
-2. Address any compiler/test findings from the real project build.
-3. Phases 5–6 per the plan doc.
+1. Land Phase 6 after the Opus review verdict.
+2. Manual user testing per docs/testing/USER_FACING_TESTS.md H-DR-001..005
+   (real keys needed: full run quality, notifications, follow-up grounding).
+3. Delete this file when the feature ships to main.
 
 ## Decisions & constraints
 
-- One shared engine, two presets — not two pipelines (user's request,
-  validated by architecture research).
-- Deep Research is user-initiated from the Research tab; never registered on
-  `ToolRegistry.shared`. Investigation stays the only chat research tool.
-- Trust UX is the differentiator: evidence ledger with stored excerpts,
-  claim-level citation popovers, verification pass, "Open questions" section.
-- No quotas; show cost/scope hints instead (BYO keys).
-- iOS: foreground-only runs in v1, with stage checkpoints + resume.
-- `deepResearchModel` ("Research Model" in Behaviors) exists but is unused
-  today — the engine must start honoring it (fallback: Claw Model).
+- One shared engine, two presets; Deep Research never registers on
+  `ToolRegistry.shared` (InvestigateTool stays the only chat research tool;
+  the request-bound `research_report` tool rides on `Chat.researchSessionID`).
+- Trust UX: evidence ledger + citation sheets + claim ⚠ flags + Open
+  questions; `isPartial` means cancelled/degraded, NOT open questions.
+- iOS foreground-only runs in v1; interrupted runs map to honest
+  cancelled/partial states at launch; resume = fresh run with saved plan.
+- Deep settings: Settings > Deep Research (tab toggle, 5-30 min budget,
+  2-8 threads, concise/standard/thorough length); Research Model stays in
+  Behaviors with Claw fallback.
+- DEBUG verification: `-research-fixture` seeds 4 sessions;
+  `-research-fixture-open` deep-links the completed report;
+  `-SwiftClawInitialNavigationItem research` lands on the tab.
 
-## Files touched
+## Known deferred items
 
-- `docs/DEEP_RESEARCH_PLAN.md` — the plan (new)
-- `docs/research/deep-research/{competitive-teardown,user-sentiment,architecture-patterns}.md` — verified evidence base (new)
-- `docs/memory/deep-research.md` — this file
-- `SwiftClaw/Services/Research/ResearchConfiguration.swift` — shared presets and Research Model resolution
-- `SwiftClaw/Services/Research/ResearchEngine.swift` — extracted Investigation pipeline
-- `SwiftClaw/Services/Tools/Investigation/InvestigateTool.swift` — uses the Investigation preset
-- `SwiftClaw/Services/Tools/Investigation/InvestigationEngine.swift` — deleted after extraction
-- `SwiftClawTests/Research/ResearchConfigurationTests.swift` — preset, setting, and model-resolution coverage
-- `SwiftClaw/Services/Research/{ResearchBudget,EvidenceStore,PageFetcher,ContentExtractor}.swift` — Phase 2 evidence and fetching primitives
-- `SwiftClaw/Services/Research/ResearchEngine.swift` — budget routing and `.fetchPages` gather branch
-- `SwiftClawTests/Research/{ResearchBudget,EvidenceStore,PageFetcher,ContentExtractor}Tests.swift` — Phase 2 focused coverage
-- `SwiftClaw/Services/Research/DeepResearchTypes.swift` — Phase 3 editable plan/context, result, source, and progress values
-- `SwiftClaw/Services/Research/ResearchEngine.swift` — Phase 3 deep pipeline and injected search/completion seams
-- `SwiftClawTests/Research/DeepResearchPipelineTests.swift` — scripted Phase 3 engine integration coverage
-- `SwiftClaw/Models/ResearchSession.swift` — Phase 4 durable session and checkpoint payloads
-- `SwiftClaw/Services/Research/{ResearchSessionCoordinator,ResearchProgressMonitor}.swift` — single-run lifecycle, relaunch mapping, and live progress
-- `SwiftClaw/Services/Notifications/{AppNotificationService,NotificationRoutingPayload}.swift` + `SwiftClaw/Shared/AppRouter.swift` — completion posting and session deep-link routing
-- `SwiftClawTests/Research/{ResearchSession,ResearchSessionCoordinator}Tests.swift` + notification tests — Phase 4 persistence/lifecycle/routing coverage
+- PageFetcher reads AsyncBytes byte-by-byte (fine vs network; chunk later).
+- Citation sheet flags ⚠ sources at line granularity (claim-level verdict
+  persistence would need engine changes).
+- BGProcessingTask / iOS background completion out of scope for v1.
+- `createSession` swallows save errors (logs only) — rare, revisit if seen.

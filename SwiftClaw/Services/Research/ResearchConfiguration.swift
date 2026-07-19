@@ -10,6 +10,7 @@ nonisolated struct ResearchConfiguration: Sendable {
     var sourceMode: SourceMode
     var verification: Verification
     var reportStyle: ReportStyle
+    var reportLength: DeepResearchReportLength
     var clarify: Bool
     var planPreview: Bool
     var totalBudget: Duration
@@ -25,6 +26,7 @@ nonisolated struct ResearchConfiguration: Sendable {
             sourceMode: .snippets,
             verification: .none,
             reportStyle: .conversational,
+            reportLength: .concise,
             clarify: false,
             planPreview: false,
             totalBudget: .seconds(120),
@@ -32,9 +34,12 @@ nonisolated struct ResearchConfiguration: Sendable {
         )
     }
 
-    static func deepResearch(userDefaults _: UserDefaults = .standard) -> Self {
-        Self(
-            maxThreads: 6,
+    static func deepResearch(userDefaults: UserDefaults = .standard) -> Self {
+        let timeBudgetMinutes = SettingsStorage.loadDeepResearchTimeBudgetMinutes(
+            userDefaults: userDefaults
+        )
+        return Self(
+            maxThreads: SettingsStorage.loadDeepResearchMaxThreads(userDefaults: userDefaults),
             reflectionWaves: 2,
             searchCallBudget: 60,
             pageFetchBudget: 40,
@@ -42,11 +47,23 @@ nonisolated struct ResearchConfiguration: Sendable {
             sourceMode: .fetchPages(maxBytesPerPage: 1_500_000),
             verification: .claimCheck,
             reportStyle: .document(outlineFirst: true),
+            reportLength: SettingsStorage.loadDeepResearchReportLength(userDefaults: userDefaults),
             clarify: true,
             planPreview: true,
-            totalBudget: .seconds(15 * 60),
+            totalBudget: .seconds(timeBudgetMinutes * 60),
             finalizationReserve: 0.2
         )
+    }
+
+    var reportLengthDirective: String {
+        switch reportLength {
+        case .concise:
+            "1-2 short paragraphs per section, screens not pages"
+        case .standard:
+            "2-3 paragraphs per section"
+        case .thorough:
+            "as much detail as the evidence supports, still no padding"
+        }
     }
 }
 
