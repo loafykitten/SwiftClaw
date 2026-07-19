@@ -13,12 +13,6 @@ nonisolated enum ResearchSessionStatus: String, Codable, Sendable {
     case cancelled
 }
 
-/// The editable plan and the surface-search state required to run it later.
-nonisolated struct ResearchSessionPlanPayload: Codable, Sendable, Equatable {
-    var plan: ResearchPlan
-    let context: ResearchPlanContext
-}
-
 /// Stage-granular durable state. Only what streams during a run lives here —
 /// results (report, sources, evidence, open questions) are first-class
 /// session columns written once at completion. In-flight thread work is
@@ -95,8 +89,10 @@ final class ResearchSession {
         set { statusRaw = newValue.rawValue }
     }
 
-    var planPayload: ResearchSessionPlanPayload? {
-        get { Self.decode(ResearchSessionPlanPayload.self, from: planData) }
+    /// The editable plan and the surface-search state required to run it
+    /// later — the engine's planning result, persisted as-is.
+    var planPayload: ResearchPlanningResult? {
+        get { Self.decode(ResearchPlanningResult.self, from: planData) }
         set { planData = Self.encode(newValue) }
     }
 
@@ -133,5 +129,13 @@ final class ResearchSession {
     private static func encode(_ value: (some Encodable)?) -> Data? {
         guard let value else { return nil }
         return try? JSONEncoder().encode(value)
+    }
+
+    /// Clears the unviewed badge; every terminal-state screen calls this from
+    /// its `onAppear`.
+    func markViewed(in context: ModelContext) {
+        guard isUnviewed else { return }
+        isUnviewed = false
+        try? context.save()
     }
 }

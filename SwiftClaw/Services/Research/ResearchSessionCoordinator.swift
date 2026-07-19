@@ -43,6 +43,11 @@ final class ResearchSessionCoordinator {
         activeSessionID
     }
 
+    /// Whether a *different* session holds the single active-run slot.
+    func isAnotherRunActive(than session: ResearchSession) -> Bool {
+        runningSessionID != nil && runningSessionID != session.id
+    }
+
     init(
         engineFactory: @escaping @MainActor () -> ResearchEngine = {
             ResearchEngine(configuration: .deepResearch())
@@ -177,10 +182,7 @@ final class ResearchSessionCoordinator {
 
             switch outcome {
             case .success(let result):
-                session.planPayload = ResearchSessionPlanPayload(
-                    plan: result.plan,
-                    context: result.context
-                )
+                session.planPayload = result
                 session.progress = ResearchSessionCheckpoint(completedStage: .planning)
                 session.status = .awaitingPlanApproval
             case .failure(let error):

@@ -91,6 +91,24 @@ struct NotificationRoutingTests {
         #expect(router.pendingResearchSessionID == nil)
     }
 
+    /// A completion notification can outlive the Research tab being switched
+    /// off mid-run; the tap must re-enable the tab so the deep link isn't
+    /// bounced back to Home with the pending session ID stranded.
+    @Test func researchTapReenablesADisabledResearchTab() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+        fixture.defaults.set(false, forKey: SettingsKeys.deepResearchEnabled)
+        let sessionID = UUID()
+
+        AppNotificationService.shared.routeNotificationTap(
+            payload: NotificationRoutingPayload(kind: .research, targetID: sessionID)
+        )
+
+        #expect(SettingsStorage.isDeepResearchEnabled(userDefaults: fixture.defaults))
+        #expect(router.selectedNavigationItem == .deepResearch)
+        #expect(router.pendingResearchSessionID == sessionID)
+    }
+
     /// A delivered reminder alert can outlive the feature being switched
     /// off; its tap must be a no-op instead of stranding a focus ID nothing
     /// will ever clear.
@@ -209,7 +227,7 @@ struct NotificationRoutingTests {
     private static func isolatedRouter() throws -> (AppRouter, UserDefaultsFixture) {
         let fixture = try UserDefaultsFixture()
         let router = AppRouter.shared
-        router.resetForTesting(unreadStore: fixture.defaults)
+        router.resetForTesting(unreadStore: fixture.defaults, settingsStore: fixture.defaults)
         return (router, fixture)
     }
 

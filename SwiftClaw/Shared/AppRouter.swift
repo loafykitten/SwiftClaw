@@ -32,6 +32,9 @@ final class AppRouter {
     /// Backing store for the persisted unread set. Swappable in DEBUG so
     /// tests run against an isolated fixture instead of `.standard`.
     @ObservationIgnored private var unreadStore: UserDefaults = .standard
+    /// Backing store for the settings write in `showResearchSession`.
+    /// Swappable in DEBUG for the same reason as `unreadStore`.
+    @ObservationIgnored private var settingsStore: UserDefaults = .standard
 
     private init() {
         unreadChatIDs = SettingsStorage.loadUnreadChatIDs(userDefaults: unreadStore)
@@ -106,6 +109,13 @@ final class AppRouter {
     }
 
     func showResearchSession(_ id: UUID) {
+        // A completion tap can arrive after the user disabled the Research tab
+        // mid-run; ContentView bounces a hidden selection back to Home and the
+        // pending session ID would never be consumed. Re-enable the tab so the
+        // deep link has somewhere to land.
+        if !SettingsStorage.isDeepResearchEnabled(userDefaults: settingsStore) {
+            settingsStore.set(true, forKey: SettingsKeys.deepResearchEnabled)
+        }
         pendingResearchSessionID = id
         selectedNavigationItem = .deepResearch
     }
@@ -215,7 +225,10 @@ final class AppRouter {
     /// the real app). Deliberately does NOT persist the cleared set, so a
     /// trailing `resetForTesting()` restores `.standard` without wiping the
     /// developer's actual unread state.
-    func resetForTesting(unreadStore: UserDefaults = .standard) {
+    func resetForTesting(
+        unreadStore: UserDefaults = .standard,
+        settingsStore: UserDefaults = .standard
+    ) {
         selectedNavigationItem = .home
         selectedChatID = nil
         pendingSettingsSection = nil
@@ -226,6 +239,7 @@ final class AppRouter {
         pendingReminderFocusID = nil
         pendingResearchSessionID = nil
         self.unreadStore = unreadStore
+        self.settingsStore = settingsStore
         syncDockBadge()
     }
     #endif

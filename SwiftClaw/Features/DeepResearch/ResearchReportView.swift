@@ -380,9 +380,7 @@ struct ResearchReportView: View {
 
     private func markViewed() {
         AppNotificationService.shared.removeDeliveredResearchNotification(sessionID: session.id)
-        guard session.isUnviewed else { return }
-        session.isUnviewed = false
-        try? modelContext.save()
+        session.markViewed(in: modelContext)
     }
 }
 

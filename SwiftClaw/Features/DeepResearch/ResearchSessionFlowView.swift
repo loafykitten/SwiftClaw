@@ -259,8 +259,7 @@ private struct ResearchPlanReviewView: View {
     }
 
     private var isAnotherRunActive: Bool {
-        let running = ResearchSessionCoordinator.shared.runningSessionID
-        return running != nil && running != session.id
+        ResearchSessionCoordinator.shared.isAnotherRunActive(than: session)
     }
 
     private func usableThreads(in plan: ResearchPlan) -> [ResearchThreadPlan] {
@@ -450,8 +449,7 @@ private struct ResearchStoppedView: View {
     @Environment(\.modelContext) private var modelContext
 
     private var isAnotherRunActive: Bool {
-        let running = ResearchSessionCoordinator.shared.runningSessionID
-        return running != nil && running != session.id
+        ResearchSessionCoordinator.shared.isAnotherRunActive(than: session)
     }
 
     var body: some View {
@@ -480,13 +478,7 @@ private struct ResearchStoppedView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear(perform: markViewed)
-    }
-
-    private func markViewed() {
-        guard session.isUnviewed else { return }
-        session.isUnviewed = false
-        try? modelContext.save()
+        .onAppear { session.markViewed(in: modelContext) }
     }
 
     private func resume() {
@@ -500,8 +492,7 @@ private struct ResearchFailedView: View {
     @Environment(\.modelContext) private var modelContext
 
     private var isAnotherRunActive: Bool {
-        let running = ResearchSessionCoordinator.shared.runningSessionID
-        return running != nil && running != session.id
+        ResearchSessionCoordinator.shared.isAnotherRunActive(than: session)
     }
 
     var body: some View {
@@ -541,13 +532,7 @@ private struct ResearchFailedView: View {
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear(perform: markViewed)
-    }
-
-    private func markViewed() {
-        guard session.isUnviewed else { return }
-        session.isUnviewed = false
-        try? modelContext.save()
+        .onAppear { session.markViewed(in: modelContext) }
     }
 
     private func retry() {

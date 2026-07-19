@@ -134,9 +134,10 @@ Brave traffic keeps flowing through `BraveRateGate`.
 5. **Write**: Investigation = single conversational synthesis (as today, but
    lighter format). ◆ Deep = outline first, sections drafted against their
    assigned evidence, intro/conclusion last.
-6. **Verify ◆**: Swift Model checks each cited claim against its stored
-   excerpt; unsupported claims get repaired or flagged `⚠`; unanswered plan
-   questions land in "Open questions".
+6. **Verify ◆**: the Research Model checks each cited claim against its stored
+   excerpt (claim-vs-evidence entailment benefits from a reasoning model, and
+   trust is the headline); unsupported claims get repaired or flagged `⚠`;
+   unanswered plan questions land in "Open questions".
 7. **Deliver**: Investigation returns a string into chat, as today. Deep
    persists a `ResearchSession` report + sources + evidence, fires the
    notification.

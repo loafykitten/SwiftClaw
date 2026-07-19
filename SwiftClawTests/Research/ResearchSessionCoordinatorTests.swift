@@ -124,7 +124,7 @@ struct ResearchSessionCoordinatorTests {
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
         let session = ResearchSession(topic: "Interrupted", status: .running)
-        session.planPayload = ResearchSessionPlanPayload(
+        session.planPayload = ResearchPlanningResult(
             plan: Self.planningResult.plan,
             context: Self.planningResult.context
         )

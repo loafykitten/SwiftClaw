@@ -139,7 +139,7 @@ enum ResearchSessionFixtureSeeder {
             topic: "Rust vs Swift for systems tooling",
             status: .awaitingPlanApproval
         )
-        session.planPayload = ResearchSessionPlanPayload(
+        session.planPayload = ResearchPlanningResult(
             plan: ResearchPlan(
                 overview: "Compare Rust and Swift for cross-platform CLI and systems tooling in 2026.",
                 threads: [

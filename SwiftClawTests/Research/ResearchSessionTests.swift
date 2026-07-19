@@ -25,7 +25,7 @@ struct ResearchSessionTests {
         )
 
         session.status = .awaitingPlanApproval
-        session.planPayload = ResearchSessionPlanPayload(
+        session.planPayload = ResearchPlanningResult(
             plan: plan,
             context: ResearchPlanContext(
                 topic: session.topic,

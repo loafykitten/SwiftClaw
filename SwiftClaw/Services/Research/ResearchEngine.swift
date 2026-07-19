@@ -407,7 +407,7 @@ nonisolated struct ResearchEngine: Sendable {
                 let verification = try await verify(
                     reportMarkdown: reportMarkdown,
                     evidence: await evidenceStore.allEvidence(),
-                    swiftModel: swiftModel,
+                    researchModel: researchModel,
                     deadline: deadline
                 )
                 reportMarkdown = verification.reportMarkdown
@@ -591,20 +591,24 @@ nonisolated struct ResearchEngine: Sendable {
         let question: String
         let finding: String
         let note: String?
+        /// True when the engine wrote the finding itself as a failure
+        /// placeholder (skipped, search failed, no results, analysis failed)
+        /// rather than receiving it from the model.
+        var failed = false
 
         var isAnswered: Bool {
+            guard !failed else { return false }
+            // The extraction prompts ask the model to "say what is and isn't
+            // established" when evidence falls short; treat those hedges as
+            // unanswered so the thread lands in Open questions.
             let normalized = finding.lowercased()
-            let unansweredPhrases = [
-                "could not be completed",
-                "could not be analyzed",
-                "no web results were found",
-                "not investigated",
+            let hedges = [
                 "isn't established",
                 "is not established",
                 "remains unanswered",
             ]
             return !finding.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                && !unansweredPhrases.contains(where: normalized.contains)
+                && !hedges.contains(where: normalized.contains)
         }
     }
 
@@ -651,7 +655,8 @@ nonisolated struct ResearchEngine: Sendable {
             return ThreadOutcome(
                 question: thread.question,
                 finding: "This thread was not investigated.",
-                note: "Skipped — the investigation time budget ran out"
+                note: "Skipped — the investigation time budget ran out",
+                failed: true
             )
         }
 
@@ -672,7 +677,8 @@ nonisolated struct ResearchEngine: Sendable {
             return ThreadOutcome(
                 question: thread.question,
                 finding: "The follow-up search could not be completed.",
-                note: Self.failureNote(for: error)
+                note: Self.failureNote(for: error),
+                failed: true
             )
         }
 
@@ -680,7 +686,8 @@ nonisolated struct ResearchEngine: Sendable {
             return ThreadOutcome(
                 question: thread.question,
                 finding: "No web results were found for the follow-up query \"\(thread.query)\".",
-                note: nil
+                note: nil,
+                failed: true
             )
         }
 
@@ -739,7 +746,8 @@ nonisolated struct ResearchEngine: Sendable {
             return ThreadOutcome(
                 question: thread.question,
                 finding: "Sources \(mentions) were found but could not be analyzed.",
-                note: Self.failureNote(for: error)
+                note: Self.failureNote(for: error),
+                failed: true
             )
         }
     }
@@ -931,7 +939,8 @@ nonisolated struct ResearchEngine: Sendable {
             return ThreadOutcome(
                 question: thread.question,
                 finding: "Sources \(mentions) were found but could not be analyzed.",
-                note: Self.failureNote(for: error)
+                note: Self.failureNote(for: error),
+                failed: true
             )
         }
     }
@@ -1297,14 +1306,14 @@ nonisolated struct ResearchEngine: Sendable {
     private func verify(
         reportMarkdown: String,
         evidence: [EvidenceRecord],
-        swiftModel: String,
+        researchModel: String,
         deadline: ContinuousClock.Instant
     ) async throws -> VerificationResult {
         let claims = Self.citedClaims(in: reportMarkdown)
         guard !claims.isEmpty else {
             return VerificationResult(reportMarkdown: reportMarkdown, unverifiedClaimCount: 0)
         }
-        guard !swiftModel.isEmpty else {
+        guard !researchModel.isEmpty else {
             throw DeepPipelineError.modelNotConfigured
         }
 
@@ -1345,7 +1354,7 @@ nonisolated struct ResearchEngine: Sendable {
         let response = try await withRetries(deadline: deadline, label: "claim verification") {
             try await completeWithDeadline(
                 messages: [.user(prompt)],
-                model: swiftModel,
+                model: researchModel,
                 deadline: deadline
             )
         }
