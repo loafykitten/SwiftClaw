@@ -176,6 +176,7 @@ struct AppNotificationServiceTests {
         service.notifyChatReply(chatID: UUID(), chatTitle: "Chat", preview: "Hi")
         service.notifyReviewResult(chatID: UUID(), summary: "Summary")
         service.notifyNewMail([Self.mailInfo()])
+        service.notifyResearchComplete(sessionID: UUID(), title: "Research", isPartial: false)
         await service.flushPostsForTesting()
 
         #expect(spy.addedRequests.isEmpty)
@@ -194,10 +195,12 @@ struct AppNotificationServiceTests {
         fixture.defaults.set(true, forKey: SettingsKeys.notificationsNewMailEnabled)
         fixture.defaults.set(true, forKey: SettingsKeys.notificationsReviewResultsEnabled)
         fixture.defaults.set(true, forKey: SettingsKeys.notificationsChatRepliesEnabled)
+        fixture.defaults.set(true, forKey: SettingsKeys.notificationsResearchCompleteEnabled)
 
         service.notifyChatReply(chatID: UUID(), chatTitle: "Chat", preview: "Hi")
         service.notifyReviewResult(chatID: UUID(), summary: "Summary")
         service.notifyNewMail([Self.mailInfo()])
+        service.notifyResearchComplete(sessionID: UUID(), title: "Research", isPartial: false)
         await service.flushPostsForTesting()
 
         #expect(spy.addedRequests.isEmpty)
@@ -246,9 +249,11 @@ struct AppNotificationServiceTests {
         let service = await Self.activatedService(spy: spy, defaults: fixture.defaults)
         fixture.defaults.set(false, forKey: SettingsKeys.notificationsChatRepliesEnabled)
         fixture.defaults.set(false, forKey: SettingsKeys.notificationsNewMailEnabled)
+        fixture.defaults.set(false, forKey: SettingsKeys.notificationsResearchCompleteEnabled)
 
         service.notifyChatReply(chatID: UUID(), chatTitle: "Chat", preview: "Hi")
         service.notifyNewMail([Self.mailInfo()])
+        service.notifyResearchComplete(sessionID: UUID(), title: "Research", isPartial: false)
         let reviewChatID = UUID()
         service.notifyReviewResult(chatID: reviewChatID, summary: "Summary")
         await service.flushPostsForTesting()
@@ -297,12 +302,37 @@ struct AppNotificationServiceTests {
     }
 
     @Test func routingPayloadRoundTripsThroughUserInfo() {
-        for kind in [NotificationRoutingPayload.Kind.chatReply, .review, .newMail, .mailDigest, .calendarEvent, .reminder] {
+        for kind in [NotificationRoutingPayload.Kind.chatReply, .review, .newMail, .mailDigest, .calendarEvent, .reminder, .research] {
             let payload = NotificationRoutingPayload(kind: kind, targetID: UUID())
             #expect(NotificationRoutingPayload(userInfo: payload.userInfo) == payload)
         }
         #expect(NotificationRoutingPayload(userInfo: [:]) == nil)
         #expect(NotificationRoutingPayload(userInfo: ["swiftclaw.notification.kind": "bogus"]) == nil)
+    }
+
+    @Test func researchCompletionUsesDeterministicContentAndRouting() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let spy = NotificationSchedulingSpy()
+        let service = await Self.activatedService(spy: spy, defaults: fixture.defaults)
+        let sessionID = UUID()
+
+        service.notifyResearchComplete(
+            sessionID: sessionID,
+            title: "Durable topic",
+            isPartial: true
+        )
+        await service.flushPostsForTesting()
+
+        let request = try #require(spy.addedRequests.first)
+        #expect(request.identifier == NotificationIdentifier.research(sessionID))
+        #expect(request.content.title == "Research finished with partial results")
+        #expect(request.content.body == "Durable topic")
+        #expect(request.content.threadIdentifier == "research.\(sessionID.uuidString)")
+        #expect(
+            NotificationRoutingPayload(userInfo: request.content.userInfo)
+                == NotificationRoutingPayload(kind: .research, targetID: sessionID)
+        )
     }
 
     // MARK: - Digest policy

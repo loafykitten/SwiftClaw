@@ -221,6 +221,7 @@ nonisolated extension SettingsKeys {
     static let notificationsChatRepliesEnabled = "settings.notifications.chatReplies.enabled"
     static let notificationsCalendarAlertsEnabled = "settings.notifications.calendarAlerts.enabled"
     static let notificationsReminderAlertsEnabled = "settings.notifications.reminderAlerts.enabled"
+    static let notificationsResearchCompleteEnabled = "settings.notifications.researchComplete.enabled"
     /// App state (not a user setting): whether the one-time launch offer to
     /// enable notifications has been answered (either way), so it never nags.
     static let notificationsLaunchPromptCompleted = "state.notifications.launchPromptCompleted"
@@ -1034,6 +1035,7 @@ enum SettingsStorage {
     static let defaultNewMailNotificationsEnabled = true
     static let defaultReviewResultNotificationsEnabled = true
     static let defaultChatReplyNotificationsEnabled = true
+    static let defaultResearchCompleteNotificationsEnabled = true
 
     static func areNotificationsEnabled(userDefaults: UserDefaults = .standard) -> Bool {
         boolSetting(
@@ -1074,6 +1076,17 @@ enum SettingsStorage {
             && boolSetting(
                 forKey: SettingsKeys.notificationsChatRepliesEnabled,
                 defaultValue: defaultChatReplyNotificationsEnabled,
+                userDefaults: userDefaults
+            )
+    }
+
+    static func areResearchCompleteNotificationsEnabled(
+        userDefaults: UserDefaults = .standard
+    ) -> Bool {
+        areNotificationsEnabled(userDefaults: userDefaults)
+            && boolSetting(
+                forKey: SettingsKeys.notificationsResearchCompleteEnabled,
+                defaultValue: defaultResearchCompleteNotificationsEnabled,
                 userDefaults: userDefaults
             )
     }

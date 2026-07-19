@@ -20,6 +20,10 @@ nonisolated enum NotificationIdentifier {
         "mail.digest.\(accountID.uuidString)"
     }
 
+    static func research(_ sessionID: UUID) -> String {
+        "research.\(sessionID.uuidString)"
+    }
+
     /// One identifier per (event, fire date, content). The fire date
     /// participates so moving an event or alarm books a fresh request and
     /// retires the old one; the content fingerprint (stable across launches)
@@ -68,12 +72,13 @@ nonisolated struct NotificationRoutingPayload: Codable, Equatable, Sendable {
         case mailDigest
         case calendarEvent
         case reminder
+        case research
     }
 
     let kind: Kind
     /// Chat ID for `chatReply`/`review`, email ID for `newMail`, account ID
     /// for `mailDigest`, event ID for `calendarEvent`, reminder ID for
-    /// `reminder`.
+    /// `reminder`, research-session ID for `research`.
     let targetID: UUID
 
     private enum UserInfoKey {

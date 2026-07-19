@@ -37,6 +37,7 @@ final class AppBootstrap {
         // Drains any notification quick actions that were tapped before the
         // container existed (cold-launch action tap).
         NotificationMailActionHandler.shared.configure(modelContainer: modelContainer)
+        ResearchSessionCoordinator.shared.configure(modelContainer: modelContainer)
 
         EmailWorkflowManager.shared.start(modelContainer: modelContainer)
         if SettingsStorage.isRemindersEnabled() {

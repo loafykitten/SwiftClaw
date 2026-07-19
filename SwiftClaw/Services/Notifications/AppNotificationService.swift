@@ -180,6 +180,26 @@ final class AppNotificationService: NSObject {
         post(content: content, identifier: NotificationIdentifier.review(chatID), source: .reviewResults)
     }
 
+    func notifyResearchComplete(sessionID: UUID, title: String, isPartial: Bool) {
+        guard canPost(source: .researchComplete) else { return }
+        let content = UNMutableNotificationContent()
+        content.title = isPartial
+            ? "Research finished with partial results"
+            : "Research complete"
+        content.body = title
+        content.sound = .default
+        content.threadIdentifier = "research.\(sessionID.uuidString)"
+        content.userInfo = NotificationRoutingPayload(
+            kind: .research,
+            targetID: sessionID
+        ).userInfo
+        post(
+            content: content,
+            identifier: NotificationIdentifier.research(sessionID),
+            source: .researchComplete
+        )
+    }
+
     /// New-mail entry point; owns the digest policy. Per account per sync
     /// pass: 1–`maxIndividualMailNotifications` messages get individual
     /// notifications with quick actions; more collapse into one digest
@@ -360,6 +380,7 @@ final class AppNotificationService: NSObject {
         case chatReplies
         case calendarAlerts
         case reminderAlerts
+        case researchComplete
     }
 
     private var isAuthorized: Bool {
@@ -384,6 +405,8 @@ final class AppNotificationService: NSObject {
             return SettingsStorage.areCalendarAlertNotificationsEnabled(userDefaults: userDefaults)
         case .reminderAlerts:
             return SettingsStorage.areReminderAlertNotificationsEnabled(userDefaults: userDefaults)
+        case .researchComplete:
+            return SettingsStorage.areResearchCompleteNotificationsEnabled(userDefaults: userDefaults)
         }
     }
 
@@ -509,6 +532,8 @@ extension AppNotificationService: UNUserNotificationCenterDelegate {
             // Event and reminder alerts are time-critical; show them even in
             // Workspace.
             return false
+        case .research:
+            return router.selectedNavigationItem == .deepResearch
         }
     }
 
@@ -555,6 +580,8 @@ extension AppNotificationService: UNUserNotificationCenterDelegate {
             // RemindersView to clear.
             guard isRemindersFeatureEnabled() else { return }
             AppRouter.shared.showReminders(focusing: payload.targetID)
+        case .research:
+            AppRouter.shared.showResearchSession(payload.targetID)
         }
     }
 }

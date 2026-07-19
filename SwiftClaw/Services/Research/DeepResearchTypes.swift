@@ -46,7 +46,7 @@ nonisolated struct DeepResearchRunResult: Codable, Sendable {
     let isPartial: Bool
 }
 
-nonisolated enum ResearchStage: Sendable, Equatable {
+nonisolated enum ResearchStage: String, Codable, Sendable, Equatable {
     case planning
     case searching
     case reading

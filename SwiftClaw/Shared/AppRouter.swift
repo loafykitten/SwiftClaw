@@ -23,6 +23,9 @@ final class AppRouter {
     /// Set when a reminder alert is tapped: Workspace navigates to the
     /// Reminders view (selecting the reminder's list), then clears it.
     var pendingReminderFocusID: UUID?
+    /// Set by a research-completion notification; Phase 5 consumes and clears
+    /// it after presenting the durable session.
+    var pendingResearchSessionID: UUID?
 
     @ObservationIgnored private var notificationObservers: [NSObjectProtocol] = []
     @ObservationIgnored private var notificationBridgeUseCount = 0
@@ -100,6 +103,15 @@ final class AppRouter {
 
     func clearPendingReminderFocus() {
         pendingReminderFocusID = nil
+    }
+
+    func showResearchSession(_ id: UUID) {
+        pendingResearchSessionID = id
+        selectedNavigationItem = .deepResearch
+    }
+
+    func clearPendingResearchSession() {
+        pendingResearchSessionID = nil
     }
 
     func openSettings(section: SettingsSection? = nil, highlightingToolsFeature feature: WorkspaceFeature? = nil) {
@@ -212,6 +224,7 @@ final class AppRouter {
         pendingEmailViewID = nil
         pendingCalendarFocus = false
         pendingReminderFocusID = nil
+        pendingResearchSessionID = nil
         self.unreadStore = unreadStore
         syncDockBadge()
     }

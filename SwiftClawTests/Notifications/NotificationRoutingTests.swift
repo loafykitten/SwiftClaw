@@ -76,6 +76,21 @@ struct NotificationRoutingTests {
         #expect(router.pendingReminderFocusID == reminderID)
     }
 
+    @Test func researchTapShowsAndClearsTheSession() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+        let sessionID = UUID()
+
+        AppNotificationService.shared.routeNotificationTap(
+            payload: NotificationRoutingPayload(kind: .research, targetID: sessionID)
+        )
+
+        #expect(router.selectedNavigationItem == .deepResearch)
+        #expect(router.pendingResearchSessionID == sessionID)
+        router.clearPendingResearchSession()
+        #expect(router.pendingResearchSessionID == nil)
+    }
+
     /// A delivered reminder alert can outlive the feature being switched
     /// off; its tap must be a no-op instead of stranding a focus ID nothing
     /// will ever clear.
@@ -145,6 +160,18 @@ struct NotificationRoutingTests {
 
         // Time-critical: shown even while the user is in Workspace.
         router.selectedNavigationItem = .workspace
+        #expect(!AppNotificationService.shouldSuppressPresentation(payload: payload, router: router))
+    }
+
+    @Test func researchBannerIsSuppressedWhileResearchIsSelected() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+        let payload = NotificationRoutingPayload(kind: .research, targetID: UUID())
+
+        router.selectedNavigationItem = .deepResearch
+        #expect(AppNotificationService.shouldSuppressPresentation(payload: payload, router: router))
+
+        router.selectedNavigationItem = .home
         #expect(!AppNotificationService.shouldSuppressPresentation(payload: payload, router: router))
     }
 

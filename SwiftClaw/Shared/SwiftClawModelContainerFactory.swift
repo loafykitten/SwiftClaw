@@ -51,6 +51,7 @@ enum SwiftClawModelContainerFactory {
             MemoryEntry.self,
             MemoryProposal.self,
             MemoryActivityEvent.self,
+            ResearchSession.self,
         ])
         let calendarSchema = Schema([
             CalendarEvent.self,
@@ -71,6 +72,7 @@ enum SwiftClawModelContainerFactory {
             MemoryEntry.self,
             MemoryProposal.self,
             MemoryActivityEvent.self,
+            ResearchSession.self,
             CalendarEvent.self,
             UserCalendar.self,
             Reminder.self,
