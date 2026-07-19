@@ -12,6 +12,10 @@ struct MarkdownInlineFlowView: View {
     let onWikilinkTap: ((String) -> Void)?
     let imageLoadScope: String
     let loadImage: ((String) async -> PlatformImage?)?
+    /// Citation taps travel via the environment rather than an initializer
+    /// parameter so only surfaces that render cited research reports (which
+    /// set the value at their root) pay any plumbing cost.
+    @Environment(\.markdownCitationTap) private var onCitationTap
 
     var body: some View {
         let elements = MarkdownInlineRenderer.flowElements(from: inlines)
@@ -21,6 +25,11 @@ struct MarkdownInlineFlowView: View {
                 case .text(let attributed):
                     Text(attributed)
                         .environment(\.openURL, OpenURLAction { url in
+                            if let index = MarkdownInlineRenderer.citationIndex(from: url) {
+                                guard let onCitationTap else { return .discarded }
+                                onCitationTap.action(index)
+                                return .handled
+                            }
                             guard let target = MarkdownInlineRenderer.wikilinkTarget(from: url) else {
                                 return .systemAction
                             }
@@ -139,6 +148,40 @@ enum MarkdownInlineRenderer {
         let path = url.path
         return path.hasPrefix("/") ? String(path.dropFirst()) : path
     }
+
+    /// Same-app-only link carrier for research-report citations, mirroring
+    /// ``wikilinkScheme``: `swiftclaw-citation:/<sourceIndex>`.
+    private static let citationScheme = "swiftclaw-citation"
+
+    static func citationURL(forSourceIndex index: Int) -> URL? {
+        var components = URLComponents()
+        components.scheme = citationScheme
+        components.host = ""
+        components.path = "/\(index)"
+        return components.url
+    }
+
+    static func citationIndex(from url: URL) -> Int? {
+        guard url.scheme == citationScheme else { return nil }
+        return Int(url.path.dropFirst())
+    }
+}
+
+/// Handler a report view installs so `[n]` citation links rendered inside
+/// markdown become tappable; nil (the default) leaves citation links inert.
+/// Equatable by `id` so installing the same handler across renders doesn't
+/// invalidate every markdown text run.
+struct MarkdownCitationTapHandler: Equatable {
+    let id: UUID
+    let action: (Int) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var markdownCitationTap: MarkdownCitationTapHandler? = nil
 }
 
 private struct InlineStyle {

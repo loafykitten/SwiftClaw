@@ -134,6 +134,15 @@ enum ChatCompletionService {
                 tools.append(ProposeNoteEditTool(modelContainer: modelContext.container, chatID: chat.id))
                 tools.append(ProposeNoteCreateTool(modelContainer: modelContext.container, chatID: chat.id))
             }
+            // Follow-up chats spawned from a Deep Research report get a
+            // request-bound reader for that report — bound to the session id,
+            // so it stays off `ToolRegistry.shared`.
+            if let researchSessionID = chat.researchSessionID {
+                tools.append(ResearchReportTool(
+                    modelContainer: modelContext.container,
+                    sessionID: researchSessionID
+                ))
+            }
             // Memory write tools are request-bound for the same reason as
             // the Notes proposal tools: they need the chat id + container to
             // route disclosures/proposals onto the right chat. The read

@@ -14,6 +14,10 @@ final class Chat {
     var isPinned: Bool = false
     var isArchived: Bool = false
     var errorMessage: String?
+    /// Set on chats spawned from a Deep Research report ("Ask a follow-up"):
+    /// completions append a request-bound `research_report` tool so the model
+    /// can read the stored report on demand.
+    var researchSessionID: UUID?
 
     @Relationship(deleteRule: .cascade, inverse: \ChatMessage.chat)
     var messages: [ChatMessage]

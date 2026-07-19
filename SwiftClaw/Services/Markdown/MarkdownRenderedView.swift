@@ -103,6 +103,13 @@ struct MarkdownBlockView: View {
     let imageLoadScope: String
     let loadImage: ((String) async -> PlatformImage?)?
 
+    /// Stable scroll anchor for a heading's plain text. Duplicate headings
+    /// share an anchor; scrollTo lands on the first, which is acceptable for
+    /// outline navigation.
+    static func headingAnchorID(for plainText: String) -> String {
+        "md-heading-\(plainText)"
+    }
+
     var body: some View {
         switch block {
         case let heading as Heading:
@@ -110,6 +117,9 @@ struct MarkdownBlockView: View {
                 .font(Self.font(forHeadingLevel: heading.level))
                 .accessibilityHeading(Self.accessibilityHeadingLevel(for: heading.level))
                 .accessibilityAddTraits(.isHeader)
+                // Anchor for outline navigation (e.g. the research report's
+                // table of contents) via `ScrollViewReader.scrollTo`.
+                .id(Self.headingAnchorID(for: heading.plainText))
 
         case let paragraph as Paragraph:
             MarkdownInlineFlowView(inlines: Array(paragraph.inlineChildren), onWikilinkTap: onWikilinkTap, imageLoadScope: imageLoadScope, loadImage: loadImage)

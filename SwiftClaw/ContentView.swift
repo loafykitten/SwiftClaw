@@ -64,6 +64,13 @@ struct ContentView: View {
     @Query(filter: #Predicate<Email> { !$0.isRead && !$0.isArchived && !$0.isDeleted })
     private var unreadEmails: [Email]
 
+    /// Unviewed research sessions badge the Research tab; an active run also
+    /// badges it (via the observed monitor) so a backgrounded run stays
+    /// discoverable.
+    @Query(filter: #Predicate<ResearchSession> { $0.isUnviewed })
+    private var unviewedResearchSessions: [ResearchSession]
+    @State private var researchMonitor = ResearchProgressMonitor.shared
+
     /// Lazily-constructed email review dispatcher + its backing mail client.
     /// Built once on first use rather than per-render (the previous
     /// `destination(for: .chats)` allocated a fresh `SwiftMailClient` + dispatcher
@@ -204,6 +211,8 @@ struct ContentView: View {
                 showsBadge: {
                     ($0 == .chats && router.hasUnreadChats)
                         || ($0 == .workspace && unreadEmailCount > 0)
+                        || ($0 == .deepResearch
+                            && (researchMonitor.isRunning || !unviewedResearchSessions.isEmpty))
                 }
             )
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
@@ -413,25 +422,22 @@ extension ContentView {
         switch item {
         case .chats: router.unreadChatIDs.count
         case .workspace: unreadEmailCount
+        // An active run keeps the tab badged even with nothing unviewed yet,
+        // matching the sidebar dot.
+        case .deepResearch: max(unviewedResearchSessions.count, researchMonitor.isRunning ? 1 : 0)
         default: 0
         }
     }
 
     /// Home fills the screen with its own chrome; Chats, Workspace, and
     /// Settings manage their own `NavigationStack` (they push
-    /// programmatically). Only the simple tabs get a stack here — nesting
-    /// stacks breaks safe-area and transition behavior.
+    /// programmatically). Every tab now manages its own `NavigationStack`
+    /// (Research joined so notification taps can push programmatically) —
+    /// nesting stacks breaks safe-area and transition behavior, so none is
+    /// added here.
     @ViewBuilder
     private func compactDestination(for item: NavigationItem) -> some View {
-        switch item {
-        case .home, .chats, .workspace, .settings:
-            destination(for: item)
-        default:
-            NavigationStack {
-                destination(for: item)
-                    .navigationTitle(item.rawValue)
-            }
-        }
+        destination(for: item)
     }
 }
 #endif

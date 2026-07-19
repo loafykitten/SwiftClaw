@@ -353,6 +353,12 @@ final class AppNotificationService: NSObject {
 
     // MARK: - Cleanup when the user reads the thing in-app
 
+    func removeDeliveredResearchNotification(sessionID: UUID) {
+        center?.removeDeliveredNotifications(withIdentifiers: [
+            NotificationIdentifier.research(sessionID),
+        ])
+    }
+
     func removeDeliveredChatNotifications(chatID: UUID) {
         center?.removeDeliveredNotifications(withIdentifiers: [
             NotificationIdentifier.chatReply(chatID),

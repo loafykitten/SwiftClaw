@@ -33,6 +33,15 @@ final class ResearchSessionCoordinator {
     private var activeStage: ResearchStage?
     private var processedProgressEventCount = 0
     private var deletedSessionIDs = Set<UUID>()
+    /// Coordinator-owned planning work, keyed by session id so deletion can
+    /// cancel it — a view-owned Task would keep writing into a deleted model.
+    private var planningTasks: [UUID: Task<Void, Never>] = [:]
+
+    /// The session currently running deep research, if any. The UI disables
+    /// start/resume/retry actions while another session holds the slot.
+    var runningSessionID: UUID? {
+        activeSessionID
+    }
 
     init(
         engineFactory: @escaping @MainActor () -> ResearchEngine = {
@@ -135,30 +144,55 @@ final class ResearchSessionCoordinator {
     }
 
     func generatePlan(session: ResearchSession) async {
+        let sessionID = session.id
+        if let existing = planningTasks[sessionID] {
+            await existing.value
+            return
+        }
+
         session.status = .planning
         session.errorMessage = nil
         saveModelContext()
 
-        do {
-            let result = try await planHandler(
-                engineFactory(),
-                session.topic,
-                session.clarifications
-            )
-            session.planPayload = ResearchSessionPlanPayload(
-                plan: result.plan,
-                context: result.context
-            )
-            session.progress = ResearchSessionCheckpoint(completedStage: .planning)
-            session.status = .awaitingPlanApproval
-            saveModelContext()
-        } catch {
-            session.status = .failed
-            session.completedAt = .now
-            session.errorMessage = error.localizedDescription
-            session.isUnviewed = true
+        let topic = session.topic
+        let clarifications = session.clarifications
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { planningTasks[sessionID] = nil }
+
+            let outcome: Result<ResearchPlanningResult, Error>
+            do {
+                outcome = try await .success(planHandler(engineFactory(), topic, clarifications))
+            } catch {
+                outcome = .failure(error)
+            }
+
+            // The session may have been deleted (or the run superseded) while
+            // planning was in flight — refetch instead of writing through the
+            // captured object.
+            guard let session = fetchSession(id: sessionID),
+                  session.status == .planning else {
+                return
+            }
+
+            switch outcome {
+            case .success(let result):
+                session.planPayload = ResearchSessionPlanPayload(
+                    plan: result.plan,
+                    context: result.context
+                )
+                session.progress = ResearchSessionCheckpoint(completedStage: .planning)
+                session.status = .awaitingPlanApproval
+            case .failure(let error):
+                session.status = .failed
+                session.completedAt = .now
+                session.errorMessage = error.localizedDescription
+                session.isUnviewed = true
+            }
             saveModelContext()
         }
+        planningTasks[sessionID] = task
+        await task.value
     }
 
     func startRun(session: ResearchSession, approvedPlan: ResearchPlan) {
@@ -241,6 +275,8 @@ final class ResearchSessionCoordinator {
 
     func deleteSession(session: ResearchSession) {
         guard let modelContext else { return }
+        planningTasks[session.id]?.cancel()
+        planningTasks[session.id] = nil
         if activeSessionID == session.id {
             deletedSessionIDs.insert(session.id)
             activeRunTask?.cancel()

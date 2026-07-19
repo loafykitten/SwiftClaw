@@ -38,6 +38,9 @@ final class AppBootstrap {
         // container existed (cold-launch action tap).
         NotificationMailActionHandler.shared.configure(modelContainer: modelContainer)
         ResearchSessionCoordinator.shared.configure(modelContainer: modelContainer)
+        #if DEBUG
+        ResearchSessionFixtureSeeder.seedIfRequested(modelContainer: modelContainer)
+        #endif
 
         EmailWorkflowManager.shared.start(modelContainer: modelContainer)
         if SettingsStorage.isRemindersEnabled() {
