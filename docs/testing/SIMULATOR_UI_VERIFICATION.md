@@ -7,16 +7,37 @@ iOS Debug Bridge) injects taps into the simulator directly, no host GUI
 involved. Combined with `simctl io booted screenshot`, an agent can navigate
 and visually verify iOS UI entirely from the shell.
 
-Verified working 2026-07-16 against Xcode 27 / iOS 27 simulators.
+Verified working 2026-07-19 against Xcode 27 / iOS 27 simulators
+(macOS 27.0 build 26A5378n).
 
 ## One-time setup
 
 The paths below under `~/.local/share/idb/` are the conventional install
 location this doc's snippets assume; check for them before reinstalling.
 
-- Companion: `brew install facebook/fb/idb-companion`
+- Companion: **must be built from facebook/idb HEAD** — do NOT
+  `brew install facebook/fb/idb-companion`. The brew release (1.1.8, Aug
+  2022) injects through the legacy Indigo mach channel, which macOS 27
+  suppresses (see Caveats), and the formula's `--HEAD` mode is broken (it
+  expects a prebuilt tarball layout). Source lives at
+  `~/.local/share/idb/src`, binary is symlinked to
+  `/opt/homebrew/bin/idb_companion`. To (re)build after an upstream pull:
+
+  ```bash
+  brew install xcodegen protobuf swift-protobuf   # build deps
+  cd ~/.local/share/idb/src && ./build.sh build idb_companion
+  ln -sf ~/.local/share/idb/src/Build/Products/Release/idb_companion /opt/homebrew/bin/idb_companion
+  ```
+
+  Build gotchas: on a fresh clone the first run generates the Xcode
+  project before the gRPC sources exist ("no such module 'IDBGRPCSwift'")
+  — just run it again; the OSS `Companion/project.yml` is missing a
+  `ReplProtocol` framework target the companion imports (the local clone
+  carries the patch — re-add it if a pull clobbers it); don't build under
+  `/tmp`-ish paths (build.sh's xattr workaround mangles them).
 - Python client (`fb-idb`) in a venv:
   `python3 -m venv ~/.local/share/idb/venv && ~/.local/share/idb/venv/bin/pip install fb-idb`
+  (client 1.1.7 works fine against the HEAD companion)
 - **Xcode 27 workaround**: idb hardcodes
   `<DEVELOPER_DIR>/Library/PrivateFrameworks/SimulatorKit.framework`, but
   Xcode 27 moved SimulatorKit to `Contents/SharedFrameworks/`, and Xcode.app
@@ -80,29 +101,27 @@ before launching. `NoteProposalFixtureLaunch` is the equivalent for Notes.
 
 ## Caveats
 
-- **Stale CoreSimulatorService after host sleep/lock**: taps (and even
-  `ui button HOME`) silently no-op on every simulator while AX reads and
-  `simctl io screenshot` keep working, and the companion still logs
-  "hid succeeded". Fix: `xcrun simctl shutdown all`, kill the
-  `CoreSimulatorService.xpc` process (it relaunches on demand), reboot the
-  device, restart the companion. Rebooting only the simulator does NOT help.
-  **2026-07-18: the fix is not reliable.** One session had taps working but
-  `ui text` no-oping, and after the CoreSimulatorService restart *all*
-  input (taps included) stayed dead across app relaunches, fresh
-  companions, and a device reboot; only screenshots and AX kept working.
-  When input dies mid-session, don't burn time on restarts — switch to
-  launch-argument driving (below) and screenshot verification.
-  **2026-07-19: confirmed host-level and reboot-proof** — after a full
-  machine reboot, fresh boots of two different devices, and a fresh
-  companion, no HID landed at all (taps, HOME, swipes) while AX reads and
-  screenshots worked and the companion logged "hid succeeded" throughout.
-  Xcode (27A5218g) and idb-companion (1.1.8) versions unchanged from when
-  it worked, so treat idb HID injection as unreliable on this setup.
-  **Working alternative: drive through Device Hub via codex computer use**
-  (`/Applications/Xcode.app/Contents/Applications/DeviceHub.app`) — clicks
-  and typing into its streamed simulator display work, combined with
-  `simctl io ... screenshot` for framebuffer captures. One caveat: typed
-  text can drop keystrokes (a trailing character went missing), so avoid
+- **Why the HEAD companion is required (resolved 2026-07-19)**: a macOS
+  27.0 seed update (auto-installed 2026-07-17, build 26A5378n) activated
+  `dtuhidd` (`/usr/libexec/dtuhidd`), a per-simulator HID daemon that
+  launchd respawns on every device boot. While it's in the sim's process
+  tree, the simulator suppresses the legacy Indigo HID channel that
+  idb-companion 1.1.8 used: mach sends still return success (the companion
+  logs "hid succeeded") but backboardd receives nothing — taps, HOME, and
+  swipes all silently no-op while AX reads and screenshots (different
+  channels) keep working. No amount of killing dtuhidd /
+  CoreSimulatorService, rebooting sims, or rebooting the host restores the
+  legacy path. HEAD's `FBSimulatorDTUHIDTransport` speaks dtuhidd's XPC
+  protocol instead and is auto-selected when dtuhidd is present; tap,
+  swipe, and `ui text` are all verified working through it. Not
+  implemented on that transport yet (throws `notImplementedOnDTUHID...`
+  instead of no-oping): trackpad gestures and some `ui button` presses
+  (e.g. HOME) — pull + rebuild to pick these up as upstream adds them.
+  If input injection is ever unavailable again, the fallbacks are
+  launch-argument driving (below) or driving Device Hub
+  (`/Applications/Xcode.app/Contents/Applications/DeviceHub.app`) via
+  codex computer use — clicks and typing into its streamed simulator
+  display work, though typed text can drop a trailing keystroke, so avoid
   asserting on exact typed strings.
 - SwiftUI sheets sometimes collapse `ui describe-all` to just the app root
   element — fall back to a screenshot plus coordinate math.
