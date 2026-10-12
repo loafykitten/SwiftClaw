@@ -37,7 +37,13 @@ serialization is non-reentrant and would deadlock.
 Archive/delete/send resolve the account's real Archive/Trash/Sent folders via
 IMAP `LIST (SPECIAL-USE)` (Gmail's archive is `[Gmail]/All Mail`, not
 "Archive"), cached on `StoredEmailAccount`. `delete` is a recoverable move to
-Trash; `deletePermanently` is the explicit expunge.
+Trash; `deletePermanently` is the explicit expunge. Expunges are always
+UID-scoped (UIDPLUS): without it a move only copies + flags the original
+`\Deleted` (`MailClientError.movedWithoutExpunge`) and Delete Permanently
+leaves the message flagged (`.targetedExpungeUnsupported`), because a bare
+EXPUNGE would also purge mail other clients marked deleted. Delete Permanently
+is refused while the row has no server UID (just moved to Trash, awaiting the
+Trash sync).
 
 SwiftClaw also caches the account's selectable IMAP folder catalog. Sync covers
 INBOX, Sent, Drafts, Junk/Spam, Archive/Trash, and custom folders. Gmail system
@@ -96,9 +102,10 @@ tool, then the model decides which slice of inbox to pull before optionally
 calling `notify_user_about_emails`. The service stamps
 `EmailThread.lastReviewedAt` only for threads the model actually fetched, and
 only after a successful inference call — a failure retries next pass instead of
-suppressing threads forever. A thread that gained reviewable mail after the
-fetch (mail landing mid-inference) is left unstamped so the unseen message
-isn't suppressed. Suppression is via `lastReviewedAt` plus
+suppressing threads forever. A thread that, under the fetch's own filter, now
+holds a message the payload didn't carry (mail landing mid-inference, or one
+restored from Trash) is left unstamped so the unseen message isn't
+suppressed. Suppression is via `lastReviewedAt` plus
 `reviewedCount`; flagged/notated threads bypass it. The fetched payload
 serializes exactly the messages the selection considered
 (`EmailRepository.consideredMessages`), so it honors the same folder scope.

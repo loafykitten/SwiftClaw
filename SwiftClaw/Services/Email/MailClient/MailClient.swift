@@ -253,6 +253,13 @@ nonisolated enum MailClientError: LocalizedError {
     case fetchFailed(String)
     case sendFailed(String)
     case unsupported(String)
+    /// The server lacks UIDPLUS, so the message was copied to `destination`
+    /// and marked `\Deleted` in `source` but not expunged: a folder-wide
+    /// EXPUNGE could also purge mail another client marked deleted.
+    case movedWithoutExpunge(source: String, destination: String)
+    /// The server lacks UIDPLUS, so the message is marked `\Deleted` in
+    /// `mailbox` but can't be expunged on its own.
+    case targetedExpungeUnsupported(mailbox: String)
 
     var errorDescription: String? {
         switch self {
@@ -270,6 +277,13 @@ nonisolated enum MailClientError: LocalizedError {
             "Sending mail failed: \(reason)"
         case .unsupported(let reason):
             "Operation not supported: \(reason)"
+        case .movedWithoutExpunge(let source, let destination):
+            "The server doesn't support targeted expunge, so the message was copied to \"\(destination)\" "
+                + "and only marked deleted in \"\(source)\". It will disappear from \"\(source)\" "
+                + "when another mail app expunges that folder."
+        case .targetedExpungeUnsupported(let mailbox):
+            "The server doesn't support targeted expunge, so the message is only marked deleted in "
+                + "\"\(mailbox)\". It will be removed when another mail app expunges that folder."
         }
     }
 }

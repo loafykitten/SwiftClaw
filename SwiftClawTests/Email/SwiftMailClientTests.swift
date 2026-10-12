@@ -130,21 +130,6 @@ struct SwiftMailClientTests {
         #expect(MailTransportPolicy.smtp(port: port) == expected)
     }
 
-    // MARK: - Expunge scoping
-
-    @Test func expungeIsUIDScopedWithUIDPlus() {
-        #expect(SwiftMailClient.expungePlan(target: 5, supportsUIDPlus: true, alreadyDeleted: [3, 4]) == .uidExpunge)
-    }
-
-    @Test func expungeWithoutUIDPlusOnlyWhenNothingElseIsPending() {
-        #expect(SwiftMailClient.expungePlan(target: 5, supportsUIDPlus: false, alreadyDeleted: []) == .expungeMailbox)
-        #expect(SwiftMailClient.expungePlan(target: 5, supportsUIDPlus: false, alreadyDeleted: [5]) == .expungeMailbox)
-        #expect(
-            SwiftMailClient.expungePlan(target: 5, supportsUIDPlus: false, alreadyDeleted: [3]) == .leaveFlagged,
-            "another client's staged deletion must not be committed as a side effect"
-        )
-    }
-
     // MARK: - SMTP addresses
 
     @Test func envelopeAddressDropsTheDisplayName() throws {
@@ -157,6 +142,28 @@ struct SwiftMailClientTests {
         #expect(bare.name == nil)
 
         #expect(SwiftMailClient.swiftMailAddress("undisclosed-recipients:;") == nil)
+    }
+
+    @Test func sendRejectsAMalformedRecipientBeforeConnecting() async throws {
+        let account = Self.completeAccount(id: UUID())
+        let client = SwiftMailClient(
+            account: account,
+            imapPasswordOverride: "imap",
+            smtpPasswordOverride: "smtp"
+        )
+        let email = OutgoingEmail(
+            fromAddress: "me@example.com",
+            toAddresses: ["alice@example.com", "bob"],
+            ccAddresses: [],
+            subject: "Hi",
+            bodyText: "Body"
+        )
+        do {
+            try await client.send(email)
+            Issue.record("expected the send to be rejected")
+        } catch MailClientError.sendFailed(let reason) {
+            #expect(reason.contains("bob"))
+        }
     }
 
     // MARK: - Helpers

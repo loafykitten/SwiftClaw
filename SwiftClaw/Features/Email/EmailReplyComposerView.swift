@@ -118,6 +118,8 @@ struct EmailReplyComposerView: View {
 
         var recoverySuggestion: String? {
             switch self {
+            case .sendFailed(let error as EmailReplySenderError):
+                "\(error.localizedDescription) The reply remains in the composer; fix it and send again."
             case .sendFailed(let error):
                 "The reply remains in the composer. Check the account connection and try again. Details: \(error.localizedDescription)"
             }

@@ -101,6 +101,67 @@ struct EmailServerIdentityTests {
         #expect(email.serverUID == 5)
     }
 
+    @Test func trashCopyWithoutExpungeKeepsTheRowInTrash() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let mock = MockMailClient()
+        // No UIDPLUS: copied to Trash, original only flagged \Deleted.
+        await mock.setMoveError(MailClientError.movedWithoutExpunge(source: "INBOX", destination: "Trash"))
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 5, messageID: "<copied@example.com>", subject: "Copied")],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+        let email = try #require(try context.fetch(FetchDescriptor<Email>()).first)
+
+        await EmailServerAction.delete(email: email, repository: repository, mailClient: mock)
+
+        #expect(email.mailbox == "Trash", "the copy is in Trash, so the row isn't reverted to INBOX")
+        #expect(email.serverUID == nil, "awaits the Trash sync for its real UID")
+    }
+
+    @Test func expungeErrorsExplainWhatWasLeftBehind() {
+        let moved = MailClientError.movedWithoutExpunge(source: "INBOX", destination: "Trash")
+            .localizedDescription
+        #expect(moved.contains("\"Trash\"") && moved.contains("\"INBOX\""))
+        let flagged = MailClientError.targetedExpungeUnsupported(mailbox: "Trash").localizedDescription
+        #expect(flagged.contains("marked deleted in \"Trash\""))
+    }
+
+    @Test func deletePermanentlyWaitsForTheTrashIdentity() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let mock = MockMailClient()
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 5, messageID: "<pending@example.com>", subject: "Pending")],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+        let email = try #require(try context.fetch(FetchDescriptor<Email>()).first)
+        let emailID = email.id
+        await EmailServerAction.delete(email: email, repository: repository, mailClient: mock)
+        #expect(email.serverUID == nil)
+
+        // Before Trash sync: refused, nothing deleted anywhere.
+        let deleted = await EmailServerAction.deletePermanently(email: email, repository: repository, mailClient: mock)
+        #expect(!deleted)
+        #expect(await mock.permanentDeletes.isEmpty)
+        #expect(try Self.stored(emailID, in: container) != nil, "the local row survives")
+
+        // After Trash sync re-keys it: expunged on the server, then locally.
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 41, messageID: "<pending@example.com>", subject: "Pending")],
+            mailbox: "Trash",
+            accountID: Self.accountID,
+            role: .trash
+        )
+        #expect(await EmailServerAction.deletePermanently(email: email, repository: repository, mailClient: mock))
+        #expect(await mock.permanentDeletes == [41])
+        #expect(try Self.stored(emailID, in: container) == nil)
+    }
+
     // MARK: - Synthetic Sent echoes
 
     @Test func anotherClientsSentMessageOnTheNextUIDIsNotSwallowed() async throws {
@@ -307,6 +368,71 @@ struct EmailServerIdentityTests {
             acknowledging: MailFlagUpdate(isRead: nil, isFlagged: false)
         )
         #expect(!email.needsFlagSync)
+    }
+
+    @Test func readAcknowledgementDoesNotSettleAnInFlightFlagChange() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let mock = MockMailClient()
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 1, messageID: "<i@example.com>", subject: "I")],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+        let email = try #require(try context.fetch(FetchDescriptor<Email>()).first)
+
+        // Opening the message sends a read-only update that is still in flight…
+        repository.setRead(messageID: email.id, isRead: true)
+        // …when the user flags it; that request (carrying both pending
+        // components) fails.
+        await mock.setSetFlagsError(MailClientError.fetchFailed("offline"))
+        await EmailServerAction.toggleFlag(email: email, repository: repository, mailClient: mock)
+        let flagRequest = try #require(await mock.flagUpdates.last)
+        #expect(flagRequest.updates.isFlagged == true)
+        #expect(flagRequest.updates.isRead == true)
+
+        // The read-only request's ack arrives last.
+        repository.clearFlagSyncPending(
+            messageID: email.id,
+            acknowledging: MailFlagUpdate(isRead: true, isFlagged: nil)
+        )
+        #expect(email.needsFlagSync, "the flag change was never confirmed")
+        #expect(email.pendingFlagUpdate?.isFlagged == true)
+        #expect(email.pendingFlagUpdate?.isRead == nil, "the read change is settled")
+        let retry = repository.pendingFlagSyncs(mailbox: "INBOX", accountID: Self.accountID)
+        #expect(retry.map(\.emailID) == [email.id], "the background retry still picks it up")
+
+        // A later change re-sends only what is still unconfirmed.
+        await mock.setSetFlagsError(nil)
+        await EmailServerAction.toggleFlag(email: email, repository: repository, mailClient: mock)
+        let resend = try #require(await mock.flagUpdates.last)
+        #expect(resend.updates.isFlagged == false)
+        #expect(resend.updates.isRead == nil, "a settled component isn't overwritten")
+        #expect(!email.needsFlagSync)
+    }
+
+    @Test func legacyPendingMarkerCountsBothComponents() throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 1, messageID: "<l@example.com>", subject: "L")],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+        let email = try #require(try context.fetch(FetchDescriptor<Email>()).first)
+        // Marked before per-component tracking existed.
+        email.needsFlagSync = true
+        try context.save()
+
+        repository.clearFlagSyncPending(
+            messageID: email.id,
+            acknowledging: MailFlagUpdate(isRead: false, isFlagged: nil)
+        )
+        #expect(email.needsFlagSync)
+        #expect(email.pendingFlagUpdate?.isFlagged == false)
+        #expect(email.pendingFlagUpdate?.isRead == nil)
     }
 
     // MARK: - Persistence

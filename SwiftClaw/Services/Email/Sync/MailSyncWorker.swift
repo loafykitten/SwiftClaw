@@ -416,10 +416,10 @@ actor MailSyncWorker {
     }
 
     /// Re-sends local read/flag state the server hasn't confirmed
-    /// (`Email.needsFlagSync`). Each row's full local state is pushed — the
-    /// pending marker doesn't record which component changed, and while it's
-    /// set reconciliation already treats both as locally authoritative. The
-    /// marker clears only for rows still matching what was acknowledged.
+    /// (`Email.needsFlagSync`). Each row's full local state is pushed — while
+    /// the marker is set reconciliation already treats both components as
+    /// locally authoritative — so one ack settles every pending component
+    /// that still matches what was acknowledged.
     /// Stops at the first failure; the next pass retries.
     private func pushPendingFlagChanges(
         client: MailClient,

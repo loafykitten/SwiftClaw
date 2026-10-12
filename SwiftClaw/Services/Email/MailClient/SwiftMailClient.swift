@@ -299,23 +299,18 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
                 guard await server.supportsUIDPlus else {
                     // SwiftMail's non-UIDPLUS fallback is COPY + \Deleted +
                     // an unqualified EXPUNGE, which would also purge every
-                    // other message already marked \Deleted in the source
-                    // folder. Do the COPY + \Deleted ourselves and only
-                    // expunge when that can't broaden the deletion.
-                    let alreadyDeleted: UIDSet = try await server.search(criteria: [.deleted])
+                    // message any client has marked \Deleted in the source
+                    // folder — and no earlier snapshot can rule that out.
+                    // Do the COPY + \Deleted ourselves and leave the expunge
+                    // to whichever client next expunges the folder.
                     try await server.copy(messages: UIDSet([target]), to: destination)
                     try await server.store(flags: [.deleted], on: UIDSet([target]), operation: .add)
-                    if Self.expungePlan(
-                        target: target.value,
-                        supportsUIDPlus: false,
-                        alreadyDeleted: Set(alreadyDeleted.toArray().map(\.value))
-                    ) == .expungeMailbox {
-                        try await server.expunge()
-                    }
-                    return
+                    throw MailClientError.movedWithoutExpunge(source: mailbox, destination: destination)
                 }
                 try await server.move(message: target, to: destination)
             }
+        } catch let error as MailClientError {
+            throw error
         } catch {
             throw MailClientError.fetchFailed(error.localizedDescription)
         }
@@ -346,7 +341,7 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
                 delete (move to Trash) failed for \(mailbox, privacy: .public): \
                 \(String(describing: error))
                 """)
-            throw MailClientError.fetchFailed(error.localizedDescription)
+            throw error
         }
     }
 
@@ -357,34 +352,16 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             try await withIMAPSession(channel: .interactive) { server in
                 _ = try await server.selectMailbox(mailbox)
 
-                let target = UID(UInt32(uid))
-                let uidSet = UIDSet([target])
+                let uidSet = UIDSet([UID(UInt32(uid))])
+                try await server.store(flags: [.deleted], on: uidSet, operation: .add)
                 // A bare EXPUNGE removes every message flagged \Deleted in
                 // the folder, including deletions another client has staged
-                // but not committed. Scope it to this UID (UIDPLUS); without
-                // UIDPLUS, only expunge when nothing else is pending.
-                let supportsUIDPlus = await server.supportsUIDPlus
-                var alreadyDeleted: Set<UInt32> = []
-                if !supportsUIDPlus {
-                    let flagged: UIDSet = try await server.search(criteria: [.deleted])
-                    alreadyDeleted = Set(flagged.toArray().map(\.value))
+                // but not committed, so only `UID EXPUNGE` (UIDPLUS, RFC 4315)
+                // is safe. Without it the message stays flagged.
+                guard await server.supportsUIDPlus else {
+                    throw MailClientError.targetedExpungeUnsupported(mailbox: mailbox)
                 }
-                try await server.store(flags: [.deleted], on: uidSet, operation: .add)
-                switch Self.expungePlan(
-                    target: target.value,
-                    supportsUIDPlus: supportsUIDPlus,
-                    alreadyDeleted: alreadyDeleted
-                ) {
-                case .uidExpunge:
-                    try await server.expunge(messages: uidSet)
-                case .expungeMailbox:
-                    try await server.expunge()
-                case .leaveFlagged:
-                    throw MailClientError.unsupported(
-                        "The server can't expunge a single message while other deletions are pending; "
-                            + "it's marked deleted and will be removed when the folder is next expunged."
-                    )
-                }
+                try await server.expunge(messages: uidSet)
             }
         } catch let error as MailClientError {
             throw error
@@ -393,29 +370,19 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
         }
     }
 
-    /// How to commit a `\Deleted` flag on `target` without expunging any
-    /// other message. `alreadyDeleted` is the folder's `\Deleted` set as of
-    /// before `target` was flagged (only consulted without UIDPLUS).
-    enum ExpungePlan: Equatable {
-        /// `UID EXPUNGE <target>` (RFC 4315) — removes exactly one message.
-        case uidExpunge
-        /// Plain `EXPUNGE` — safe only because nothing else was flagged.
-        case expungeMailbox
-        /// Leave `target` flagged; a plain EXPUNGE would broaden the delete.
-        case leaveFlagged
-    }
-
-    static func expungePlan(
-        target: UInt32,
-        supportsUIDPlus: Bool,
-        alreadyDeleted: Set<UInt32>
-    ) -> ExpungePlan {
-        if supportsUIDPlus { return .uidExpunge }
-        return alreadyDeleted.subtracting([target]).isEmpty ? .expungeMailbox : .leaveFlagged
-    }
-
     func send(_ email: OutgoingEmail) async throws {
         guard isConfigured else { throw MailClientError.notConfigured }
+        // `makeSwiftMailEmail` drops entries without a deliverable address so
+        // empty groups don't break the envelope; anything else is a typo the
+        // user must fix, not a recipient to silently skip.
+        let invalid = EmailAddressParser.invalidRecipients(
+            email.toAddresses + email.ccAddresses + email.bccAddresses
+        )
+        guard invalid.isEmpty else {
+            throw MailClientError.sendFailed(
+                "Not a valid email address: \(invalid.joined(separator: ", "))"
+            )
+        }
 
         let server = makeSMTPServer()
         do {
@@ -554,10 +521,12 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     /// Maps a stored address (`Alice Smith <alice@example.com>` or a bare
     /// address) to SwiftMail's split form: SMTP `MAIL FROM` / `RCPT TO` use
     /// only `address`, the display name stays in the headers. `nil` for an
-    /// entry with no address (e.g. an empty group like `undisclosed-recipients:;`).
+    /// entry with no deliverable address (e.g. an empty group like
+    /// `undisclosed-recipients:;`); `send` rejects any other such entry up
+    /// front, so only empty groups are dropped here.
     static func swiftMailAddress(_ raw: String) -> EmailAddress? {
         let mailbox = EmailAddressParser.mailbox(raw)
-        guard mailbox.address.contains("@") else { return nil }
+        guard EmailAddressParser.isDeliverableAddress(mailbox.address) else { return nil }
         return EmailAddress(name: mailbox.name, address: mailbox.address)
     }
 

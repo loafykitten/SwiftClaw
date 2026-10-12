@@ -69,6 +69,65 @@ struct EmailReplySenderTests {
         #expect(sentRows.first?.isLocallySynthetic == true)
     }
 
+    @Test func malformedRecipientRejectsTheWholeSend() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let context = ModelContext(container)
+        let email = try Self.seedEmail(in: container)
+        let mock = MockMailClient()
+
+        do {
+            try await EmailReplySender.send(
+                replyingTo: email,
+                account: Self.account(),
+                toAddresses: EmailReplySender.parseAddresses("alice@example.com, bob"),
+                ccAddresses: ["Carol <carol@>"],
+                subject: "Re: Original",
+                bodyText: "Hi",
+                modelContext: context,
+                clientFactory: { _ in mock }
+            )
+            Issue.record("expected the send to be rejected")
+        } catch EmailReplySenderError.invalidRecipients(let entries) {
+            #expect(entries == ["bob", "Carol <carol@>"])
+        }
+        #expect(await mock.sentEmails.isEmpty, "nothing is sent to the valid recipients alone")
+        let sentRows = try context.fetch(FetchDescriptor<Email>()).filter { $0.mailbox == "Sent" }
+        #expect(sentRows.isEmpty, "no local Sent row is seeded")
+    }
+
+    @Test func emptyGroupIsNotAnInvalidRecipient() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let context = ModelContext(container)
+        let email = try Self.seedEmail(in: container)
+        let mock = MockMailClient()
+
+        try await EmailReplySender.send(
+            replyingTo: email,
+            account: Self.account(),
+            toAddresses: ["sender@example.com"],
+            ccAddresses: ["undisclosed-recipients:;"],
+            subject: "Re: Original",
+            bodyText: "Hi",
+            modelContext: context,
+            clientFactory: { _ in mock }
+        )
+        #expect(await mock.sentEmails.count == 1)
+    }
+
+    @Test func recipientValidation() {
+        #expect(EmailAddressParser.invalidRecipients([
+            "alice@example.com",
+            "Alice Smith <alice@example.com>",
+            "\"Smith, Alice\" <alice@example.com>",
+            "undisclosed-recipients:;",
+            "bob",
+            "bob@",
+            "@example.com",
+            "alice@example.com bob@example.com",
+            "Dana <dana@example.com",
+        ]) == ["bob", "bob@", "@example.com", "alice@example.com bob@example.com", "Dana <dana@example.com"])
+    }
+
     @Test func quickReplyWithoutAConfiguredAccountThrows() async throws {
         let container = try EmailRepositoryTests.inMemoryContainer()
         let context = ModelContext(container)

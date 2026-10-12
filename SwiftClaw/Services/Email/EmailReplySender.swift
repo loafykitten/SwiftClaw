@@ -73,6 +73,12 @@ enum EmailReplySender {
         modelContext: ModelContext,
         clientFactory: (StoredEmailAccount) -> MailClient = { SwiftMailClient(account: $0) }
     ) async throws {
+        // Reject malformed entries before anything is sent or seeded, so a
+        // typo can't silently shrink the recipient list.
+        let invalid = EmailAddressParser.invalidRecipients(toAddresses + ccAddresses)
+        guard invalid.isEmpty else {
+            throw EmailReplySenderError.invalidRecipients(invalid)
+        }
         // Generate one Message-ID up front so the delivered message,
         // the Sent-folder APPEND, and the local seed row all share it.
         // `upsertSentMessage` dedups on this value, so a shared ID also
@@ -150,11 +156,16 @@ enum EmailReplySender {
 
 enum EmailReplySenderError: LocalizedError {
     case accountUnavailable
+    case invalidRecipients([String])
 
     var errorDescription: String? {
         switch self {
         case .accountUnavailable:
             "The email's account is no longer configured."
+        case .invalidRecipients(let entries) where entries.count == 1:
+            "\"\(entries[0])\" isn't a valid email address."
+        case .invalidRecipients(let entries):
+            "These aren't valid email addresses: \(entries.map { "\"\($0)\"" }.joined(separator: ", "))."
         }
     }
 }

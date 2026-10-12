@@ -149,6 +149,38 @@ nonisolated enum EmailAddressParser {
         return Mailbox(name: name.isEmpty ? nil : name, address: address)
     }
 
+    /// Whether a bare address (no display name) can go on an SMTP envelope:
+    /// a non-empty local part and domain around the last `@`, with no
+    /// whitespace or list/angle delimiters. Deliberately loose beyond that —
+    /// it rejects typos and fragments (`bob`, `bob@`), not unusual valid forms.
+    static func isDeliverableAddress(_ address: String) -> Bool {
+        guard let at = address.lastIndex(of: "@") else { return false }
+        let localPart = address[..<at]
+        let domain = address[address.index(after: at)...]
+        guard !localPart.isEmpty, !domain.isEmpty,
+              domain.first != ".", domain.last != "." else { return false }
+        return !address.contains { $0.isWhitespace || "<>,;".contains($0) }
+    }
+
+    /// True for an empty group such as `undisclosed-recipients:;` — a
+    /// deliberate entry that names no mailbox to deliver to.
+    static func isEmptyGroup(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasSuffix(";"),
+              let colon = trimmed.firstIndex(of: ":"),
+              colon != trimmed.startIndex else { return false }
+        return trimmed[trimmed.index(after: colon)..<trimmed.index(before: trimmed.endIndex)]
+            .allSatisfy(\.isWhitespace)
+    }
+
+    /// The entries that are neither a deliverable mailbox nor an empty
+    /// group, in order. Sending must reject these rather than drop them.
+    static func invalidRecipients(_ entries: [String]) -> [String] {
+        entries.filter { entry in
+            !isEmptyGroup(entry) && !isDeliverableAddress(mailbox(entry).address)
+        }
+    }
+
     /// Renders one stored address for an editable comma-separated field.
     /// Stored addresses are display-formatted (quotes stripped), so a name
     /// like `Smith, Alice` is re-quoted to survive `split(_:)`.

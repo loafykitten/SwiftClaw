@@ -50,6 +50,19 @@ extension Email {
         guard !isLocallySynthetic, uid > 0, uid <= Int(UInt32.max) else { return nil }
         return uid
     }
+
+    /// The read/flag components still awaiting server confirmation, with
+    /// their local values (`nil` for a settled component), or `nil` when
+    /// nothing is pending. A legacy marker without per-component state
+    /// counts both components as pending.
+    var pendingFlagUpdate: MailFlagUpdate? {
+        guard needsFlagSync else { return nil }
+        let isLegacyMarker = !isReadSyncPending && !isFlaggedSyncPending
+        return MailFlagUpdate(
+            isRead: isReadSyncPending || isLegacyMarker ? isRead : nil,
+            isFlagged: isFlaggedSyncPending || isLegacyMarker ? isFlagged : nil
+        )
+    }
 }
 
 /// Single mutation boundary for all Email/SwiftData writes. The first
@@ -342,6 +355,7 @@ final class EmailRepository {
         // Mark unsynced so a stale server snapshot can't revert this before
         // `EmailServerAction` confirms the change server-side.
         email.needsFlagSync = true
+        email.isReadSyncPending = true
         save()
     }
 
@@ -352,6 +366,7 @@ final class EmailRepository {
         guard let email = fetchEmail(by: messageID) else { return nil }
         email.isFlagged.toggle()
         email.needsFlagSync = true
+        email.isFlaggedSyncPending = true
         save()
         return email.isFlagged
     }
@@ -365,21 +380,26 @@ final class EmailRepository {
         guard email.isFlagged != isFlagged else { return email.isFlagged }
         email.isFlagged = isFlagged
         email.needsFlagSync = true
+        email.isFlaggedSyncPending = true
         save()
         return email.isFlagged
     }
 
-    /// Clears the pending-flag-sync marker once the server has confirmed
-    /// `acknowledged`. Only clears when every acknowledged value still matches
-    /// the row: if the user changed it again while the request was in flight,
-    /// that newer change is still pending. After this the row is fair game
-    /// for `reconcileFlagsFromSnapshot` again.
+    /// Settles the pending components the server has confirmed with
+    /// `acknowledged`. A component settles only when the request carried it
+    /// and its value still matches the row: a component the request didn't
+    /// cover (a read-only ack while a flag change is in flight) or one the
+    /// user changed again mid-request stays pending. Once nothing is pending
+    /// the row is fair game for `reconcileFlagsFromSnapshot` again.
     func clearFlagSyncPending(messageID: UUID, acknowledging acknowledged: MailFlagUpdate) {
-        guard let email = fetchEmail(by: messageID) else { return }
-        guard email.needsFlagSync else { return }
-        if let isRead = acknowledged.isRead, isRead != email.isRead { return }
-        if let isFlagged = acknowledged.isFlagged, isFlagged != email.isFlagged { return }
-        email.needsFlagSync = false
+        guard let email = fetchEmail(by: messageID),
+              let pending = email.pendingFlagUpdate else { return }
+        let readSettled = pending.isRead == nil || acknowledged.isRead == email.isRead
+        let flaggedSettled = pending.isFlagged == nil || acknowledged.isFlagged == email.isFlagged
+        guard readSettled || flaggedSettled else { return }
+        email.isReadSyncPending = !readSettled
+        email.isFlaggedSyncPending = !flaggedSettled
+        email.needsFlagSync = !(readSettled && flaggedSettled)
         save()
     }
 

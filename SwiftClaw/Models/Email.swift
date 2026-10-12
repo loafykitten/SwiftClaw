@@ -166,6 +166,14 @@ final class Email {
     /// existing stores migrate without a schema bump.
     var needsFlagSync: Bool = false
 
+    /// Which components of a `needsFlagSync` change are still unconfirmed,
+    /// so an acknowledgement of one component can't settle the other. Both
+    /// `false` while `needsFlagSync` is set means a row marked before
+    /// per-component tracking existed: both count as pending
+    /// (`Email.pendingFlagUpdate`).
+    var isReadSyncPending: Bool = false
+    var isFlaggedSyncPending: Bool = false
+
     init(
         id: UUID = UUID(),
         messageID: String? = nil,
