@@ -24,9 +24,26 @@ final class CalendarRepository {
     /// end (one save and one store-change notification).
     private var isDeferringSaves = false
     private var deferredSaveNeeded = false
+    /// Performs the actual store write. A seam so tests can inject a
+    /// persistence failure; production always calls `ModelContext.save()`.
+    private let persist: @MainActor (ModelContext) throws -> Void
 
-    init(modelContext: ModelContext) {
+    /// A save that failed. The write was rolled back, so the rows on screen
+    /// match the store again and the user can simply retry.
+    struct SaveError: LocalizedError {
+        let underlying: any Error
+
+        var errorDescription: String? {
+            String(localized: "SwiftClaw couldn't save this change, so nothing was changed. Try again.")
+        }
+    }
+
+    init(
+        modelContext: ModelContext,
+        persist: @escaping @MainActor (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.modelContext = modelContext
+        self.persist = persist
     }
 
     // MARK: - Calendars
@@ -207,39 +224,59 @@ final class CalendarRepository {
         return override
     }
 
+    // The user-facing single mutations below (delete, drag-reschedule) each
+    // run as their own `performTransaction`: a failed save rolls back just
+    // that change and throws `SaveError`, so the UI can say so instead of
+    // showing a change that never reached the store.
+
     /// Removes a single occurrence from a recurring master (EXDATE).
-    func deleteOccurrence(of master: CalendarEvent, at occurrenceStart: Date) {
-        master.exceptionDates.append(occurrenceStart)
-        master.modifiedAt = .now
-        save()
+    func deleteOccurrence(of master: CalendarEvent, at occurrenceStart: Date) throws {
+        try performTransaction {
+            master.exceptionDates.append(occurrenceStart)
+            master.modifiedAt = .now
+            save()
+        }
     }
 
     /// Ends a recurring master just before `occurrenceStart`; that occurrence
     /// and everything after (including now-orphaned overrides) is removed.
-    func deleteThisAndFuture(of master: CalendarEvent, from occurrenceStart: Date) {
+    func deleteThisAndFuture(of master: CalendarEvent, from occurrenceStart: Date) throws {
         guard var rule = master.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)) else {
-            deleteEventSeries(master)
+            try deleteEventSeries(master)
             return
         }
-        let until = occurrenceStart.addingTimeInterval(-1)
-        rule.end = .untilDate(until)
-        master.recurrenceRuleString = rule.rruleString
-        refreshRecurrenceEnd(of: master)
-        master.modifiedAt = .now
-        for override in overrides(of: master)
-        where (override.originalOccurrenceDate ?? override.startDate) >= occurrenceStart {
-            modelContext.delete(override)
+        try performTransaction {
+            let until = occurrenceStart.addingTimeInterval(-1)
+            rule.end = .untilDate(until)
+            master.recurrenceRuleString = rule.rruleString
+            refreshRecurrenceEnd(of: master)
+            master.modifiedAt = .now
+            for override in overrides(of: master)
+            where (override.originalOccurrenceDate ?? override.startDate) >= occurrenceStart {
+                modelContext.delete(override)
+            }
+            save()
         }
-        save()
     }
 
     /// Deletes a master plus all of its detached overrides (or a one-off).
-    func deleteEventSeries(_ event: CalendarEvent) {
-        for override in overrides(of: event) {
-            deleteRow(override)
+    func deleteEventSeries(_ event: CalendarEvent) throws {
+        try performTransaction {
+            for override in overrides(of: event) {
+                deleteRow(override)
+            }
+            deleteRow(event)
+            save()
         }
-        deleteRow(event)
-        save()
+    }
+
+    /// Moves or resizes a one-off (or override) from a timeline drag.
+    func reschedule(_ event: CalendarEvent, start: Date, end: Date) throws {
+        try performTransaction {
+            event.startDate = start
+            event.endDate = end
+            noteUpdated(event)
+        }
     }
 
     /// Turns a recurring row into a plain one-off: drops its rule, EXDATEs,
@@ -375,12 +412,18 @@ final class CalendarRepository {
 
     /// Runs `body` as one all-or-nothing write: saves inside it are deferred
     /// to a single commit at the end. A failed commit rolls the context back
-    /// (so in-memory rows match the store again) and throws, so a caller like
-    /// the editor's Save can keep its draft and report the failure instead
-    /// of dismissing as if the change had landed. Nested calls join the
-    /// outer transaction.
+    /// (so in-memory rows match the store again) and throws `SaveError`, so a
+    /// caller like the editor's Save can keep its draft and report the
+    /// failure instead of dismissing as if the change had landed. Nested
+    /// calls join the outer transaction.
+    ///
+    /// UI repositories share the main context, so the rollback must only
+    /// ever discard this transaction's writes: changes already pending when
+    /// it starts are saved first, and if that save fails the transaction
+    /// throws before running `body` (rolling back nothing).
     func performTransaction<Result>(_ body: () throws -> Result) throws -> Result {
         guard !isDeferringSaves else { return try body() }
+        try savePendingChanges()
         isDeferringSaves = true
         deferredSaveNeeded = false
         let result: Result
@@ -535,29 +578,43 @@ final class CalendarRepository {
 
     // MARK: - Persistence
 
-    /// Best-effort save for single mutations: failures are logged. Callers
-    /// that must not report success on failure wrap their writes in
-    /// `performTransaction` / `performImport`, whose commit throws.
+    /// Best-effort save for background and settings writes: failures are
+    /// logged. User-facing mutations and anything that must not report
+    /// success on failure go through `performTransaction` /
+    /// `performImport`, whose commit throws.
     private func save() {
         if isDeferringSaves {
             deferredSaveNeeded = true
             return
         }
         do {
-            try modelContext.save()
+            try persist(modelContext)
             NotificationCenter.default.post(name: .calendarStoreDidChange, object: nil)
         } catch {
             Self.logger.error("save failed: \(String(describing: error))")
         }
     }
 
+    /// Saves changes some other writer left pending, without rolling back on
+    /// failure — they aren't ours to discard.
+    private func savePendingChanges() throws {
+        guard modelContext.hasChanges else { return }
+        do {
+            try persist(modelContext)
+        } catch {
+            Self.logger.error("pending-changes save failed: \(String(describing: error))")
+            throw SaveError(underlying: error)
+        }
+        NotificationCenter.default.post(name: .calendarStoreDidChange, object: nil)
+    }
+
     private func commit() throws {
         do {
-            try modelContext.save()
+            try persist(modelContext)
         } catch {
             Self.logger.error("transaction save failed: \(String(describing: error))")
             modelContext.rollback()
-            throw error
+            throw SaveError(underlying: error)
         }
         NotificationCenter.default.post(name: .calendarStoreDidChange, object: nil)
     }

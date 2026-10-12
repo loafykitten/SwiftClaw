@@ -199,7 +199,7 @@ struct ReminderAlertSchedulerTests {
         await harness.reconcileAndFlush()
         #expect(harness.spy.addedRequests.count == 1)
 
-        harness.repository.complete(reminder)
+        try harness.repository.complete(reminder)
         await harness.reconcileAndFlush()
 
         #expect(harness.spy.addedRequests.isEmpty)
@@ -218,11 +218,11 @@ struct ReminderAlertSchedulerTests {
         await harness.reconcileAndFlush()
         let originalIdentifier = try #require(harness.spy.addedRequests.first?.identifier)
 
-        harness.repository.complete(reminder)
+        try harness.repository.complete(reminder)
         await harness.reconcileAndFlush()
         #expect(harness.spy.addedRequests.isEmpty)
 
-        harness.repository.uncomplete(reminder)
+        try harness.repository.uncomplete(reminder)
         await harness.reconcileAndFlush()
 
         #expect(harness.spy.addedRequests.count == 1)
@@ -246,7 +246,7 @@ struct ReminderAlertSchedulerTests {
         #expect(harness.spy.addedRequests.count == 1)
         let firstIdentifier = try #require(harness.spy.addedRequests.first?.identifier)
 
-        harness.repository.complete(reminder)
+        try harness.repository.complete(reminder)
         await harness.reconcileAndFlush()
 
         #expect(harness.spy.addedRequests.count == 1)
@@ -267,7 +267,7 @@ struct ReminderAlertSchedulerTests {
             hasDueTime: true,
             recurrenceRuleString: "FREQ=DAILY"
         ))
-        harness.repository.complete(reminder)
+        try harness.repository.complete(reminder)
 
         await harness.reconcileAndFlush()
         // Only the advanced master's next occurrence is booked.

@@ -21,7 +21,12 @@ Apple Calendar overlay.
   (`parentEventID` / `originalOccurrenceDate`), the same shape EventKit uses.
 - `Services/Calendar/Repository/CalendarRepository.swift` is the single
   mutation boundary and the identity authority (deterministic lookups,
-  `dedupeAfterRemoteMerge()` for CloudKit-merge duplicates).
+  `dedupeAfterRemoteMerge()` for CloudKit-merge duplicates). User-facing
+  writes (editor Save, deletes, drag-reschedule, imports) run through
+  `performTransaction`, which throws `SaveError` on a failed save after
+  rolling back only its own writes: changes already pending on the shared
+  context are saved before it starts. Tests inject save failures through the
+  repository's `persist` seam.
 
 ## CloudKit sync (dormant)
 
@@ -77,7 +82,10 @@ the pure `CalendarTimelineLayoutEngine` and support drag-create/move/resize
 editor's explicit scope prompts). The editor sheet works off a
 `CalendarEventDraft` value; Save is the only write, one
 `performTransaction` — on a failed save it rolls back and the sheet stays
-open with the draft. The timeline maps frames and gestures through
+open with the draft. Deletes (context menus, the delete-scope prompt) and
+drag-move/resize are throwing repository transactions too; `CalendarView`
+reports a failure in one `actionFailureAlert` (`Shared/ActionFailureAlert.swift`)
+and the rolled-back event snaps back. The timeline maps frames and gestures through
 wall-clock time, so DST days line up with the 24 hour labels. When the opt-in
 `settings.reminders.showInCalendar` toggle is on, due-dated reminders render
 as chips in the month grid, all-day strip, and agenda — see

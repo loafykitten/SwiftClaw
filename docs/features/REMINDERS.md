@@ -38,7 +38,11 @@ template (`docs/features/CALENDAR.md`).
 - `Services/Reminders/Repository/ReminderRepository.swift` is the single
   mutation boundary and identity authority: complete/uncomplete/skip
   transactions with log rows, upsert, dedupe, and it posts
-  `.reminderStoreDidChange`. `Services/Reminders/ReminderSyncCoordinator.swift`
+  `.reminderStoreDidChange`. Complete, uncomplete, skip, and delete each run
+  as their own `performTransaction` and throw `SaveError` when the save
+  fails; the rollback covers only that change (changes already pending on the
+  shared context are saved first). `ReminderListDetailView` and the calendar's
+  reminder chips surface failures in one `actionFailureAlert` per screen. `Services/Reminders/ReminderSyncCoordinator.swift`
   is the `CalendarSyncCoordinator` clone for the (currently dormant) CloudKit
   path — see CALENDAR.md's "CloudKit sync (dormant)" for why.
 

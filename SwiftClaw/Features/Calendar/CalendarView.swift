@@ -33,6 +33,8 @@ struct CalendarView: View {
     @State private var scopePromptOccurrence: EventOccurrence?
     /// A recurring occurrence awaiting a delete-scope choice.
     @State private var deletePromptOccurrence: EventOccurrence?
+    /// A delete, drag, or reminder-chip completion whose save failed.
+    @State private var actionFailure: ActionFailure?
 
     private var calendar: Calendar { Calendar.current }
 
@@ -136,24 +138,31 @@ struct CalendarView: View {
                 if let occurrence = deletePromptOccurrence {
                     Button("Delete This Event", role: .destructive) {
                         if let master = repository.event(withID: occurrence.eventID) {
-                            repository.deleteOccurrence(of: master, at: occurrence.start)
+                            perform(Self.deleteFailureTitle) {
+                                try repository.deleteOccurrence(of: master, at: occurrence.start)
+                            }
                         }
                         deletePromptOccurrence = nil
                     }
                     Button("Delete This and Future Events", role: .destructive) {
                         if let master = repository.event(withID: occurrence.eventID) {
-                            repository.deleteThisAndFuture(of: master, from: occurrence.start)
+                            perform(Self.deleteFailureTitle) {
+                                try repository.deleteThisAndFuture(of: master, from: occurrence.start)
+                            }
                         }
                         deletePromptOccurrence = nil
                     }
                     Button("Delete All Events", role: .destructive) {
                         if let master = repository.event(withID: occurrence.eventID) {
-                            repository.deleteEventSeries(master)
+                            perform(Self.deleteFailureTitle) {
+                                try repository.deleteEventSeries(master)
+                            }
                         }
                         deletePromptOccurrence = nil
                     }
                 }
             }
+            .actionFailureAlert($actionFailure)
     }
 
     // MARK: - Toolbar
@@ -375,6 +384,18 @@ struct CalendarView: View {
 
     // MARK: - Actions
 
+    private static let deleteFailureTitle = String(localized: "Couldn't Delete Event")
+    private static let rescheduleFailureTitle = String(localized: "Couldn't Move Event")
+
+    /// Runs one repository mutation, surfacing a failed save in the alert.
+    private func perform(_ failureTitle: String, _ action: () throws -> Void) {
+        do {
+            try action()
+        } catch {
+            actionFailure = ActionFailure(title: failureTitle, error: error)
+        }
+    }
+
     private func requestEdit(_ occurrence: EventOccurrence) {
         guard occurrence.source != .appleOverlay else { return } // read-only
         if repository.event(withID: occurrence.eventID)?.isRecurring == true {
@@ -389,22 +410,25 @@ struct CalendarView: View {
         if repository.event(withID: occurrence.eventID)?.isRecurring == true {
             deletePromptOccurrence = occurrence
         } else if let event = repository.event(withID: occurrence.eventID) {
-            repository.deleteEventSeries(event)
+            perform(Self.deleteFailureTitle) {
+                try repository.deleteEventSeries(event)
+            }
         }
     }
 
     private func moveOccurrence(_ occurrence: EventOccurrence, to newStart: Date) {
         guard let event = repository.event(withID: occurrence.eventID) else { return }
-        let duration = event.duration
-        event.startDate = newStart
-        event.endDate = newStart.addingTimeInterval(duration)
-        repository.noteUpdated(event)
+        let newEnd = newStart.addingTimeInterval(event.duration)
+        perform(Self.rescheduleFailureTitle) {
+            try repository.reschedule(event, start: newStart, end: newEnd)
+        }
     }
 
     private func resizeOccurrence(_ occurrence: EventOccurrence, to newEnd: Date) {
         guard let event = repository.event(withID: occurrence.eventID), newEnd > event.startDate else { return }
-        event.endDate = newEnd
-        repository.noteUpdated(event)
+        perform(Self.rescheduleFailureTitle) {
+            try repository.reschedule(event, start: event.startDate, end: newEnd)
+        }
     }
 
     // Reminder chips are a window into another feature: opening routes to the
@@ -421,7 +445,9 @@ struct CalendarView: View {
         guard let reminder = reminderRepository.reminder(withID: item.reminderID) else { return }
         // The chip's dueDate is the occurrence it rendered; a stale
         // double-click must not consume the next occurrence too.
-        reminderRepository.complete(reminder, expectedOccurrence: item.due)
+        perform(String(localized: "Couldn't Complete Reminder")) {
+            try reminderRepository.complete(reminder, expectedOccurrence: item.due)
+        }
     }
 }
 

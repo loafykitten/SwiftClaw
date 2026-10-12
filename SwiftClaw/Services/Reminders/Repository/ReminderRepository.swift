@@ -39,14 +39,31 @@ final class ReminderRepository {
         }
     }
 
+    /// A save that failed. The write was rolled back, so the rows on screen
+    /// match the store again and the user can simply retry.
+    struct SaveError: LocalizedError {
+        let underlying: any Error
+
+        var errorDescription: String? {
+            String(localized: "SwiftClaw couldn't save this change, so nothing was changed. Try again.")
+        }
+    }
+
     let modelContext: ModelContext
 
     /// Inside `performTransaction`, saves are deferred to one commit at the end.
     private var isDeferringSaves = false
     private var deferredSaveNeeded = false
+    /// Performs the actual store write. A seam so tests can inject a
+    /// persistence failure; production always calls `ModelContext.save()`.
+    private let persist: @MainActor (ModelContext) throws -> Void
 
-    init(modelContext: ModelContext) {
+    init(
+        modelContext: ModelContext,
+        persist: @escaping @MainActor (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.modelContext = modelContext
+        self.persist = persist
     }
 
     // MARK: - Lists
@@ -253,6 +270,10 @@ final class ReminderRepository {
 
     // MARK: - Completion Semantics
 
+    // Complete, uncomplete, skip, and delete are user-facing single
+    // mutations: each runs as its own `performTransaction`, so a failed save
+    // rolls back just that change and throws `SaveError` for the UI to show.
+
     /// Completes a reminder in one transaction. Recurring masters keep one row
     /// for the next pending occurrence and insert detached completed log rows
     /// so undo and history stay cheap and deterministic.
@@ -262,20 +283,22 @@ final class ReminderRepository {
     /// a double-click would otherwise consume two occurrences; passing the
     /// rendered date makes the stale second call a no-op. `nil` skips the
     /// check (non-UI callers).
-    func complete(_ reminder: Reminder, at date: Date = .now, expectedOccurrence: Date?? = nil) {
+    func complete(_ reminder: Reminder, at date: Date = .now, expectedOccurrence: Date?? = nil) throws {
         guard !reminder.isCompletionLog else { return }
         if reminder.isRecurring, let expectedOccurrence, reminder.dueDate != expectedOccurrence {
             return
         }
-        if let repeatRule = reminder.afterCompletionRepeat {
-            completeAfterCompletionMaster(reminder, repeatRule: repeatRule, at: date)
-        } else if reminder.recurrenceRuleString != nil {
-            completeFixedScheduleMaster(reminder, at: date)
-        } else {
-            reminder.completedAt = date
-            reminder.modifiedAt = .now
+        try performTransaction {
+            if let repeatRule = reminder.afterCompletionRepeat {
+                completeAfterCompletionMaster(reminder, repeatRule: repeatRule, at: date)
+            } else if reminder.recurrenceRuleString != nil {
+                completeFixedScheduleMaster(reminder, at: date)
+            } else {
+                reminder.completedAt = date
+                reminder.modifiedAt = .now
+            }
+            save()
         }
-        save()
     }
 
     /// Undoes a completion. For log rows this restores the master's scheduled
@@ -284,35 +307,39 @@ final class ReminderRepository {
     /// undone: it isn't the latest, or the master changed after it (a skip,
     /// a reschedule, a rule edit) so rewinding would clobber that change.
     @discardableResult
-    func uncomplete(_ reminder: Reminder) -> Bool {
-        if reminder.isCompletionLog {
-            guard uncompleteLog(reminder) else { return false }
-        } else {
-            reminder.completedAt = nil
-            reminder.modifiedAt = .now
+    func uncomplete(_ reminder: Reminder) throws -> Bool {
+        try performTransaction {
+            if reminder.isCompletionLog {
+                guard uncompleteLog(reminder) else { return false }
+            } else {
+                reminder.completedAt = nil
+                reminder.modifiedAt = .now
+            }
+            save()
+            return true
         }
-        save()
-        return true
     }
 
     /// Advances a recurring master without writing history. Used for an
     /// explicit "skip this occurrence" action. Skipping the final COUNT
     /// occurrence retires the series at `date` (without it the master would
     /// stay pending at the same due date forever).
-    func skipOccurrence(of master: Reminder, at date: Date = .now) {
+    func skipOccurrence(of master: Reminder, at date: Date = .now) throws {
         guard !master.isCompletionLog else { return }
-        if let repeatRule = master.afterCompletionRepeat, let dueDate = master.dueDate {
-            master.dueDate = ReminderRecurrenceEngine.nextDueDate(
-                afterCompletion: dueDate,
-                repeat: repeatRule,
-                hasDueTime: master.hasDueTime,
-                calendar: calendar(for: master)
-            )
-            master.modifiedAt = .now
-        } else if master.recurrenceRuleString != nil {
-            advanceFixedScheduleMaster(master, markExhaustedAt: date)
+        try performTransaction {
+            if let repeatRule = master.afterCompletionRepeat, let dueDate = master.dueDate {
+                master.dueDate = ReminderRecurrenceEngine.nextDueDate(
+                    afterCompletion: dueDate,
+                    repeat: repeatRule,
+                    hasDueTime: master.hasDueTime,
+                    calendar: calendar(for: master)
+                )
+                master.modifiedAt = .now
+            } else if master.recurrenceRuleString != nil {
+                advanceFixedScheduleMaster(master, markExhaustedAt: date)
+            }
+            save()
         }
-        save()
     }
 
     func completionLog(of master: Reminder) -> [Reminder] {
@@ -347,16 +374,18 @@ final class ReminderRepository {
     }
 
     /// Deletes a master plus all of its detached completion logs (or a one-off).
-    func deleteReminder(_ reminder: Reminder) {
-        if reminder.isCompletionLog {
-            modelContext.delete(reminder)
-        } else {
-            for log in completionLog(of: reminder) {
-                modelContext.delete(log)
+    func deleteReminder(_ reminder: Reminder) throws {
+        try performTransaction {
+            if reminder.isCompletionLog {
+                modelContext.delete(reminder)
+            } else {
+                for log in completionLog(of: reminder) {
+                    modelContext.delete(log)
+                }
+                modelContext.delete(reminder)
             }
-            modelContext.delete(reminder)
+            save()
         }
-        save()
     }
 
     // MARK: - Import support
@@ -458,11 +487,18 @@ final class ReminderRepository {
 
     /// Runs `body` as one all-or-nothing write: saves inside it are deferred
     /// to a single commit at the end. A failed commit rolls the context back
-    /// (so in-memory rows match the store again) and throws, so the editor's
-    /// Save can keep its draft and report the failure instead of dismissing
-    /// as if the change had landed. Nested calls join the outer transaction.
+    /// (so in-memory rows match the store again) and throws `SaveError`, so
+    /// the editor's Save can keep its draft and report the failure instead
+    /// of dismissing as if the change had landed. Nested calls join the
+    /// outer transaction.
+    ///
+    /// UI repositories share the main context, so the rollback must only
+    /// ever discard this transaction's writes: changes already pending when
+    /// it starts are saved first, and if that save fails the transaction
+    /// throws before running `body` (rolling back nothing).
     func performTransaction<Result>(_ body: () throws -> Result) throws -> Result {
         guard !isDeferringSaves else { return try body() }
+        try savePendingChanges()
         isDeferringSaves = true
         deferredSaveNeeded = false
         let result: Result
@@ -783,29 +819,43 @@ final class ReminderRepository {
 
     // MARK: - Persistence
 
-    /// Best-effort save for single mutations: failures are logged. Callers
-    /// that must not report success on failure use `performTransaction` or
-    /// the import upserts, whose commit throws.
+    /// Best-effort save for background, list, and settings writes: failures
+    /// are logged. User-facing reminder mutations and anything that must not
+    /// report success on failure use `performTransaction` or the import
+    /// upserts, whose commit throws.
     private func save() {
         if isDeferringSaves {
             deferredSaveNeeded = true
             return
         }
         do {
-            try modelContext.save()
+            try persist(modelContext)
             NotificationCenter.default.post(name: .reminderStoreDidChange, object: nil)
         } catch {
             Self.logger.error("save failed: \(String(describing: error))")
         }
     }
 
+    /// Saves changes some other writer left pending, without rolling back on
+    /// failure — they aren't ours to discard.
+    private func savePendingChanges() throws {
+        guard modelContext.hasChanges else { return }
+        do {
+            try persist(modelContext)
+        } catch {
+            Self.logger.error("pending-changes save failed: \(String(describing: error))")
+            throw SaveError(underlying: error)
+        }
+        NotificationCenter.default.post(name: .reminderStoreDidChange, object: nil)
+    }
+
     private func commit() throws {
         do {
-            try modelContext.save()
+            try persist(modelContext)
         } catch {
             Self.logger.error("transaction save failed: \(String(describing: error))")
             modelContext.rollback()
-            throw error
+            throw SaveError(underlying: error)
         }
         NotificationCenter.default.post(name: .reminderStoreDidChange, object: nil)
     }

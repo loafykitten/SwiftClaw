@@ -65,7 +65,7 @@ struct ReminderReviewServiceTests {
         // A completed reminder and one due far beyond the guard horizon are
         // both out of scope for a scheduled pass.
         let done = harness.insertPendingReminder(title: "Done")
-        harness.repository.complete(done)
+        try harness.repository.complete(done)
         harness.insertPendingReminder(title: "Far", dueDate: .now.addingTimeInterval(30 * 24 * 3600))
 
         let didRun = await harness.service.runOnce(force: false)
@@ -183,7 +183,7 @@ struct ReminderReviewServiceTests {
         harness.insertPendingReminder(title: "Inbox", dueDate: nil)
         harness.insertPendingReminder(title: "Far", dueDate: .now.addingTimeInterval(30 * 24 * 3600))
         let done = harness.insertPendingReminder(title: "Done", dueDate: .now.addingTimeInterval(3600))
-        harness.repository.complete(done)
+        try harness.repository.complete(done)
 
         let tool = ReminderReviewFetchTool(modelContainer: harness.container)
         let output = try await tool.execute(arguments: [:])

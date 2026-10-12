@@ -70,7 +70,7 @@ final class AppleCalendarImporter {
             for source in sourceCalendars {
                 let target = upsertCalendar(from: source, repository: repository)
                 summary.calendarCount += 1
-                importEvents(
+                try importEvents(
                     from: source,
                     into: target,
                     range: range,
@@ -114,7 +114,7 @@ final class AppleCalendarImporter {
         range: DateInterval,
         repository: CalendarRepository,
         summary: inout Summary
-    ) {
+    ) throws {
         // EventKit predicates cap at 4 years; chunk the range.
         var occurrences: [EKEvent] = []
         var chunkStart = range.start
@@ -132,7 +132,7 @@ final class AppleCalendarImporter {
             // A detached instance belongs to a series even when it's the
             // only one in range; the one-off path would flatten the master.
             if sample.hasRecurrenceRules || sample.isDetached || group.count > 1 {
-                importRecurringSeries(
+                try importRecurringSeries(
                     externalIdentifier: externalIdentifier,
                     occurrences: group,
                     into: target,
@@ -168,7 +168,7 @@ final class AppleCalendarImporter {
         range: DateInterval,
         repository: CalendarRepository,
         summary: inout Summary
-    ) {
+    ) throws {
         // The windowed fetch returns expanded occurrences; the true series
         // master (original DTSTART + rules) comes from the item lookup. The
         // lookup is unsorted and can also return detached instances or the
@@ -247,7 +247,7 @@ final class AppleCalendarImporter {
                 window: range,
                 actualStarts: actualStarts
             ) {
-            repository.deleteEventSeries(override)
+            try repository.deleteEventSeries(override)
         }
 
         // Occurrences the user deleted are simply absent from the fetch;

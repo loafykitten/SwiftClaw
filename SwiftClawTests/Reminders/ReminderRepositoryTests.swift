@@ -73,7 +73,7 @@ struct ReminderRepositoryTests {
         repository.noteUpdated(reminder)
         #expect(repository.reminder(withID: reminder.id)?.title == "File tax extension")
 
-        repository.deleteReminder(reminder)
+        try repository.deleteReminder(reminder)
         #expect(repository.pendingReminders().isEmpty)
     }
 
@@ -84,7 +84,7 @@ struct ReminderRepositoryTests {
         _ = repository.insert(Reminder(title: "Far", dueDate: Self.date(2026, 7, 1)))
         let inbox = repository.insert(Reminder(title: "Inbox"))
         let completed = repository.insert(Reminder(title: "Completed", dueDate: Self.date(2026, 6, 2)))
-        repository.complete(completed)
+        try repository.complete(completed)
         let log = Reminder(title: "History", dueDate: Self.date(2026, 6, 2), completedAt: .now)
         log.parentReminderID = UUID()
         repository.insert(log)
@@ -111,9 +111,9 @@ struct ReminderRepositoryTests {
         let firstList = repository.createList(name: "First")
         let secondList = repository.createList(name: "Second")
         let oneOff = repository.insert(Reminder(title: "Completed one-off"), into: firstList)
-        repository.complete(oneOff)
+        try repository.complete(oneOff)
         let other = repository.insert(Reminder(title: "Other list"), into: secondList)
-        repository.complete(other)
+        try repository.complete(other)
 
         let listHistory = try context.fetch(ReminderListDetailView.completedHistoryDescriptor(
             for: .list(firstList.id)
@@ -133,11 +133,11 @@ struct ReminderRepositoryTests {
         let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
         let reminder = repository.insert(Reminder(title: "Done once"))
 
-        repository.complete(reminder, at: Self.date(2026, 6, 1, 12))
+        try repository.complete(reminder, at: Self.date(2026, 6, 1, 12))
         #expect(reminder.completedAt == Self.date(2026, 6, 1, 12))
         #expect(repository.pendingReminders().isEmpty)
 
-        repository.uncomplete(reminder)
+        try repository.uncomplete(reminder)
         #expect(reminder.completedAt == nil)
         #expect(repository.pendingReminders().map(\.id) == [reminder.id])
     }
@@ -159,7 +159,7 @@ struct ReminderRepositoryTests {
             into: list
         )
 
-        repository.complete(master, at: Self.date(2026, 6, 2, 10))
+        try repository.complete(master, at: Self.date(2026, 6, 2, 10))
 
         let logs = repository.completionLog(of: master)
         #expect(logs.count == 1)
@@ -185,9 +185,9 @@ struct ReminderRepositoryTests {
             recurrenceRuleString: "FREQ=WEEKLY;BYDAY=FR;COUNT=3"
         ))
 
-        repository.complete(master, at: Self.date(2026, 6, 2, 10))
+        try repository.complete(master, at: Self.date(2026, 6, 2, 10))
         let log = try #require(repository.completionLog(of: master).first)
-        repository.uncomplete(log)
+        try repository.uncomplete(log)
 
         #expect(master.dueDate == Self.date(2026, 6, 5, 9))
         #expect(master.recurrenceRuleString == "FREQ=WEEKLY;BYDAY=FR;COUNT=3")
@@ -205,7 +205,7 @@ struct ReminderRepositoryTests {
             recurrenceRuleString: "FREQ=WEEKLY;BYDAY=FR;COUNT=3"
         ))
 
-        repository.skipOccurrence(of: master)
+        try repository.skipOccurrence(of: master)
 
         #expect(master.dueDate == Self.date(2026, 6, 12, 9))
         #expect(master.recurrenceRuleString == "FREQ=WEEKLY;BYDAY=FR;COUNT=2")
@@ -222,7 +222,7 @@ struct ReminderRepositoryTests {
         master.afterCompletionRepeat = ReminderAfterCompletionRepeat(count: 2, unit: .day)
         repository.saveChanges()
 
-        repository.complete(master, at: Self.date(2026, 6, 1, 11))
+        try repository.complete(master, at: Self.date(2026, 6, 1, 11))
 
         #expect(master.dueDate == Self.date(2026, 6, 3, 11))
         #expect(master.completedAt == nil)
@@ -239,13 +239,13 @@ struct ReminderRepositoryTests {
             recurrenceRuleString: "FREQ=WEEKLY;BYDAY=FR;COUNT=1"
         ))
 
-        repository.complete(master, at: Self.date(2026, 6, 5, 10))
+        try repository.complete(master, at: Self.date(2026, 6, 5, 10))
         let log = try #require(repository.completionLog(of: master).first)
         #expect(master.completedAt == Self.date(2026, 6, 5, 10))
         #expect(master.dueDate == Self.date(2026, 6, 5, 9))
         #expect(master.recurrenceRuleString == "FREQ=WEEKLY;BYDAY=FR;COUNT=1")
 
-        repository.uncomplete(log)
+        try repository.uncomplete(log)
         #expect(master.completedAt == nil)
         #expect(master.dueDate == Self.date(2026, 6, 5, 9))
         #expect(master.recurrenceRuleString == "FREQ=WEEKLY;BYDAY=FR;COUNT=1")
@@ -330,10 +330,10 @@ struct ReminderRepositoryTests {
             timeZoneIdentifier: "UTC",
             recurrenceRuleString: "FREQ=WEEKLY;BYDAY=FR"
         ))
-        repository.complete(master, at: Self.date(2026, 6, 5, 10))
+        try repository.complete(master, at: Self.date(2026, 6, 5, 10))
         #expect(repository.completionLog(of: master).count == 1)
 
-        repository.deleteReminder(master)
+        try repository.deleteReminder(master)
         #expect(repository.pendingReminders().isEmpty)
         #expect(repository.completionLog(of: master).isEmpty)
     }
@@ -352,22 +352,22 @@ struct ReminderRepositoryTests {
             timeZoneIdentifier: "UTC",
             recurrenceRuleString: "FREQ=DAILY;COUNT=3"
         ))
-        repository.complete(master, at: Self.date(2026, 6, 1, 10))
-        repository.complete(master, at: Self.date(2026, 6, 2, 10))
+        try repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        try repository.complete(master, at: Self.date(2026, 6, 2, 10))
         let logs = repository.completionLog(of: master)
         #expect(logs.count == 2)
         #expect(repository.latestCompletionLogIDs(for: [master.id]) == [logs[1].id])
         let ruleBefore = master.recurrenceRuleString
         let dueBefore = master.dueDate
 
-        repository.uncomplete(logs[0]) // the older occurrence
+        try repository.uncomplete(logs[0]) // the older occurrence
 
         #expect(repository.completionLog(of: master).count == 2)
         #expect(master.dueDate == dueBefore)
         #expect(master.recurrenceRuleString == ruleBefore)
 
         // The latest log still undoes normally.
-        repository.uncomplete(logs[1])
+        try repository.uncomplete(logs[1])
         #expect(repository.completionLog(of: master).count == 1)
         #expect(master.dueDate == logs[1].originalOccurrenceDate)
     }
@@ -385,12 +385,12 @@ struct ReminderRepositoryTests {
         ))
         let rendered = master.dueDate
 
-        repository.complete(master, at: Self.date(2026, 6, 1, 10), expectedOccurrence: rendered)
+        try repository.complete(master, at: Self.date(2026, 6, 1, 10), expectedOccurrence: rendered)
         #expect(master.dueDate == Self.date(2026, 6, 2, 9))
         #expect(repository.completionLog(of: master).count == 1)
 
         // Second click, same rendered occurrence — must not consume Jun 2.
-        repository.complete(master, at: Self.date(2026, 6, 1, 10), expectedOccurrence: rendered)
+        try repository.complete(master, at: Self.date(2026, 6, 1, 10), expectedOccurrence: rendered)
         #expect(master.dueDate == Self.date(2026, 6, 2, 9))
         #expect(repository.completionLog(of: master).count == 1)
     }
@@ -407,7 +407,7 @@ struct ReminderRepositoryTests {
             recurrenceRuleString: "FREQ=WEEKLY;COUNT=1"
         ))
 
-        repository.skipOccurrence(of: master, at: Self.date(2026, 6, 4, 12))
+        try repository.skipOccurrence(of: master, at: Self.date(2026, 6, 4, 12))
 
         #expect(master.isCompleted)
         #expect(master.completedAt == Self.date(2026, 6, 4, 12))
@@ -448,13 +448,13 @@ struct ReminderRepositoryTests {
             timeZoneIdentifier: "UTC",
             recurrenceRuleString: "FREQ=DAILY;COUNT=3"
         ))
-        repository.complete(master, at: Self.date(2026, 6, 1, 10))
-        repository.skipOccurrence(of: master, at: Self.date(2026, 6, 2, 10))
+        try repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        try repository.skipOccurrence(of: master, at: Self.date(2026, 6, 2, 10))
         #expect(master.dueDate == Self.date(2026, 6, 3, 9))
         #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=1")
 
         let log = try #require(repository.completionLog(of: master).first)
-        #expect(!repository.uncomplete(log))
+        #expect(try !repository.uncomplete(log))
 
         #expect(master.dueDate == Self.date(2026, 6, 3, 9))
         #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=1")
@@ -470,12 +470,12 @@ struct ReminderRepositoryTests {
             timeZoneIdentifier: "UTC",
             recurrenceRuleString: "FREQ=WEEKLY;BYDAY=FR"
         ))
-        repository.complete(master, at: Self.date(2026, 6, 5, 10))
+        try repository.complete(master, at: Self.date(2026, 6, 5, 10))
         master.dueDate = Self.date(2026, 6, 20, 9) // user moved the next one
         repository.noteUpdated(master)
 
         let log = try #require(repository.completionLog(of: master).first)
-        #expect(!repository.uncomplete(log))
+        #expect(try !repository.uncomplete(log))
         #expect(master.dueDate == Self.date(2026, 6, 20, 9))
     }
 
@@ -491,17 +491,98 @@ struct ReminderRepositoryTests {
         repository.saveChanges()
 
         // Unchanged since completion: undo restores the original due date.
-        repository.complete(master, at: Self.date(2026, 6, 1, 11))
+        try repository.complete(master, at: Self.date(2026, 6, 1, 11))
         var log = try #require(repository.completionLog(of: master).first)
-        #expect(repository.uncomplete(log))
+        #expect(try repository.uncomplete(log))
         #expect(master.dueDate == Self.date(2026, 6, 5, 9))
         #expect(repository.completionLog(of: master).isEmpty)
 
         // A skip after completing makes the undo incompatible.
-        repository.complete(master, at: Self.date(2026, 6, 1, 11))
-        repository.skipOccurrence(of: master)
+        try repository.complete(master, at: Self.date(2026, 6, 1, 11))
+        try repository.skipOccurrence(of: master)
         log = try #require(repository.completionLog(of: master).first)
-        #expect(!repository.uncomplete(log))
+        #expect(try !repository.uncomplete(log))
         #expect(master.dueDate == Self.date(2026, 6, 5, 11))
+    }
+
+    // MARK: - Single-mutation save failures
+
+    /// A failed completion throws and rolls back only itself: no log row,
+    /// the master keeps its occurrence and COUNT, and edits another writer
+    /// left pending on the shared context were saved rather than discarded.
+    @Test func failedCompletionThrowsAndRollsBackOnlyTheCompletion() throws {
+        let container = try Self.inMemoryContainer()
+        let saves = ScriptedSaves()
+        let repository = ReminderRepository(modelContext: ModelContext(container)) { try saves.persist($0) }
+        let master = repository.insert(Reminder(
+            title: "Daily",
+            dueDate: Self.date(2026, 6, 1, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY;COUNT=3"
+        ))
+        let other = repository.insert(Reminder(title: "Other"))
+        other.title = "Other, renamed" // unsaved work from elsewhere
+
+        // The pending-changes save succeeds; the completion's own commit fails.
+        saves.outcomes = [true, false]
+        #expect(throws: ReminderRepository.SaveError.self) {
+            try repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        }
+
+        #expect(master.dueDate == Self.date(2026, 6, 1, 9))
+        #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=3")
+        #expect(repository.completionLog(of: master).isEmpty)
+        #expect(other.title == "Other, renamed")
+        let fresh = ModelContext(container)
+        let masterID = master.id
+        let storedMaster = try fresh.fetch(FetchDescriptor<Reminder>(predicate: #Predicate { $0.id == masterID }))
+        #expect(storedMaster.first?.recurrenceRuleString == "FREQ=DAILY;COUNT=3")
+        #expect(try fresh.fetchCount(FetchDescriptor<Reminder>()) == 2)
+        let otherID = other.id
+        let storedOther = try fresh.fetch(FetchDescriptor<Reminder>(predicate: #Predicate { $0.id == otherID }))
+        #expect(storedOther.first?.title == "Other, renamed")
+
+        // A retry goes through normally.
+        try repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        #expect(master.dueDate == Self.date(2026, 6, 2, 9))
+        #expect(repository.completionLog(of: master).count == 1)
+    }
+
+    @Test func failedSkipUndoAndDeleteThrowAndChangeNothing() throws {
+        let container = try Self.inMemoryContainer()
+        let saves = ScriptedSaves()
+        let repository = ReminderRepository(modelContext: ModelContext(container)) { try saves.persist($0) }
+        let master = repository.insert(Reminder(
+            title: "Daily",
+            dueDate: Self.date(2026, 6, 1, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY;COUNT=3"
+        ))
+        try repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        let log = try #require(repository.completionLog(of: master).first)
+
+        saves.outcomes = [false]
+        #expect(throws: ReminderRepository.SaveError.self) {
+            try repository.skipOccurrence(of: master)
+        }
+        #expect(master.dueDate == Self.date(2026, 6, 2, 9))
+        #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=2")
+
+        saves.outcomes = [false]
+        #expect(throws: ReminderRepository.SaveError.self) {
+            try repository.uncomplete(log)
+        }
+        #expect(master.dueDate == Self.date(2026, 6, 2, 9))
+        #expect(repository.completionLog(of: master).count == 1)
+
+        saves.outcomes = [false]
+        #expect(throws: ReminderRepository.SaveError.self) {
+            try repository.deleteReminder(master)
+        }
+        #expect(repository.reminder(withID: master.id) != nil)
+        #expect(repository.completionLog(of: master).count == 1)
+        #expect(try ModelContext(container).fetchCount(FetchDescriptor<Reminder>()) == 2)
     }
 }

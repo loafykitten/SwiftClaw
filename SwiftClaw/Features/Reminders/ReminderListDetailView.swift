@@ -31,6 +31,8 @@ struct ReminderListDetailView: View {
     @Query private var completedReminders: [Reminder]
     @State private var isShowingCompleted = false
     @State private var deleteCandidate: Reminder?
+    /// A row action (complete, undo, skip, delete) whose save failed.
+    @State private var actionFailure: ActionFailure?
     /// Cached across minute ticks; refreshed from the store-change signal and
     /// whenever the selection-scoped history IDs change.
     @State private var latestLogIDs: Set<UUID> = []
@@ -124,8 +126,9 @@ struct ReminderListDetailView: View {
                     : "This reminder will be deleted."
             )
         ) { candidate in
-            repository.deleteReminder(candidate)
+            delete(candidate)
         }
+        .actionFailureAlert($actionFailure)
         .onAppear {
             refreshLatestLogIDs(in: snapshot.completedRows)
         }
@@ -182,7 +185,9 @@ struct ReminderListDetailView: View {
                     Button("Edit") { onEdit(reminder) }
                     if reminder.isRecurring, !reminder.isCompleted {
                         Button("Skip This Occurrence") {
-                            repository.skipOccurrence(of: reminder)
+                            perform(String(localized: "Couldn't Skip Reminder")) {
+                                try repository.skipOccurrence(of: reminder)
+                            }
                         }
                     }
                 }
@@ -227,20 +232,39 @@ struct ReminderListDetailView: View {
         latestLogIDs = repository.latestCompletionLogIDs(for: parentIDs)
     }
 
+    /// Runs one repository mutation, surfacing a failure in the alert.
+    private func perform(_ failureTitle: String, _ action: () throws -> Void) {
+        do {
+            try action()
+        } catch {
+            actionFailure = ActionFailure(title: failureTitle, error: error)
+        }
+    }
+
     private func toggleCompletion(_ reminder: Reminder, renderedOccurrence: Date?) {
         if reminder.isCompleted {
-            repository.uncomplete(reminder)
+            perform(String(localized: "Couldn't Undo Completion")) {
+                try repository.uncomplete(reminder)
+            }
         } else {
-            repository.complete(reminder, expectedOccurrence: renderedOccurrence)
+            perform(String(localized: "Couldn't Complete Reminder")) {
+                try repository.complete(reminder, expectedOccurrence: renderedOccurrence)
+            }
         }
     }
 
     private func requestDelete(_ reminder: Reminder) {
         if reminder.isCompletionLog || (!reminder.isRecurring && reminder.isCompleted) {
             // History/one-off cleanup — low stakes, no dialog.
-            repository.deleteReminder(reminder)
+            delete(reminder)
         } else {
             deleteCandidate = reminder
+        }
+    }
+
+    private func delete(_ reminder: Reminder) {
+        perform(String(localized: "Couldn't Delete Reminder")) {
+            try repository.deleteReminder(reminder)
         }
     }
 

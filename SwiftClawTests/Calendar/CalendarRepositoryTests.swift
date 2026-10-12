@@ -143,7 +143,7 @@ struct CalendarRepositoryTests {
             recurrenceRuleString: "FREQ=WEEKLY;BYDAY=MO",
             calendar: repository.defaultCalendar()
         ))
-        repository.deleteOccurrence(of: master, at: Self.date(2026, 6, 15, 9))
+        try repository.deleteOccurrence(of: master, at: Self.date(2026, 6, 15, 9))
         let starts = repository.occurrences(in: Self.june).map(\.start)
         #expect(!starts.contains(Self.date(2026, 6, 15, 9)))
         #expect(starts.count == 4)
@@ -161,7 +161,7 @@ struct CalendarRepositoryTests {
         ))
         _ = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 22, 9))
 
-        repository.deleteThisAndFuture(of: master, from: Self.date(2026, 6, 15, 9))
+        try repository.deleteThisAndFuture(of: master, from: Self.date(2026, 6, 15, 9))
 
         let occurrences = repository.occurrences(in: Self.june)
         #expect(occurrences.map(\.start) == [Self.date(2026, 6, 1, 9), Self.date(2026, 6, 8, 9)])
@@ -180,7 +180,7 @@ struct CalendarRepositoryTests {
             calendar: repository.defaultCalendar()
         ))
         _ = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
-        repository.deleteEventSeries(master)
+        try repository.deleteEventSeries(master)
         #expect(repository.occurrences(in: Self.june).isEmpty)
     }
 
@@ -360,7 +360,7 @@ struct CalendarRepositoryTests {
             calendar: repository.defaultCalendar()
         ))
         _ = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
-        repository.deleteOccurrence(of: master, at: Self.date(2026, 6, 15, 9))
+        try repository.deleteOccurrence(of: master, at: Self.date(2026, 6, 15, 9))
 
         repository.clearRecurrence(of: master)
 
@@ -413,5 +413,98 @@ struct CalendarRepositoryTests {
         }
 
         #expect(try ModelContext(container).fetchCount(FetchDescriptor<CalendarEvent>()) == 1)
+    }
+
+    // MARK: - Single-mutation save failures
+
+    /// A failed delete throws and rolls back only itself: the event and its
+    /// override are still there in memory and on disk, and a retry works.
+    @Test func failedDeleteThrowsAndKeepsTheSeries() throws {
+        let container = try Self.inMemoryContainer()
+        let saves = ScriptedSaves()
+        let repository = CalendarRepository(modelContext: ModelContext(container)) { try saves.persist($0) }
+        let master = repository.insert(CalendarEvent(
+            title: "Standup",
+            startDate: Self.date(2026, 6, 1, 9),
+            endDate: Self.date(2026, 6, 1, 10),
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=WEEKLY",
+            calendar: repository.defaultCalendar()
+        ))
+        repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
+
+        saves.outcomes = [false]
+        #expect(throws: CalendarRepository.SaveError.self) {
+            try repository.deleteEventSeries(master)
+        }
+        #expect(repository.event(withID: master.id) != nil)
+        #expect(repository.overrides(of: master).count == 1)
+        #expect(try ModelContext(container).fetchCount(FetchDescriptor<CalendarEvent>()) == 2)
+
+        try repository.deleteEventSeries(master)
+        #expect(try ModelContext(container).fetchCount(FetchDescriptor<CalendarEvent>()) == 0)
+    }
+
+    /// A failed drag-reschedule snaps the event back to its stored times.
+    /// Edits another writer left pending on the shared context are saved
+    /// first, so the rollback can't discard them.
+    @Test func failedRescheduleRollsBackOnlyTheDrag() throws {
+        let container = try Self.inMemoryContainer()
+        let saves = ScriptedSaves()
+        let repository = CalendarRepository(modelContext: ModelContext(container)) { try saves.persist($0) }
+        let calendar = repository.defaultCalendar()
+        let event = repository.insert(CalendarEvent(
+            title: "Lunch",
+            startDate: Self.date(2026, 6, 1, 12),
+            endDate: Self.date(2026, 6, 1, 13),
+            timeZoneIdentifier: "UTC",
+            calendar: calendar
+        ))
+        let other = repository.insert(CalendarEvent(
+            title: "Dinner",
+            startDate: Self.date(2026, 6, 1, 19),
+            endDate: Self.date(2026, 6, 1, 20),
+            timeZoneIdentifier: "UTC",
+            calendar: calendar
+        ))
+        other.title = "Dinner with Sam" // unsaved work from elsewhere
+
+        // The pending-changes save succeeds; the drag's own commit fails.
+        saves.outcomes = [true, false]
+        #expect(throws: CalendarRepository.SaveError.self) {
+            try repository.reschedule(event, start: Self.date(2026, 6, 2, 12), end: Self.date(2026, 6, 2, 13))
+        }
+
+        #expect(event.startDate == Self.date(2026, 6, 1, 12))
+        #expect(event.endDate == Self.date(2026, 6, 1, 13))
+        #expect(other.title == "Dinner with Sam")
+        let otherID = other.id
+        let stored = try ModelContext(container).fetch(FetchDescriptor<CalendarEvent>(
+            predicate: #Predicate { $0.id == otherID }
+        ))
+        #expect(stored.first?.title == "Dinner with Sam")
+    }
+
+    /// When even the pending changes can't be saved, the mutation throws
+    /// before doing anything and leaves those pending changes alone.
+    @Test func failedPendingSaveLeavesOtherWorkUntouched() throws {
+        let container = try Self.inMemoryContainer()
+        let saves = ScriptedSaves()
+        let repository = CalendarRepository(modelContext: ModelContext(container)) { try saves.persist($0) }
+        let event = repository.insert(CalendarEvent(
+            title: "Lunch",
+            startDate: Self.date(2026, 6, 1, 12),
+            endDate: Self.date(2026, 6, 1, 13),
+            timeZoneIdentifier: "UTC",
+            calendar: repository.defaultCalendar()
+        ))
+        event.title = "Lunch with Sam" // unsaved work from elsewhere
+
+        saves.outcomes = [false]
+        #expect(throws: CalendarRepository.SaveError.self) {
+            try repository.deleteEventSeries(event)
+        }
+        #expect(event.title == "Lunch with Sam")
+        #expect(repository.event(withID: event.id) != nil)
     }
 }
