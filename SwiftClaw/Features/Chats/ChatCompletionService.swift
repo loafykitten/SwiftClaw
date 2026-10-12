@@ -121,8 +121,8 @@ enum ChatCompletionService {
             await NotesFeatureModel.shared.prepareReadToolsIfNeeded()
             tools = ToolRegistry.shared.availableTools(includingExplicitlyEnabled: canInvestigate)
             if isEmailReviewChat {
-                tools.append(EmailReviewAddNoteTool(modelContainer: modelContext.container))
-                tools.append(EmailReviewSetFlagTool(modelContainer: modelContext.container))
+                tools.append(EmailReviewAddNoteTool(modelContainer: modelContext.container, chatID: chat.id))
+                tools.append(EmailReviewSetFlagTool(modelContainer: modelContext.container, chatID: chat.id))
                 tools.append(EmailReviewRefreshTool(chatID: chat.id))
             }
             // Proposal tools need the current chat id + ModelContainer to
