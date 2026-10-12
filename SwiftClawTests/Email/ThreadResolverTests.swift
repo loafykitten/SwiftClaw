@@ -106,7 +106,7 @@ struct ThreadResolverTests {
             isRead: false,
             isFlagged: false,
             isArchived: false,
-            isDeleted: false,
+            isTrashed: false,
             inReplyTo: inReplyTo,
             referencesRaw: references,
             uid: 1,

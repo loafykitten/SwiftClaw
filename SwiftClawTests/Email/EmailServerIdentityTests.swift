@@ -29,7 +29,7 @@ struct EmailServerIdentityTests {
         await EmailServerAction.delete(email: email, repository: repository, mailClient: mock)
 
         #expect(email.mailbox == "Trash")
-        #expect(try Self.stored(email.id, in: container)?.isDeleted == true)
+        #expect(try Self.stored(email.id, in: container)?.isTrashed == true)
         #expect(email.serverUID == nil, "INBOX uid 5 means nothing in Trash")
         #expect(await mock.moves.map(\.uid) == [5])
 
@@ -59,7 +59,7 @@ struct EmailServerIdentityTests {
             role: .trash
         )
         #expect(email.serverUID == 41)
-        #expect(try Self.stored(email.id, in: container)?.isDeleted == true)
+        #expect(try Self.stored(email.id, in: container)?.isTrashed == true)
         #expect(try context.fetch(FetchDescriptor<Email>()).count == 2)
     }
 
@@ -78,7 +78,7 @@ struct EmailServerIdentityTests {
 
         await EmailServerAction.delete(email: email, repository: repository, mailClient: mock)
 
-        #expect(try Self.stored(email.id, in: container)?.isDeleted == true, "the local delete still applies")
+        #expect(try Self.stored(email.id, in: container)?.isTrashed == true, "the local delete still applies")
         #expect(email.mailbox == "INBOX")
         #expect(email.serverUID == 5, "the message never left INBOX")
     }
@@ -96,7 +96,7 @@ struct EmailServerIdentityTests {
 
         await EmailServerAction.delete(email: email, repository: repository, mailClient: nil)
 
-        #expect(try Self.stored(email.id, in: container)?.isDeleted == true)
+        #expect(try Self.stored(email.id, in: container)?.isTrashed == true)
         #expect(email.mailbox == "INBOX")
         #expect(email.serverUID == 5)
     }
@@ -311,10 +311,10 @@ struct EmailServerIdentityTests {
         let rows = try ModelContext(container).fetch(FetchDescriptor<Email>())
         let a = try #require(rows.first { $0.messageID == "<a@example.com>" })
         let b = try #require(rows.first { $0.messageID == "<b@example.com>" })
-        #expect(a.isDeleted, "A is no longer on the server")
+        #expect(a.isTrashed, "A is no longer on the server")
         #expect(a.serverUID == nil)
         #expect(a.subject == "A")
-        #expect(!b.isDeleted)
+        #expect(!b.isTrashed)
         #expect(b.serverUID == 1)
         #expect(b.subject == "B")
     }
@@ -337,7 +337,7 @@ struct EmailServerIdentityTests {
             accountID: Self.accountID
         )
         let email = try #require(try context.fetch(FetchDescriptor<Email>()).first)
-        #expect(email.isDeleted)
+        #expect(email.isTrashed)
 
         // …and back into INBOX, under a new UID.
         repository.upsertMessages(
@@ -346,7 +346,7 @@ struct EmailServerIdentityTests {
             accountID: Self.accountID
         )
 
-        #expect(try Self.stored(email.id, in: container)?.isDeleted == false)
+        #expect(try Self.stored(email.id, in: container)?.isTrashed == false)
         #expect(email.serverUID == 9)
         #expect(try context.fetch(FetchDescriptor<Email>()).count == 1)
     }
@@ -621,9 +621,8 @@ struct EmailServerIdentityTests {
 
     // MARK: - Helpers
 
-    /// Reads the row back through a fresh context. (`isDeleted` shares its
-    /// name with `PersistentModel.isDeleted`, so read it from a refetch
-    /// rather than the instance the code under test mutated.)
+    /// Reads the row back through a fresh context, so assertions see what
+    /// was saved rather than the instance the code under test mutated.
     private static func stored(_ id: UUID, in container: ModelContainer) throws -> Email? {
         try ModelContext(container).fetch(FetchDescriptor<Email>(predicate: #Predicate { $0.id == id })).first
     }

@@ -49,7 +49,7 @@ enum EmailServerAction {
         }
     }
 
-    /// Soft-deletes locally (recoverable `isDeleted = true`) + moves the server
+    /// Soft-deletes locally (recoverable `isTrashed = true`) + moves the server
     /// copy to the account's resolved Trash folder. Not an irreversible
     /// expunge — the Trash-mailbox "Delete Permanently" affordance owns that
     /// path via `MailClient.deletePermanently`.

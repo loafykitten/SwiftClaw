@@ -17,7 +17,7 @@ struct WorkspaceEmailSummary: Equatable {
         var notatedThreadCount = 0
         var threadSignals: [UUID: (isFlagged: Bool, hasNote: Bool)] = [:]
 
-        for email in emails where !email.isArchived && !email.isDeleted {
+        for email in emails where !email.isArchived && !email.isTrashed {
             if !email.isRead {
                 unreadCount += 1
             }

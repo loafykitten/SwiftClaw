@@ -422,7 +422,7 @@ private struct WindowedEmailContent: View {
     }
 
     private func mailbox(for email: Email) -> EmailMailbox {
-        if email.isDeleted {
+        if email.isTrashed {
             return .trash
         }
         if email.isArchived {
@@ -449,26 +449,26 @@ private struct WindowedEmailContent: View {
     private func quickActionTarget(for thread: EmailThread, in mailbox: EmailMailbox) -> Email? {
         switch mailbox {
         case .inbox:
-            thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted && ($0.role == .inbox || $0.role == .sent) }
+            thread.sortedMessages.last { !$0.isArchived && !$0.isTrashed && ($0.role == .inbox || $0.role == .sent) }
         case .flagged:
-            thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted && $0.isFlagged }
-                ?? thread.sortedMessages.last { !$0.isArchived && !$0.isDeleted }
+            thread.sortedMessages.last { !$0.isArchived && !$0.isTrashed && $0.isFlagged }
+                ?? thread.sortedMessages.last { !$0.isArchived && !$0.isTrashed }
         case .sent:
-            thread.sortedMessages.last { $0.role == .sent && !$0.isDeleted }
+            thread.sortedMessages.last { $0.role == .sent && !$0.isTrashed }
         case .drafts:
-            thread.sortedMessages.last { $0.role == .drafts && !$0.isDeleted }
+            thread.sortedMessages.last { $0.role == .drafts && !$0.isTrashed }
         case .junk:
-            thread.sortedMessages.last { $0.role == .junk && !$0.isDeleted }
+            thread.sortedMessages.last { $0.role == .junk && !$0.isTrashed }
         case .archive:
-            thread.sortedMessages.last { $0.isArchived && !$0.isDeleted }
+            thread.sortedMessages.last { $0.isArchived && !$0.isTrashed }
         case .trash:
-            thread.sortedMessages.last { $0.isDeleted }
+            thread.sortedMessages.last { $0.isTrashed }
         case .custom(let name):
             thread.sortedMessages.last {
                 $0.role == .custom
                     && $0.mailbox.caseInsensitiveCompare(name) == .orderedSame
                     && !$0.isArchived
-                    && !$0.isDeleted
+                    && !$0.isTrashed
             }
         }
     }

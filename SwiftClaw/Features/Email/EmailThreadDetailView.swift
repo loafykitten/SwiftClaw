@@ -331,10 +331,10 @@ struct EmailMessageCard: View {
                 Label("Archive", systemImage: "archivebox")
             }
             // Hide the recoverable Delete on rows already in the Trash
-            // mailbox — `delete` there is a no-op (re-sets `isDeleted`
+            // mailbox — `delete` there is a no-op (re-sets `isTrashed`
             // which is already true). The permanent-delete affordance
             // below is the meaningful action for trashed rows.
-            if !email.isDeleted {
+            if !email.isTrashed {
                 Button(role: .destructive) {
                     onDelete()
                 } label: {
@@ -342,9 +342,9 @@ struct EmailMessageCard: View {
                 }
             }
             // The permanent-delete affordance only renders for rows that
-            // are already in the Trash mailbox (`isDeleted == true`) —
+            // are already in the Trash mailbox (`isTrashed == true`) —
             // otherwise the recoverable Delete above is the right action.
-            if email.isDeleted {
+            if email.isTrashed {
                 Button(role: .destructive) {
                     onPermanentDelete()
                 } label: {

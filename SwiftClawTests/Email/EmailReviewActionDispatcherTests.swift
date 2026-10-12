@@ -45,7 +45,7 @@ struct EmailReviewActionDispatcherTests {
         #expect(replyRefreshed?.isRead == true)
         #expect(try Self.refresh(archiveEmail.id, in: container)?.isArchived == true)
         let deleteRefreshed = try Self.refresh(deleteEmail.id, in: container)
-        #expect(deleteRefreshed?.isDeleted == true)
+        #expect(deleteRefreshed?.isTrashed == true)
         #expect(deleteRefreshed?.mailbox == "Trash")
 
         // Server-side calls landed on the mock. `review`/`flag`/`reply` set

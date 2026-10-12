@@ -71,7 +71,7 @@ struct ContentView: View {
     /// Unread mail drives the Workspace badge the way `router.unreadChatIDs`
     /// drives the Chats badge. Same partition as the workspace widget's
     /// "Unread" tile so the two counts always agree.
-    @Query(filter: #Predicate<Email> { !$0.isRead && !$0.isArchived && !$0.isDeleted })
+    @Query(filter: #Predicate<Email> { !$0.isRead && !$0.isArchived && !$0.isTrashed })
     private var unreadEmails: [Email]
 
     /// Unviewed research sessions badge the Research tab; an active run also

@@ -130,7 +130,7 @@ struct EmailSentReconciliationTests {
 
         let allRows = (try? context.fetch(FetchDescriptor<Email>())) ?? []
         #expect(allRows.count == 1, "row preserved")
-        #expect(allRows.first?.isDeleted == false, "row still active")
+        #expect(allRows.first?.isTrashed == false, "row still active")
         #expect(allRows.first?.isLocallySynthetic == true, "still flagged synthetic")
     }
 

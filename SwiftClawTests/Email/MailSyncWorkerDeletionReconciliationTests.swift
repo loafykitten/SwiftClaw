@@ -41,8 +41,8 @@ struct MailSyncWorkerDeletionReconciliationTests {
         let context = ModelContext(container)
         let allEmails = (try? context.fetch(FetchDescriptor<Email>())) ?? []
         let byUID = Dictionary(allEmails.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
-        #expect(byUID[1]?.isDeleted == true, "uid 1 must be soft-deleted after server removal")
-        #expect(byUID[2]?.isDeleted == false, "uid 2 must stay active")
+        #expect(byUID[1]?.isTrashed == true, "uid 1 must be soft-deleted after server removal")
+        #expect(byUID[2]?.isTrashed == false, "uid 2 must stay active")
     }
 
     @Test func archivedMessageIsNotTouchedByReconciliation() async throws {
@@ -81,8 +81,8 @@ struct MailSyncWorkerDeletionReconciliationTests {
         let allEmails = (try? context.fetch(FetchDescriptor<Email>())) ?? []
         let byUID = Dictionary(allEmails.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
         #expect(byUID[1]?.isArchived == true, "uid 1 stays archived")
-        #expect(byUID[1]?.isDeleted == false, "uid 1 must NOT be soft-deleted by reconciliation")
-        #expect(byUID[2]?.isDeleted == false, "uid 2 stays active")
+        #expect(byUID[1]?.isTrashed == false, "uid 1 must NOT be soft-deleted by reconciliation")
+        #expect(byUID[2]?.isTrashed == false, "uid 2 stays active")
     }
 
     @Test func messageArchivedOnAnotherClientIsReclaimedAsArchived() async throws {
@@ -122,7 +122,7 @@ struct MailSyncWorkerDeletionReconciliationTests {
         let matches = all.filter { $0.messageID == "<m1@example.com>" }
         #expect(matches.count == 1, "the archived message must not be duplicated")
         #expect(matches.first?.isArchived == true, "reclaimed as archived, not trashed")
-        #expect(matches.first?.isDeleted == false, "must not stay soft-deleted")
+        #expect(matches.first?.isTrashed == false, "must not stay soft-deleted")
         #expect(matches.first?.mailbox == "Archive", "row moved into the Archive mailbox")
         #expect(matches.first?.uid == 55, "row adopts the server Archive UID")
     }
@@ -150,8 +150,8 @@ struct MailSyncWorkerDeletionReconciliationTests {
         let context = ModelContext(container)
         let allEmails = (try? context.fetch(FetchDescriptor<Email>())) ?? []
         let byUID = Dictionary(allEmails.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
-        #expect(byUID[1]?.isDeleted == false, "uid 1 stays active — still on server")
-        #expect(byUID[2]?.isDeleted == false, "uid 2 must NOT be orphaned — it's in the server set")
+        #expect(byUID[1]?.isTrashed == false, "uid 1 stays active — still on server")
+        #expect(byUID[2]?.isTrashed == false, "uid 2 must NOT be orphaned — it's in the server set")
         #expect(byUID[2] != nil, "uid 2 was actually inserted")
     }
 
@@ -189,12 +189,12 @@ struct MailSyncWorkerDeletionReconciliationTests {
             allEmails.compactMap { email in email.messageID.map { ($0, email) } },
             uniquingKeysWith: { a, _ in a }
         )
-        #expect(byMessageID["<m100@example.com>"]?.isDeleted == true, "old-UID row soft-deleted post-rebuild")
-        #expect(byMessageID["<m101@example.com>"]?.isDeleted == true, "old-UID row soft-deleted post-rebuild")
+        #expect(byMessageID["<m100@example.com>"]?.isTrashed == true, "old-UID row soft-deleted post-rebuild")
+        #expect(byMessageID["<m101@example.com>"]?.isTrashed == true, "old-UID row soft-deleted post-rebuild")
         #expect(byMessageID["<m100@example.com>"]?.serverUID == nil, "old UID no longer addressable")
-        #expect(byMessageID["<m1@example.com>"]?.isDeleted == false, "new-UID row stays active")
-        #expect(byMessageID["<m2@example.com>"]?.isDeleted == false, "new-UID row stays active")
-        #expect(byMessageID["<m3@example.com>"]?.isDeleted == false, "new-UID row stays active")
+        #expect(byMessageID["<m1@example.com>"]?.isTrashed == false, "new-UID row stays active")
+        #expect(byMessageID["<m2@example.com>"]?.isTrashed == false, "new-UID row stays active")
+        #expect(byMessageID["<m3@example.com>"]?.isTrashed == false, "new-UID row stays active")
     }
 
     @Test func trashSyncPromotesMovedLocalRowToServerUID() async throws {
@@ -229,7 +229,7 @@ struct MailSyncWorkerDeletionReconciliationTests {
         #expect(refreshed.count == 1, "Trash sync promotes the local row instead of inserting a duplicate")
         #expect(refreshed.first?.uid == 77)
         #expect(refreshed.first?.mailbox == "Trash")
-        #expect(refreshed.first?.isDeleted == true)
+        #expect(refreshed.first?.isTrashed == true)
     }
 
     @Test func trashSyncMarksServerTrashRowsDeletedLocally() async throws {
@@ -250,7 +250,7 @@ struct MailSyncWorkerDeletionReconciliationTests {
         let context = ModelContext(container)
         let trashed = try #require(try context.fetch(FetchDescriptor<Email>()).first)
         #expect(trashed.mailbox == "Trash")
-        #expect(trashed.isDeleted == true)
+        #expect(trashed.isTrashed == true)
     }
 
     @Test func reconcileDeletionsPreservesNotesViaSoftDelete() async throws {
@@ -283,7 +283,7 @@ struct MailSyncWorkerDeletionReconciliationTests {
 
         let afterEmails = (try? context.fetch(FetchDescriptor<Email>())) ?? []
         #expect(afterEmails.count == 1, "row preserved (soft-deleted, not hard-deleted)")
-        #expect(afterEmails.first?.isDeleted == true)
+        #expect(afterEmails.first?.isTrashed == true)
 
         let afterNotes = (try? context.fetch(FetchDescriptor<EmailNote>())) ?? []
         #expect(afterNotes.count == 1, "note survived the soft-delete")
@@ -352,7 +352,7 @@ struct MailSyncWorkerDeletionReconciliationTests {
         )
         #expect(outcome.removedCount == 1)
         #expect(outcome.changedFlagCount == 2)
-        #expect(byUID[1]?.isDeleted == true)
+        #expect(byUID[1]?.isTrashed == true)
         #expect(byUID[2]?.isRead == true)
         #expect(byUID[2]?.isFlagged == true)
     }

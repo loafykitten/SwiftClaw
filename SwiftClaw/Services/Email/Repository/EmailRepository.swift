@@ -221,7 +221,7 @@ final class EmailRepository {
                 // local state: it reflects the user's own pending action.
                 if !matched.isLocallySynthetic, matched.uid != message.uid {
                     matched.isArchived = role == .archive
-                    matched.isDeleted = role == .trash
+                    matched.isTrashed = role == .trash
                 }
                 matched.uid = message.uid
                 matched.isLocallySynthetic = false
@@ -235,7 +235,7 @@ final class EmailRepository {
                 reclaimed.uid = message.uid
                 reclaimed.mailbox = mailbox
                 reclaimed.isArchived = true
-                reclaimed.isDeleted = false
+                reclaimed.isTrashed = false
                 reclaimed.role = role
                 reconcileFlags(existing: reclaimed, fetched: message)
             } else {
@@ -313,8 +313,8 @@ final class EmailRepository {
     func delete(messageID: UUID, movedToMailbox mailbox: String? = nil) {
         guard let email = fetchEmail(by: messageID) else { return }
         let previousMailbox = email.mailbox
-        let previousDeleted = email.isDeleted
-        email.isDeleted = true
+        let previousTrashed = email.isTrashed
+        email.isTrashed = true
         if let mailbox, !mailbox.isEmpty, mailbox != email.mailbox {
             email.uid = nextPlaceholderUID(mailbox: mailbox, accountID: email.accountID)
             email.isLocallySynthetic = true
@@ -324,7 +324,7 @@ final class EmailRepository {
             repository delete emailID=\(email.id.uuidString, privacy: .public) \
             uid=\(email.uid, privacy: .public) \
             mailbox=\(previousMailbox, privacy: .public)->\(email.mailbox, privacy: .public) \
-            isDeleted=\(previousDeleted, privacy: .public)->\(email.isDeleted, privacy: .public) \
+            isTrashed=\(previousTrashed, privacy: .public)->\(email.isTrashed, privacy: .public) \
             threadID=\(String(describing: email.thread?.id), privacy: .public)
             """)
         save()
@@ -761,7 +761,7 @@ final class EmailRepository {
             isRead: true,
             isFlagged: false,
             isArchived: false,
-            isDeleted: false,
+            isTrashed: false,
             inReplyTo: outgoing.inReplyTo,
             referencesRaw: outgoing.references,
             accountID: account.id,
@@ -776,7 +776,7 @@ final class EmailRepository {
     // MARK: - Deletion + flag reconciliation
 
     /// Reconciles the local store against the server's current mailbox
-    /// membership: soft-deletes (`isDeleted = true`) any local row whose UID
+    /// membership: soft-deletes (`isTrashed = true`) any local row whose UID
     /// is no longer present on the server. Saves once and returns the count
     /// of rows newly soft-deleted.
     ///
@@ -791,7 +791,7 @@ final class EmailRepository {
     /// Rows the user explicitly archived (`isArchived = true`) are NOT
     /// touched — they're already filed out of Inbox and their server-side
     /// absence is expected. Reconciliation only retires rows that are still
-    /// active (`!isArchived && !isDeleted`). New mail that just arrived in
+    /// active (`!isArchived && !isTrashed`). New mail that just arrived in
     /// this same sync pass is already upserted before this runs, so it's
     /// present in `serverUIDs` and stays active.
     ///
@@ -812,7 +812,7 @@ final class EmailRepository {
                 email.mailbox == mailbox
                     && email.accountID == accountID
                     && !email.isArchived
-                    && !email.isDeleted
+                    && !email.isTrashed
             }
         )
         guard let locals = try? modelContext.fetch(descriptor), !locals.isEmpty else {
@@ -832,7 +832,7 @@ final class EmailRepository {
                 hardDeletedIDs.append(email.id)
                 modelContext.delete(email)
             } else {
-                email.isDeleted = true
+                email.isTrashed = true
             }
             removed += 1
         }
@@ -931,7 +931,7 @@ final class EmailRepository {
 
             guard !(uid.map(snapshot.uids.contains) ?? false),
                   !email.isArchived,
-                  !email.isDeleted,
+                  !email.isTrashed,
                   !(preserveLocallySynthetic && email.isLocallySynthetic) else {
                 continue
             }
@@ -939,7 +939,7 @@ final class EmailRepository {
                 hardDeletedIDs.append(email.id)
                 modelContext.delete(email)
             } else {
-                email.isDeleted = true
+                email.isTrashed = true
             }
             removed += 1
         }
@@ -984,7 +984,7 @@ final class EmailRepository {
 
     private static func backfillRole(for email: Email, account: StoredEmailAccount?) -> MailFolderRole {
         if email.isArchived { return .archive }
-        if email.isDeleted { return .trash }
+        if email.isTrashed { return .trash }
         return account?.folderRole(forMailbox: email.mailbox) ?? .inbox
     }
 
@@ -1063,7 +1063,7 @@ final class EmailRepository {
                 email.accountID == accountID
                     && email.mailbox != archiveMailbox
                     && !email.isLocallySynthetic
-                    && (email.mailbox == "INBOX" || email.isDeleted)
+                    && (email.mailbox == "INBOX" || email.isTrashed)
             }
         )
         guard let results = try? modelContext.fetch(descriptor) else {
@@ -1106,7 +1106,7 @@ final class EmailRepository {
             isRead: message.isRead,
             isFlagged: message.isFlagged,
             isArchived: role == .archive,
-            isDeleted: role == .trash,
+            isTrashed: role == .trash,
             inReplyTo: message.inReplyTo,
             referencesRaw: message.references,
             accountID: accountID,

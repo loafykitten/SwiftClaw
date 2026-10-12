@@ -26,7 +26,7 @@ struct EmailAccountScopeTests {
         let inbox = Self.email(accountID: accountA, subject: "Inbox")
         let flagged = Self.email(accountID: accountA, subject: "Flagged", isFlagged: true)
         let archived = Self.email(accountID: accountA, subject: "Archive", isArchived: true)
-        let trash = Self.email(accountID: accountA, subject: "Trash", isDeleted: true)
+        let trash = Self.email(accountID: accountA, subject: "Trash", isTrashed: true)
         let searchable = Self.email(accountID: accountA, subject: "Needle project")
         let otherAccount = Self.email(accountID: accountB, subject: "Needle other account")
 
@@ -98,7 +98,7 @@ struct EmailAccountScopeTests {
         role: MailFolderRole = .inbox,
         isFlagged: Bool = false,
         isArchived: Bool = false,
-        isDeleted: Bool = false
+        isTrashed: Bool = false
     ) -> Email {
         let thread = EmailThread(accountID: accountID, subjectNormalized: subject)
         let email = Email(
@@ -108,7 +108,7 @@ struct EmailAccountScopeTests {
             role: role,
             isFlagged: isFlagged,
             isArchived: isArchived,
-            isDeleted: isDeleted,
+            isTrashed: isTrashed,
             accountID: accountID,
             thread: thread
         )

@@ -19,7 +19,7 @@ struct WorkspaceEmailSummaryTests {
             thread: EmailThread(subjectNormalized: "e"),
             isRead: false,
             isFlagged: true,
-            isDeleted: true,
+            isTrashed: true,
             noteCount: 1
         )
 
@@ -127,7 +127,7 @@ struct WorkspaceEmailSummaryTests {
         isRead: Bool,
         isFlagged: Bool = false,
         isArchived: Bool = false,
-        isDeleted: Bool = false,
+        isTrashed: Bool = false,
         noteCount: Int = 0,
         date: Date = .now
     ) -> Email {
@@ -136,7 +136,7 @@ struct WorkspaceEmailSummaryTests {
             isRead: isRead,
             isFlagged: isFlagged,
             isArchived: isArchived,
-            isDeleted: isDeleted,
+            isTrashed: isTrashed,
             accountID: accountID,
             thread: thread
         )

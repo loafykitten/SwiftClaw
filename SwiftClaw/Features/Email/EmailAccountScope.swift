@@ -52,17 +52,17 @@ struct EmailThreadScopeSnapshot {
         let scopedEmails = emails.filter { accountScope.includes($0) }
         inbox = Self.threads(from: scopedEmails.filter {
             !$0.isArchived
-                && !$0.isDeleted
+                && !$0.isTrashed
                 && ($0.role == .inbox || $0.role == .sent)
         })
-        sent = Self.threads(from: scopedEmails.filter { $0.role == .sent && !$0.isDeleted })
-        drafts = Self.threads(from: scopedEmails.filter { $0.role == .drafts && !$0.isDeleted })
-        junk = Self.threads(from: scopedEmails.filter { $0.role == .junk && !$0.isDeleted })
-        archive = Self.threads(from: scopedEmails.filter { $0.isArchived && !$0.isDeleted })
-        trash = Self.threads(from: scopedEmails.filter(\.isDeleted))
+        sent = Self.threads(from: scopedEmails.filter { $0.role == .sent && !$0.isTrashed })
+        drafts = Self.threads(from: scopedEmails.filter { $0.role == .drafts && !$0.isTrashed })
+        junk = Self.threads(from: scopedEmails.filter { $0.role == .junk && !$0.isTrashed })
+        archive = Self.threads(from: scopedEmails.filter { $0.isArchived && !$0.isTrashed })
+        trash = Self.threads(from: scopedEmails.filter(\.isTrashed))
 
         var groupedCustom: [String: [Email]] = [:]
-        for email in scopedEmails where email.role == .custom && !email.isArchived && !email.isDeleted {
+        for email in scopedEmails where email.role == .custom && !email.isArchived && !email.isTrashed {
             groupedCustom[email.mailbox, default: []].append(email)
         }
         customFolderNames = groupedCustom.keys.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }

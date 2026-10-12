@@ -41,7 +41,7 @@ struct NotificationMailActionHandlerTests {
         await handler.flushActionsForTesting()
 
         let email = try #require(Self.fetchEmail(emailID, in: container))
-        #expect(email.isDeleted)
+        #expect(email.isTrashed)
         #expect(await mock.deletes == [5])
     }
 

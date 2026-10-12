@@ -72,7 +72,7 @@ Each mailbox keeps its own first-sync cap and high-water state. Inject
 After each incremental upsert the worker runs a cheap `.uidFlagsOnly` UID-set
 scan (`MailClient.fetchMailboxUIDSet(name:)` → `MailboxUIDSet { uidValidity,
 uids, flagsByUID }`) — no body fetch, one round-trip — and reconciles the local
-store: `EmailRepository.reconcileDeletions(...)` soft-deletes (`isDeleted =
+store: `EmailRepository.reconcileDeletions(...)` soft-deletes (`isTrashed =
 true`) local rows whose UID is no longer on the server (preserves the row +
 `EmailNote`s + `EmailThread` linkage + `lastReviewedAt`; skipped for
 already-archived rows; surfaces in Trash), and
@@ -80,6 +80,10 @@ already-archived rows; surfaces in Trash), and
 drift on persisting rows. Drafts reconcile on every pass and hard-delete stale
 local draft rows, because editing drafts commonly deletes + re-appends them
 with new UIDs. Other synced folders use the normal soft-delete path.
+`Email.isTrashed` is the soft-delete flag; never use `isDeleted` on an `Email`,
+which is SwiftData's `PersistentModel.isDeleted` (removed from its context).
+The attribute keeps its pre-rename `isDeleted` store column via
+`@Attribute(originalName:)`.
 
 ## Threading
 

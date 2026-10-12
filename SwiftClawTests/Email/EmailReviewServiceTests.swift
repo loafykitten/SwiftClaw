@@ -394,7 +394,7 @@ struct EmailReviewServiceTests {
                 let restored = try? lateContext.fetch(FetchDescriptor<Email>()).first {
                     $0.messageID == "<restore-reply@example.com>"
                 }
-                restored?.isDeleted = false
+                restored?.isTrashed = false
                 try? lateContext.save()
             }
             return ""

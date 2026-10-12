@@ -673,7 +673,7 @@ private struct WorkspaceRemindersStatsView: View {
 }
 
 private struct WorkspaceEmailStatsView: View {
-    @Query(filter: #Predicate<Email> { !$0.isArchived && !$0.isDeleted })
+    @Query(filter: #Predicate<Email> { !$0.isArchived && !$0.isTrashed })
     private var emails: [Email]
 
     /// Bumped when Settings posts `emailReviewScheduleDidChange` or a review

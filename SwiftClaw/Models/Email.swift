@@ -55,7 +55,7 @@ final class EmailThread {
     var reviewableMessages: [Email] {
         sortedMessages.filter {
             !$0.isArchived
-                && !$0.isDeleted
+                && !$0.isTrashed
                 && $0.role != .junk
                 && $0.role != .drafts
         }
@@ -137,7 +137,11 @@ final class Email {
     var isRead: Bool
     var isFlagged: Bool
     var isArchived: Bool
-    var isDeleted: Bool
+    /// Soft-deleted: moved to Trash locally and still recoverable. Named so
+    /// it doesn't shadow `PersistentModel.isDeleted` ("deleted from its
+    /// context"); `originalName` keeps the pre-rename `isDeleted` column so
+    /// existing stores migrate in place.
+    @Attribute(originalName: "isDeleted") var isTrashed: Bool
     var inReplyTo: String?
     var referencesRaw: [String]
     /// Identifies which configured account this message belongs to. Pre-
@@ -191,7 +195,7 @@ final class Email {
         isRead: Bool = false,
         isFlagged: Bool = false,
         isArchived: Bool = false,
-        isDeleted: Bool = false,
+        isTrashed: Bool = false,
         inReplyTo: String? = nil,
         referencesRaw: [String] = [],
         accountID: UUID = UUID(),
@@ -216,7 +220,7 @@ final class Email {
         self.isRead = isRead
         self.isFlagged = isFlagged
         self.isArchived = isArchived
-        self.isDeleted = isDeleted
+        self.isTrashed = isTrashed
         self.inReplyTo = inReplyTo
         self.referencesRaw = referencesRaw
         self.accountID = accountID

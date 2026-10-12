@@ -232,9 +232,9 @@ extension EmailRepository {
             descriptor = FetchDescriptor<EmailThread>(
                 predicate: #Predicate { thread in
                     thread.messages.contains { message in
-                        ((!message.isArchived && !message.isDeleted)
+                        ((!message.isArchived && !message.isTrashed)
                             || (includeArchived && message.isArchived)
-                            || (includeTrashed && message.isDeleted))
+                            || (includeTrashed && message.isTrashed))
                             && (!message.isRead || message.isFlagged)
                     }
                 },
@@ -245,14 +245,14 @@ extension EmailRepository {
                 predicate: #Predicate { thread in
                     !excludingThreadIDs.contains(thread.id)
                         && thread.messages.contains { message in
-                            (!message.isArchived && !message.isDeleted)
+                            (!message.isArchived && !message.isTrashed)
                                 || (includeArchived && message.isArchived)
-                                || (includeTrashed && message.isDeleted)
+                                || (includeTrashed && message.isTrashed)
                         }
                         && !thread.messages.contains { message in
-                            ((!message.isArchived && !message.isDeleted)
+                            ((!message.isArchived && !message.isTrashed)
                                 || (includeArchived && message.isArchived)
-                                || (includeTrashed && message.isDeleted))
+                                || (includeTrashed && message.isTrashed))
                                 && (!message.isRead || message.isFlagged)
                         }
                 },
@@ -291,9 +291,9 @@ extension EmailRepository {
         let descriptor = FetchDescriptor<EmailThread>(
             predicate: #Predicate { thread in
                 thread.messages.contains { message in
-                    (!message.isArchived && !message.isDeleted)
+                    (!message.isArchived && !message.isTrashed)
                         || (includeArchived && message.isArchived)
-                        || (includeTrashed && message.isDeleted)
+                        || (includeTrashed && message.isTrashed)
                 }
             },
             sortBy: [SortDescriptor(\.lastDate, order: .reverse)]
@@ -319,7 +319,7 @@ extension EmailRepository {
             if explicitlyRequested {
                 return true
             }
-            if message.isDeleted {
+            if message.isTrashed {
                 return filter.includeTrashed
             }
             if message.isArchived {
@@ -405,7 +405,7 @@ extension EmailRepository {
         let descriptor = FetchDescriptor<EmailThread>(
             predicate: #Predicate { thread in
                 thread.messages.contains { message in
-                    !message.isArchived && !message.isDeleted
+                    !message.isArchived && !message.isTrashed
                 }
             }
         )

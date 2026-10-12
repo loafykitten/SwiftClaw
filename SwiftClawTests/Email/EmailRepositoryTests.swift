@@ -33,7 +33,7 @@ struct EmailRepositoryTests {
             .filter { $0.messageID == "<a@example.com>" }
         #expect(matches.count == 1, "reclaim must not leave a duplicate row")
         #expect(matches.first?.isArchived == true)
-        #expect(matches.first?.isDeleted == false)
+        #expect(matches.first?.isTrashed == false)
         #expect(matches.first?.mailbox == "Archive")
         #expect(matches.first?.uid == 99)
     }
