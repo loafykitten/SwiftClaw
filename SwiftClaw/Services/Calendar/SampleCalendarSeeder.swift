@@ -18,6 +18,9 @@ enum SampleCalendarSeeder {
 
         UserDefaults.standard.set(true, forKey: SettingsKeys.calendarEnabled)
         UserDefaults.standard.set(true, forKey: SettingsKeys.remindersEnabled)
+        // The seeded data stands in for an import, so skip the set-up sheets.
+        UserDefaults.standard.set(true, forKey: SettingsKeys.calendarHasCompletedOnboarding)
+        UserDefaults.standard.set(true, forKey: SettingsKeys.remindersHasCompletedOnboarding)
 
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: .now)

@@ -45,7 +45,15 @@ struct NotesView: View {
                 configuredSplitView
             }
         }
-        .task { await model.activate() }
+        .task {
+            await model.activate()
+            #if DEBUG
+            // UI runs and screenshots: `-SwiftClawOpenNote <vault-relative path>`.
+            if let path = ProcessInfo.processInfo.argumentValue(after: "-SwiftClawOpenNote") {
+                await model.select(path: path)
+            }
+            #endif
+        }
         .onDisappear {
             model.deactivate()
         }
