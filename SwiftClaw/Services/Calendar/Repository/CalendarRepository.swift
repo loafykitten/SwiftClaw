@@ -562,15 +562,20 @@ final class CalendarRepository {
             return key
         }
         var candidates = [key]
-        if master.isAllDay {
+        // Only a key that isn't already canonical can be a legacy instant.
+        // Reinterpreting a canonical key would map a deleted day onto the
+        // day before it in zones west of UTC.
+        if master.isAllDay, CivilDay(canonical: key).canonicalDate != key {
             candidates.append(CivilDay.canonicalDate(forLocal: key, in: zoneCalendar))
         }
         for candidate in candidates {
+            // The window opens before the candidate so a zero-duration
+            // occurrence starting exactly at it still overlaps.
             let starts = RecurrenceExpander.occurrenceStarts(
                 rule: rule,
                 eventStart: master.startDate,
                 duration: master.duration,
-                window: DateInterval(start: candidate, duration: 1),
+                window: DateInterval(start: candidate.addingTimeInterval(-1), duration: 2),
                 exceptionDates: master.exceptionDates,
                 timeZone: master.recurrenceTimeZone
             )

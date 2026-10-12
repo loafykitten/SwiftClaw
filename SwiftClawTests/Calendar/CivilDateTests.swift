@@ -870,6 +870,46 @@ struct CivilDateTests {
         #expect(master.exceptionDates == [Self.day(2026, 7, 12).canonicalDate])
     }
 
+    /// A canonical key for an already-deleted day is stale, never a legacy
+    /// instant: west of UTC, reinterpreting midnight UTC July 12 as local
+    /// time would land on July 11 and delete that day instead.
+    @Test func deletedCanonicalKeyIsRejectedNotShiftedADay() throws {
+        let chicago = Self.chicago
+        let repository = try Self.calendarRepository()
+        repository.zoneCalendar = chicago
+        let master = CalendarEvent(title: "Daily", recurrenceRuleString: "FREQ=DAILY", calendar: repository.defaultCalendar())
+        master.setAllDaySpan(from: Self.day(2026, 7, 10), dayCount: 1)
+        repository.insert(master)
+        let july12 = Self.day(2026, 7, 12).canonicalDate
+
+        try repository.deleteOccurrence(of: master, at: july12)
+        #expect(throws: CalendarRepository.StaleOccurrenceError.self) {
+            try repository.deleteOccurrence(of: master, at: july12)
+        }
+        #expect(master.exceptionDates == [july12])
+    }
+
+    /// A zero-duration recurring event (DTSTART == DTEND, which ICS import
+    /// accepts) still resolves its exact occurrence keys.
+    @Test func zeroDurationOccurrenceKeysResolve() throws {
+        let chicago = Self.chicago
+        let repository = try Self.calendarRepository()
+        repository.zoneCalendar = chicago
+        let start = Self.date(2026, 7, 10, 9, in: chicago)
+        let master = CalendarEvent(
+            title: "Check-in",
+            startDate: start,
+            endDate: start,
+            recurrenceRuleString: "FREQ=DAILY",
+            calendar: repository.defaultCalendar()
+        )
+        repository.insert(master)
+        let secondDay = start.addingTimeInterval(24 * 3600)
+
+        try repository.deleteOccurrence(of: master, at: secondDay)
+        #expect(master.exceptionDates == [secondDay])
+    }
+
     /// Re-review 5: editing a legacy override before its master arrives
     /// converts only its own fields; its key stays pending (never guessed)
     /// and converts once the master is there.
