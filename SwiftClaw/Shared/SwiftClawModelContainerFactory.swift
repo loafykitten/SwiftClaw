@@ -78,6 +78,22 @@ enum SwiftClawModelContainerFactory {
             Reminder.self,
             ReminderList.self,
         ])
+        if ProcessInfo.processInfo.isRunningAsTestHost {
+            // Suites build their own containers; the host only needs one
+            // that never touches the developer's on-disk stores.
+            do {
+                return .success(try ModelContainer(
+                    for: fullSchema,
+                    configurations: [
+                        ModelConfiguration(schema: mainSchema, isStoredInMemoryOnly: true),
+                        ModelConfiguration("SwiftClawCalendar", schema: calendarSchema, isStoredInMemoryOnly: true),
+                    ]
+                ))
+            } catch {
+                return .failure(.modelContainerCreationFailed(String(describing: error)))
+            }
+        }
+
         #if DEBUG
         let mainConfiguration: ModelConfiguration
         if let fixtureRoot {

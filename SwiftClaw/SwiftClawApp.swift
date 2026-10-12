@@ -22,7 +22,8 @@ struct SwiftClawApp: App {
     init() {
         // Install the notification delegate before launch completes so a
         // notification tap that cold-launches the app is routed, not dropped.
-        guard !ProcessInfo.processInfo.isRunningInPreview else { return }
+        guard !ProcessInfo.processInfo.isRunningInPreview,
+              !ProcessInfo.processInfo.isRunningAsTestHost else { return }
         AppNotificationService.shared.activate()
     }
 
@@ -64,14 +65,24 @@ struct SwiftClawApp: App {
 
     private var appWindow: some Scene {
         WindowGroup {
-            switch modelContainerResult {
-            case .success(let modelContainer):
-                RootView(modelContainer: modelContainer)
-                    .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
-            case .failure(let error):
-                AppStartupFailureView(error: error)
-                    .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
+            if ProcessInfo.processInfo.isRunningAsTestHost {
+                // Hosting SwiftClawTests: no bootstrap, sync, or live UI.
+                EmptyView()
+            } else {
+                appContent
             }
+        }
+    }
+
+    @ViewBuilder
+    private var appContent: some View {
+        switch modelContainerResult {
+        case .success(let modelContainer):
+            RootView(modelContainer: modelContainer)
+                .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
+        case .failure(let error):
+            AppStartupFailureView(error: error)
+                .preferredColorScheme(AppTheme(rawValue: theme)?.colorScheme)
         }
     }
 
