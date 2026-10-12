@@ -147,6 +147,119 @@ struct PageFetcherTests {
         ])
     }
 
+    /// DNS rebinding: the pre-flight lookup said public, but the connection
+    /// URLSession actually made went to a private address. Nothing the
+    /// server sent — not even its status — may reach the caller.
+    @Test func rejectsPrivateRemoteAddressDespitePublicPreflight() async throws {
+        let url = try #require(URL(string: "https://rebind.example/"))
+        for statusCode in [200, 403] {
+            let fetcher = makeFetcher(
+                statusCode: statusCode,
+                mimeType: "text/plain",
+                body: Data("internal service".utf8),
+                remoteAddresses: ["rebind.example": "10.0.0.7"]
+            )
+
+            await #expect(throws: PageFetchError.blockedDestination) {
+                try await fetcher.fetch(url: url, maxBytes: 100)
+            }
+            #expect(StubPageURLProtocol.requestedURLs.value == ["https://rebind.example/"])
+        }
+    }
+
+    @Test func rejectsRedirectHopThatConnectedToAPrivateAddress() async throws {
+        let fetcher = makeFetcher(
+            statusCode: 200,
+            mimeType: "text/plain",
+            body: Data("internal service".utf8),
+            redirects: ["https://example.com/start": "https://example.org/final"],
+            remoteAddresses: ["example.org": "fe80::1%en0"]
+        )
+        let url = try #require(URL(string: "https://example.com/start"))
+
+        await #expect(throws: PageFetchError.blockedDestination) {
+            try await fetcher.fetch(url: url, maxBytes: 100)
+        }
+        // The hop passed the pre-flight policy; only its metrics caught it.
+        #expect(StubPageURLProtocol.requestedURLs.value == [
+            "https://example.com/start",
+            "https://example.org/final",
+        ])
+    }
+
+    @Test func checksEveryTransactionIncludingRedirectHops() async throws {
+        let seenHosts = LockedValue<[String]>([])
+        let fetcher = makeFetcher(
+            statusCode: 200,
+            mimeType: "text/plain",
+            body: Data("moved".utf8),
+            redirects: ["https://example.com/start": "https://example.org/final"],
+            readConnection: { transaction in
+                seenHosts.update { $0.append(transaction.request.url?.host() ?? "") }
+                return FetchDestinationPolicy.Connection(remoteAddress: "2606:4700::1111")
+            }
+        )
+        let url = try #require(URL(string: "https://example.com/start"))
+
+        let page = try await fetcher.fetch(url: url, maxBytes: 100)
+
+        #expect(page.bodyText == "moved")
+        #expect(seenHosts.value == ["example.com", "example.org"])
+    }
+
+    /// The production reader, against a load that reports no remote address
+    /// (as the stub protocol does), fails closed rather than trusting it.
+    @Test func missingRemoteAddressFailsClosed() async throws {
+        StubPageURLProtocol.response.update {
+            $0 = .init(statusCode: 200, mimeType: "text/plain", body: Data("unverified".utf8))
+        }
+        StubPageURLProtocol.redirects.update { $0 = [:] }
+        StubPageURLProtocol.requestedURLs.update { $0 = [] }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubPageURLProtocol.self]
+        let fetcher = PageFetcher(
+            session: URLSession(configuration: configuration),
+            resolveHost: { _ in [[93, 184, 216, 34]] }
+        )
+        let url = try #require(URL(string: "https://example.com/"))
+
+        await #expect(throws: PageFetchError.blockedDestination) {
+            try await fetcher.fetch(url: url, maxBytes: 100)
+        }
+        #expect(StubPageURLProtocol.requestedURLs.value == ["https://example.com/"])
+    }
+
+    @Test func classifiesConnections() {
+        typealias Connection = FetchDestinationPolicy.Connection
+        let allowed: [[Connection]] = [
+            [Connection(remoteAddress: "93.184.216.34")],
+            [Connection(remoteAddress: "2606:4700::1111"), Connection(remoteAddress: "[2606:4700::1111]")],
+            [Connection(remoteAddress: "::ffff:8.8.8.8")],
+            // A system proxy (here on the LAN) resolves the target itself.
+            [Connection(remoteAddress: "192.168.1.2", isProxyConnection: true)],
+            [Connection(remoteAddress: nil, isProxyConnection: true)],
+        ]
+        let rejected: [[Connection]] = [
+            [],
+            [Connection(remoteAddress: nil)],
+            [Connection(remoteAddress: "example.com")],
+            [Connection(remoteAddress: "127.0.0.1")],
+            [Connection(remoteAddress: "::ffff:10.0.0.1")],
+            [Connection(remoteAddress: "fe80::1%en0")],
+            [Connection(remoteAddress: "[fe80::1%25en0]")],
+            [Connection(remoteAddress: "93.184.216.34"), Connection(remoteAddress: "172.16.4.4")],
+            [Connection(remoteAddress: "93.184.216.34", fetchType: .localCache)],
+            [Connection(remoteAddress: "93.184.216.34", fetchType: .unknown)],
+        ]
+
+        for connections in allowed {
+            #expect(FetchDestinationPolicy.allowsConnections(connections), "\(connections)")
+        }
+        for connections in rejected {
+            #expect(!FetchDestinationPolicy.allowsConnections(connections), "\(connections)")
+        }
+    }
+
     /// A stalled `getaddrinfo` must not hold Stop or a run deadline hostage:
     /// cancellation fails the lookup closed right away, and the lookup's late
     /// answer is dropped without resuming anything twice.
@@ -230,13 +343,17 @@ struct PageFetcherTests {
     }
 
     /// Stub DNS: every name resolves to a public address unless overridden,
-    /// so tests never depend on the network.
+    /// so tests never depend on the network. The stub protocol can't report
+    /// a remote address, so each transaction's connection comes from
+    /// `remoteAddresses` (keyed by request host), defaulting to public.
     private func makeFetcher(
         statusCode: Int,
         mimeType: String,
         body: Data,
         redirects: [String: String] = [:],
-        resolveHost: @escaping FetchDestinationPolicy.HostResolver = { _ in [[93, 184, 216, 34]] }
+        resolveHost: @escaping FetchDestinationPolicy.HostResolver = { _ in [[93, 184, 216, 34]] },
+        remoteAddresses: [String: String] = [:],
+        readConnection: PageFetcher.ConnectionReader? = nil
     ) -> PageFetcher {
         StubPageURLProtocol.response.update {
             $0 = .init(statusCode: statusCode, mimeType: mimeType, body: body)
@@ -247,7 +364,13 @@ struct PageFetcherTests {
         configuration.protocolClasses = [StubPageURLProtocol.self]
         return PageFetcher(
             session: URLSession(configuration: configuration),
-            resolveHost: resolveHost
+            resolveHost: resolveHost,
+            readConnection: readConnection ?? { transaction in
+                let host = transaction.request.url?.host() ?? ""
+                return FetchDestinationPolicy.Connection(
+                    remoteAddress: remoteAddresses[host] ?? "93.184.216.34"
+                )
+            }
         )
     }
 }

@@ -33,6 +33,87 @@ nonisolated enum FetchDestinationPolicy {
         return !addresses.isEmpty && addresses.allSatisfy(isPublicAddress)
     }
 
+    /// One transaction URLSession actually performed for a fetch, as its task
+    /// metrics report it. ``allows(_:resolveHost:)`` checks a host before the
+    /// request; this records where the connection really went, closing the
+    /// gap where DNS answers differently (rebinding) by the time URLSession
+    /// resolves the host itself.
+    struct Connection: Sendable, Equatable {
+        enum FetchType: Sendable, Equatable {
+            case network
+            case serverPush
+            case localCache
+            case unknown
+        }
+
+        var remoteAddress: String?
+        var isProxyConnection: Bool
+        var fetchType: FetchType
+
+        init(remoteAddress: String?, isProxyConnection: Bool = false, fetchType: FetchType = .network) {
+            self.remoteAddress = remoteAddress
+            self.isProxyConnection = isProxyConnection
+            self.fetchType = fetchType
+        }
+
+        init(_ transaction: URLSessionTaskTransactionMetrics) {
+            let fetchType: FetchType = switch transaction.resourceFetchType {
+            case .networkLoad: .network
+            case .serverPush: .serverPush
+            case .localCache: .localCache
+            default: .unknown
+            }
+            self.init(
+                remoteAddress: transaction.remoteAddress,
+                isProxyConnection: transaction.isProxyConnection,
+                fetchType: fetchType
+            )
+        }
+    }
+
+    /// Whether every transaction of a finished fetch (each redirect hop is
+    /// one) connected to a public address. Fails closed: no transactions, an
+    /// unknown or cache-served load (the fetch session has no cache, so the
+    /// body's origin can't be vouched for), or a missing or unparseable
+    /// address all reject.
+    ///
+    /// A system-proxy hop is allowed without an address check: its remote
+    /// address is the proxy's (often on the LAN by design), and the proxy —
+    /// configured by the user or their admin — resolves the target itself.
+    /// The pre-flight ``allows(_:resolveHost:)`` check still applies to it.
+    static func allowsConnections(_ connections: [Connection]) -> Bool {
+        !connections.isEmpty && connections.allSatisfy { connection in
+            switch connection.fetchType {
+            case .network, .serverPush:
+                break
+            case .localCache, .unknown:
+                return false
+            }
+            if connection.isProxyConnection {
+                return true
+            }
+            guard let remoteAddress = connection.remoteAddress,
+                  let address = remoteAddressBytes(remoteAddress) else {
+                return false
+            }
+            return isPublicAddress(address)
+        }
+    }
+
+    /// Parses a metrics `remoteAddress`: IPv4, IPv6 (optionally bracketed),
+    /// IPv4-mapped IPv6, or scoped link-local such as `fe80::1%en0` (the zone
+    /// is dropped; the address classifies as link-local either way).
+    static func remoteAddressBytes(_ remoteAddress: String) -> [UInt8]? {
+        var host = Substring(remoteAddress.trimmingCharacters(in: .whitespaces))
+        if host.hasPrefix("["), host.hasSuffix("]") {
+            host = host.dropFirst().dropLast()
+        }
+        if let zone = host.firstIndex(of: "%") {
+            host = host[..<zone]
+        }
+        return numericAddress(String(host))
+    }
+
     /// Parses a dotted-quad IPv4 or textual IPv6 literal.
     static func numericAddress(_ host: String) -> [UInt8]? {
         var v4 = in_addr()

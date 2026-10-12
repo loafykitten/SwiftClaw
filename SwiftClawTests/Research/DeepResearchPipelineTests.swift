@@ -319,7 +319,8 @@ struct DeepResearchPipelineTests {
         configuration.protocolClasses = [StubDeepResearchURLProtocol.self]
         return PageFetcher(
             session: URLSession(configuration: configuration),
-            resolveHost: { _ in [[93, 184, 216, 34]] }
+            resolveHost: { _ in [[93, 184, 216, 34]] },
+            readConnection: { _ in FetchDestinationPolicy.Connection(remoteAddress: "93.184.216.34") }
         )
     }
 

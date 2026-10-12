@@ -150,7 +150,7 @@ fallback pattern `InvestigationEngine` already implements, extended per stage.
 | Component | Kind | Notes |
 |---|---|---|
 | `ResearchEngine`, `ResearchConfiguration`, `ResearchBudget`, `EvidenceStore` | `Services/Research/` | Engine extracted from `InvestigationEngine`; presets `.investigation` / `.deepResearch` |
-| `PageFetcher` | struct | URLSession, ~1.5 MB & 15 s caps, HTML/PDF-text only, honest failure (skip + note) |
+| `PageFetcher` | struct | URLSession, ~1.5 MB & 15 s caps, HTML/PDF-text only, honest failure (skip + note). `FetchDestinationPolicy` blocks non-public destinations twice: a pre-flight DNS check (and per redirect), then the remote address of every transaction in the task metrics — nothing (body or status) reaches the model until both pass, so a DNS rebind between check and connect is caught. System-proxy hops are trusted (the proxy resolves); missing addresses and cache loads fail closed |
 | `ContentExtractor` | struct | HTML → main-content plain text/markdown. Open question: hand-rolled heuristics vs. adding SwiftSoup (repo currently has zero deps — prefer hand-rolled first pass) |
 | `ResearchSession` | `@Model` | Per MODELS.md: unique UUID id, `statusRaw`+computed enum, JSON blobs (`planData`, `sourcesData`, `evidenceData`), `reportMarkdown`, timestamps, `errorMessage` |
 | `ResearchSessionCoordinator` | `@MainActor` singleton | `ChatTaskCoordinator` pattern: owns the run `Task`, one active session at a time, cancel keeps partials, checkpoint after each stage for resume-on-relaunch |
