@@ -210,6 +210,7 @@ enum SwiftClawModelContainerFactory {
         MainActor.assumeIsolated {
             SampleChatSeeder.seedIfRequested(into: container)
             SampleEmailSeeder.seedIfRequested(into: container)
+            SampleCalendarSeeder.seedIfRequested(into: container)
             NoteProposalFixtureSeeder.seedIfRequested(into: container, fixtureRoot: fixtureRoot)
             MemoryCardFixtureSeeder.seedIfRequested(into: container)
         }
