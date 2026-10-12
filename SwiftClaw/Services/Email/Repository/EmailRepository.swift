@@ -51,6 +51,16 @@ extension Email {
         return uid
     }
 
+    /// Whether a later sync can still give this placeholder row a server
+    /// UID: a Trash move or Sent echo whose destination sync re-keys it by
+    /// Message-ID. A UIDVALIDITY-invalidated row that the refetch didn't
+    /// match (it's gone from the server), or a moved row with no Message-ID
+    /// to match by, never resolves.
+    var isAwaitingServerIdentity: Bool {
+        guard serverUID == nil, isLocallySynthetic else { return false }
+        return !(messageID ?? "").isEmpty
+    }
+
     /// The read/flag components still awaiting server confirmation, with
     /// their local values (`nil` for a settled component), or `nil` when
     /// nothing is pending. A legacy marker without per-component state
@@ -354,8 +364,7 @@ final class EmailRepository {
         email.isRead = isRead
         // Mark unsynced so a stale server snapshot can't revert this before
         // `EmailServerAction` confirms the change server-side.
-        email.needsFlagSync = true
-        email.isReadSyncPending = true
+        markFlagSyncPending(email, read: true)
         save()
     }
 
@@ -365,8 +374,7 @@ final class EmailRepository {
     func toggleFlag(messageID: UUID) -> Bool? {
         guard let email = fetchEmail(by: messageID) else { return nil }
         email.isFlagged.toggle()
-        email.needsFlagSync = true
-        email.isFlaggedSyncPending = true
+        markFlagSyncPending(email, flagged: true)
         save()
         return email.isFlagged
     }
@@ -379,10 +387,23 @@ final class EmailRepository {
         guard let email = fetchEmail(by: messageID) else { return nil }
         guard email.isFlagged != isFlagged else { return email.isFlagged }
         email.isFlagged = isFlagged
-        email.needsFlagSync = true
-        email.isFlaggedSyncPending = true
+        markFlagSyncPending(email, flagged: true)
         save()
         return email.isFlagged
+    }
+
+    /// Marks a read and/or flag component as awaiting server confirmation.
+    /// A legacy marker (`needsFlagSync` with no component set) means both
+    /// components are pending, so it's expanded first; otherwise setting one
+    /// component would make `pendingFlagUpdate` drop the other.
+    private func markFlagSyncPending(_ email: Email, read: Bool = false, flagged: Bool = false) {
+        if email.needsFlagSync, !email.isReadSyncPending, !email.isFlaggedSyncPending {
+            email.isReadSyncPending = true
+            email.isFlaggedSyncPending = true
+        }
+        email.needsFlagSync = true
+        if read { email.isReadSyncPending = true }
+        if flagged { email.isFlaggedSyncPending = true }
     }
 
     /// Settles the pending components the server has confirmed with

@@ -122,21 +122,24 @@ enum EmailServerAction {
     /// (`mailClient == nil`) the server call is skipped and the local
     /// hard-delete still runs.
     ///
-    /// A row with no server identity yet (`serverUID == nil`, e.g. just moved
-    /// to Trash and awaiting the Trash sync) is refused outright: deleting it
+    /// A row still awaiting its server identity (just moved to Trash, see
+    /// `Email.isAwaitingServerIdentity`) is refused outright: deleting it
     /// locally would leave the server copy to resurface on the next sync.
+    /// A placeholder row that can never resolve (gone from the server after
+    /// a UIDVALIDITY reset, or moved without a Message-ID) has no server
+    /// copy to address, so only the local row is removed.
     /// Returns `false` when nothing was deleted.
     @discardableResult
     static func deletePermanently(email: Email, repository: EmailRepository, mailClient: MailClient?) async -> Bool {
-        if let mailClient {
-            guard let uid = email.serverUID else {
-                MailSyncMonitor.shared.setStatus(
-                    "Can't delete permanently yet: the message's copy in \(email.mailbox) hasn't synced. "
-                        + "Try again after the next sync.",
-                    syncing: false
-                )
-                return false
-            }
+        if email.isAwaitingServerIdentity, mailClient != nil {
+            MailSyncMonitor.shared.setStatus(
+                "Can't delete permanently yet: the message's copy in \(email.mailbox) hasn't synced. "
+                    + "Try again after the next sync.",
+                syncing: false
+            )
+            return false
+        }
+        if let mailClient, let uid = email.serverUID {
             do {
                 try await mailClient.deletePermanently(uid: uid, in: email.mailbox)
             } catch {

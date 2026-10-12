@@ -162,6 +162,49 @@ struct EmailServerIdentityTests {
         #expect(try Self.stored(emailID, in: container) == nil)
     }
 
+    @Test func deletePermanentlyRemovesAPlaceholderThatCanNeverResolve() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let mock = MockMailClient()
+        await mock.setUIDValidity(7)
+        await mock.setMailbox("INBOX", messages: [
+            EmailRepositoryTests.simpleMessage(uid: 1, messageID: "<gone@example.com>", subject: "Gone"),
+        ])
+        let worker = Self.makeWorker(mock: mock, container: container, reconcileEveryNPasses: 100)
+        _ = await worker.syncOnce()
+        // A UIDVALIDITY reset and a refetch that no longer has the message.
+        await mock.setUIDValidity(8)
+        await mock.setMailbox("INBOX", messages: [])
+        _ = await worker.syncOnce()
+
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let email = try #require(try context.fetch(FetchDescriptor<Email>()).first)
+        let emailID = email.id
+        #expect(email.serverUID == nil)
+        #expect(!email.isAwaitingServerIdentity, "no sync will ever re-key it")
+
+        #expect(await EmailServerAction.deletePermanently(email: email, repository: repository, mailClient: mock))
+        #expect(await mock.permanentDeletes.isEmpty, "nothing on the server to address")
+        #expect(try Self.stored(emailID, in: container) == nil)
+    }
+
+    @Test func movedRowWithoutAMessageIDIsNotAwaitingIdentity() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let mock = MockMailClient()
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 5, messageID: "", subject: "No ID")],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+        let email = try #require(try context.fetch(FetchDescriptor<Email>()).first)
+        await EmailServerAction.delete(email: email, repository: repository, mailClient: mock)
+        #expect(email.serverUID == nil)
+        #expect(!email.isAwaitingServerIdentity, "Trash sync matches by Message-ID, which it lacks")
+        #expect(await EmailServerAction.deletePermanently(email: email, repository: repository, mailClient: mock))
+    }
+
     // MARK: - Synthetic Sent echoes
 
     @Test func anotherClientsSentMessageOnTheNextUIDIsNotSwallowed() async throws {
@@ -433,6 +476,32 @@ struct EmailServerIdentityTests {
         #expect(email.needsFlagSync)
         #expect(email.pendingFlagUpdate?.isFlagged == false)
         #expect(email.pendingFlagUpdate?.isRead == nil)
+    }
+
+    @Test func mutatingARowWithALegacyMarkerKeepsBothComponentsPending() throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(uid: 1, messageID: "<m@example.com>", subject: "M")],
+            mailbox: "INBOX",
+            accountID: Self.accountID
+        )
+        let email = try #require(try context.fetch(FetchDescriptor<Email>()).first)
+        // Marked before per-component tracking existed, then opened.
+        email.needsFlagSync = true
+        try context.save()
+        repository.setRead(messageID: email.id, isRead: true)
+
+        #expect(email.pendingFlagUpdate?.isRead == true)
+        #expect(email.pendingFlagUpdate?.isFlagged == false, "the unsent flag change still goes out")
+
+        repository.clearFlagSyncPending(
+            messageID: email.id,
+            acknowledging: MailFlagUpdate(isRead: true, isFlagged: nil)
+        )
+        #expect(email.needsFlagSync, "a read-only ack can't settle the legacy flag change")
+        #expect(email.pendingFlagUpdate?.isFlagged == false)
     }
 
     // MARK: - Persistence
