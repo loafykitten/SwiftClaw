@@ -26,6 +26,31 @@ struct SQLiteDatabaseTests {
         #expect(rows.map { $0[0] } == (0..<5).map { .integer(Int64($0)) })
     }
 
+    @Test func transactionCommitsOnSuccessAndRollsBackOnThrow() async throws {
+        let database = try SQLiteDatabase(path: ":memory:")
+        try await database.execute("CREATE TABLE items (n INTEGER);")
+
+        let committed = try await database.transaction { database in
+            try database.execute("INSERT INTO items (n) VALUES (1);")
+            return try database.query("SELECT COUNT(*) FROM items;")
+        }
+        #expect(committed == [[.integer(1)]])
+
+        await #expect(throws: SQLiteDatabase.DatabaseError.self) {
+            try await database.transaction { database in
+                try database.execute("INSERT INTO items (n) VALUES (2);")
+                try database.execute("NOT VALID SQL;")
+            }
+        }
+
+        let rows = try await database.query("SELECT n FROM items;")
+        #expect(rows == [[.integer(1)]])
+        // A follow-up transaction proves the failed one didn't leave BEGIN open.
+        try await database.transaction { database in
+            try database.execute("INSERT INTO items (n) VALUES (3);")
+        }
+    }
+
     @Test func userVersionDefaultsToZeroAndPersistsAfterBeingSet() async throws {
         let database = try SQLiteDatabase(path: ":memory:")
         #expect(try await database.currentUserVersion() == 0)

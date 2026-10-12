@@ -44,6 +44,42 @@ struct SearchIndexTests {
         #expect(freshHits.count == 1)
     }
 
+    /// Each upsert's BEGIN…COMMIT must run as one database-actor turn. When
+    /// they were separate awaits, a second upsert interleaving on the
+    /// `SearchIndex` actor hit "cannot start a transaction within a
+    /// transaction", and removals could join a transaction that rolled back.
+    @Test func concurrentUpsertsAndRemovalsDoNotInterleaveTransactions() async throws {
+        let index = try SearchIndex(path: ":memory:")
+        _ = try await index.health()
+        let inputs = (0..<40).map { value in
+            (makeDocument(sourceID: "note-\(value)"), makeChunks("shared token \(value)", "second chunk \(value)"))
+        }
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for (value, input) in inputs.enumerated() {
+                group.addTask {
+                    _ = try await index.upsert(document: input.0, chunks: input.1)
+                }
+                if value.isMultiple(of: 4) {
+                    group.addTask {
+                        try await index.remove(sourceType: "note", sourceID: "note-\(value)")
+                    }
+                }
+            }
+            try await group.waitForAll()
+        }
+
+        for value in 0..<40 {
+            let document = try await index.document(sourceType: "note", sourceID: "note-\(value)")
+            if let document {
+                let chunks = try await index.chunks(forDocumentID: document.id)
+                #expect(chunks.map(\.ordinal) == [0, 1])
+            } else {
+                #expect(value.isMultiple(of: 4))
+            }
+        }
+    }
+
     @Test func removeDeletesTheDocumentAndItsChunks() async throws {
         let index = try SearchIndex(path: ":memory:")
         _ = try await index.upsert(document: makeDocument(), chunks: makeChunks("searchable content here"))
