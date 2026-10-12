@@ -229,18 +229,26 @@ struct PageFetcherTests {
         #expect(StubPageURLProtocol.requestedURLs.value == ["https://example.com/"])
     }
 
+    @Test func isolatedSessionBypassesProxies() {
+        // A proxy would resolve the target itself, out of the policy's sight.
+        let proxies = PageFetcher.isolatedSession.configuration.connectionProxyDictionary
+        #expect(proxies?.isEmpty == true)
+    }
+
     @Test func classifiesConnections() {
         typealias Connection = FetchDestinationPolicy.Connection
         let allowed: [[Connection]] = [
             [Connection(remoteAddress: "93.184.216.34")],
             [Connection(remoteAddress: "2606:4700::1111"), Connection(remoteAddress: "[2606:4700::1111]")],
             [Connection(remoteAddress: "::ffff:8.8.8.8")],
-            // A system proxy (here on the LAN) resolves the target itself.
-            [Connection(remoteAddress: "192.168.1.2", isProxyConnection: true)],
-            [Connection(remoteAddress: nil, isProxyConnection: true)],
         ]
         let rejected: [[Connection]] = [
             [],
+            // A proxy resolves the target itself, so the upstream can't be
+            // verified, even when the proxy's own address is public.
+            [Connection(remoteAddress: "192.168.1.2", isProxyConnection: true)],
+            [Connection(remoteAddress: "93.184.216.34", isProxyConnection: true)],
+            [Connection(remoteAddress: nil, isProxyConnection: true)],
             [Connection(remoteAddress: nil)],
             [Connection(remoteAddress: "example.com")],
             [Connection(remoteAddress: "127.0.0.1")],

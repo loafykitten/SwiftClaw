@@ -77,10 +77,10 @@ nonisolated enum FetchDestinationPolicy {
     /// body's origin can't be vouched for), or a missing or unparseable
     /// address all reject.
     ///
-    /// A system-proxy hop is allowed without an address check: its remote
-    /// address is the proxy's (often on the LAN by design), and the proxy —
-    /// configured by the user or their admin — resolves the target itself.
-    /// The pre-flight ``allows(_:resolveHost:)`` check still applies to it.
+    /// A proxy hop rejects too: its remote address is the proxy's, and the
+    /// proxy resolves the target itself, so the upstream destination can't be
+    /// verified. The fetch session bypasses proxies, so this only fires if a
+    /// load is proxied anyway.
     static func allowsConnections(_ connections: [Connection]) -> Bool {
         !connections.isEmpty && connections.allSatisfy { connection in
             switch connection.fetchType {
@@ -90,7 +90,7 @@ nonisolated enum FetchDestinationPolicy {
                 return false
             }
             if connection.isProxyConnection {
-                return true
+                return false
             }
             guard let remoteAddress = connection.remoteAddress,
                   let address = remoteAddressBytes(remoteAddress) else {

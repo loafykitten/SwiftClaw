@@ -64,8 +64,9 @@ nonisolated struct PageFetcher: Sendable {
 
     /// Isolated from `URLSession.shared`: no cookies, credentials, or cache
     /// are shared with the rest of the app or carried between sources. With
-    /// no URL cache every transaction is a network load, so its metrics name
-    /// the address it connected to.
+    /// no URL cache every transaction is a network load, and with no proxy it
+    /// connects directly, so its metrics name the address the target resolved
+    /// to (a proxy would resolve it out of sight of the destination policy).
     static let isolatedSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
@@ -73,6 +74,7 @@ nonisolated struct PageFetcher: Sendable {
         configuration.urlCredentialStorage = nil
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.connectionProxyDictionary = [:]
         return URLSession(configuration: configuration)
     }()
 
