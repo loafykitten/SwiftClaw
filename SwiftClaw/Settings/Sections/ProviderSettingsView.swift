@@ -36,21 +36,21 @@ struct ProviderSettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
-                SecretKeyRow(title: "API Key", text: $azureAPIKey)
+                SecretKeyRow(title: "API Key", secret: $azureAPIKey)
                 AzureDeploymentListEditor(deployments: $azureDeployments)
             } header: {
                 Text("Azure")
             }
 
             Section(isExpanded: $neuralwattExpanded) {
-                SecretKeyRow(title: "API Key", text: $neuralwattAPIKey)
+                SecretKeyRow(title: "API Key", secret: $neuralwattAPIKey)
                 ProviderModelListEditor(models: $neuralwattModels)
             } header: {
                 Text("Neuralwatt")
             }
 
             Section(isExpanded: $openRouterExpanded) {
-                SecretKeyRow(title: "API Key", text: $openRouterAPIKey)
+                SecretKeyRow(title: "API Key", secret: $openRouterAPIKey)
                 ProviderModelListEditor(models: $openRouterModels)
             } header: {
                 Text("OpenRouter")
@@ -59,7 +59,7 @@ struct ProviderSettingsView: View {
             Section(isExpanded: $braveSearchExpanded) {
                 SecretKeyRow(
                     title: "API Key",
-                    text: $braveSearchAPIKey,
+                    secret: $braveSearchAPIKey,
                     helpText: "Used by the Web Search and Investigation tools."
                 )
 

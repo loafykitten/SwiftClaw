@@ -26,15 +26,24 @@ struct APIKeyField: View {
     }
 }
 
+/// An API-key row backed by `@KeychainStorage`. A rejected Keychain write is
+/// called out inline, since inference keeps using the old (or no) credential
+/// while the field shows the new one.
 struct SecretKeyRow: View {
     let title: String
-    @Binding var text: String
+    let secret: KeychainStorage.Projection
     var helpText: String?
 
     var body: some View {
         LabeledContent(title) {
-            APIKeyField(title: title, text: $text)
+            APIKeyField(title: title, text: secret.text)
                 .frame(maxWidth: 360)
+        }
+
+        if let failure = secret.entry.saveFailureMessage {
+            Label(failure, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
         }
 
         if let helpText {

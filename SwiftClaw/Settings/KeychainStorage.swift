@@ -137,29 +137,78 @@ nonisolated enum Keychain {
     }
 }
 
-/// Like `@AppStorage`, but backed by the Keychain. Use for secrets such as API keys.
+/// What a secret field shows versus what the Keychain holds. A failed write
+/// keeps the typed value on screen (so the user doesn't lose it) but leaves
+/// `persisted` at the last value that actually landed, so the field can say
+/// the change didn't save instead of looking like the credential is in use.
+nonisolated struct KeychainEntry: Equatable, Sendable {
+    private(set) var entered: String
+    private(set) var persisted: String
+
+    init(persisted: String) {
+        self.entered = persisted
+        self.persisted = persisted
+    }
+
+    /// Whether the field shows a value the Keychain doesn't hold.
+    var isUnsaved: Bool {
+        entered != persisted
+    }
+
+    /// Shows `newValue` and stores it through `write` (`Keychain.set` in
+    /// production), which returns `false` when the Keychain rejected it.
+    mutating func update(_ newValue: String, write: (String) -> Bool) {
+        entered = newValue
+        if write(newValue) {
+            persisted = newValue
+        }
+    }
+
+    /// Inline copy for a field whose last write failed; `nil` once saved.
+    var saveFailureMessage: String? {
+        guard isUnsaved else { return nil }
+        if entered.isEmpty {
+            return "Couldn't remove this key from the Keychain, so the saved key is still in use."
+        }
+        if persisted.isEmpty {
+            return "Couldn't save this key to the Keychain, so no key is in use. Edit it to try again."
+        }
+        return "Couldn't save this key to the Keychain, so the previously saved key is still in use. Edit it to try again."
+    }
+}
+
+/// Like `@AppStorage`, but backed by the Keychain. Use for secrets such as API
+/// keys. Every edit is written immediately; `$value.text` binds a field and
+/// `$value.entry` says whether the Keychain actually holds what it shows.
 @propertyWrapper
 struct KeychainStorage: DynamicProperty {
-    @State private var value: String
+    struct Projection {
+        let text: Binding<String>
+        let entry: KeychainEntry
+    }
+
+    @State private var entry: KeychainEntry
     private let key: String
 
     init(_ key: String) {
         self.key = key
-        _value = State(initialValue: Keychain.string(forKey: key) ?? "")
+        _entry = State(initialValue: KeychainEntry(persisted: Keychain.string(forKey: key) ?? ""))
     }
 
     var wrappedValue: String {
-        get { value }
+        get { entry.entered }
         nonmutating set {
-            value = newValue
-            Keychain.set(newValue, forKey: key)
+            entry.update(newValue) { Keychain.set($0, forKey: key) }
         }
     }
 
-    var projectedValue: Binding<String> {
-        Binding(
-            get: { wrappedValue },
-            set: { wrappedValue = $0 }
+    var projectedValue: Projection {
+        Projection(
+            text: Binding(
+                get: { wrappedValue },
+                set: { wrappedValue = $0 }
+            ),
+            entry: entry
         )
     }
 }

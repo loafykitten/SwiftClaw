@@ -9,6 +9,10 @@ All settings code lives in `Settings/`.
    (API keys, IMAP/SMTP passwords). Use `Keychain.set/delete/string(forKey:)`
    outside SwiftUI. Per-account keys are runtime values, so account passwords
    use `Keychain.set(...)` directly rather than the property wrapper.
+   The wrapper keeps what the field shows apart from what the Keychain holds
+   (`KeychainEntry`): bind fields with `$key.text`, and show them through
+   `SecretKeyRow(secret: $key)` so a rejected write is flagged inline instead
+   of looking saved.
    `Keychain.set`/`delete` return `false` on failure — check it wherever a
    user confirms a save, and never delete a migration source until the
    Keychain verifiably holds the value.

@@ -84,4 +84,59 @@ struct KeychainTests {
         #expect(writes == 0)
         #expect(fixture.defaults.string(forKey: key) == nil)
     }
+
+    // MARK: - KeychainEntry (what @KeychainStorage fields show)
+
+    @Test func entryTracksSuccessfulWrites() {
+        var entry = KeychainEntry(persisted: "sk-old")
+        var written: [String] = []
+
+        entry.update("sk-new") { written.append($0); return true }
+
+        #expect(written == ["sk-new"])
+        #expect(entry.entered == "sk-new")
+        #expect(entry.persisted == "sk-new")
+        #expect(!entry.isUnsaved)
+        #expect(entry.saveFailureMessage == nil)
+    }
+
+    @Test func failedWriteKeepsEntryButMarksItUnsaved() throws {
+        var entry = KeychainEntry(persisted: "sk-old")
+
+        entry.update("sk-new") { _ in false }
+
+        #expect(entry.entered == "sk-new")
+        #expect(entry.persisted == "sk-old")
+        #expect(entry.isUnsaved)
+        let message = try #require(entry.saveFailureMessage)
+        #expect(message.contains("previously saved key is still in use"))
+
+        // The next edit retries; once a write lands the warning clears.
+        entry.update("sk-newer") { _ in true }
+        #expect(entry.persisted == "sk-newer")
+        #expect(entry.saveFailureMessage == nil)
+    }
+
+    @Test func failureMessageDistinguishesMissingAndUndeletedKeys() throws {
+        var firstKey = KeychainEntry(persisted: "")
+        firstKey.update("sk-first") { _ in false }
+        #expect(try #require(firstKey.saveFailureMessage).contains("no key is in use"))
+
+        var cleared = KeychainEntry(persisted: "sk-old")
+        cleared.update("") { _ in false }
+        #expect(try #require(cleared.saveFailureMessage).contains("Couldn't remove"))
+    }
+
+    /// End to end against the real Keychain: a successful `Keychain.set`
+    /// round-trips through the entry (unique test account, cleaned up).
+    @Test func entryPersistsThroughTheKeychain() {
+        let key = "SwiftClawTests.keychainEntry.\(UUID().uuidString)"
+        defer { Keychain.delete(key) }
+        var entry = KeychainEntry(persisted: Keychain.string(forKey: key) ?? "")
+
+        entry.update("sk-live") { Keychain.set($0, forKey: key) }
+
+        #expect(!entry.isUnsaved)
+        #expect(Keychain.string(forKey: key) == "sk-live")
+    }
 }
