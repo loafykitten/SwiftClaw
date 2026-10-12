@@ -204,7 +204,11 @@ actor IMAPSessionPool {
         // their own.
         sessions = sessions.filter { $0.key.accountID != key.accountID || $0.key.channel != key.channel }
         let fresh = IMAPSession<IMAPServer>(host: key.host, port: key.port) { host, port in
-            IMAPServer(host: host, port: port)
+            IMAPServer(
+                host: host,
+                port: port,
+                transportSecurity: MailTransportPolicy.imap(port: port)
+            )
         }
         sessions[key] = fresh
         return fresh

@@ -20,6 +20,12 @@ struct EmailReplySenderTests {
         #expect(draft.bodyText.contains("wrote:"))
     }
 
+    @Test func parseAddressesKeepsQuotedCommasTogether() {
+        #expect(EmailReplySender.parseAddresses(
+            "\"Smith, Alice\" <alice@example.com>, Bob <bob@example.com>"
+        ) == ["\"Smith, Alice\" <alice@example.com>", "Bob <bob@example.com>"])
+    }
+
     @Test func draftDoesNotDoubleTheReplyMarker() throws {
         let container = try EmailRepositoryTests.inMemoryContainer()
         let email = try Self.seedEmail(in: container, subject: "Re: Already a reply")

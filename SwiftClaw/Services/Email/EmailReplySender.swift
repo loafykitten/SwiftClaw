@@ -19,8 +19,8 @@ enum EmailReplySender {
 
     static func draft(replyingTo email: Email) -> ReplyDraft {
         ReplyDraft(
-            toAddresses: email.fromAddress,
-            ccAddresses: email.ccAddresses.joined(separator: ", "),
+            toAddresses: EmailAddressParser.listEntry(email.fromAddress),
+            ccAddresses: email.ccAddresses.map(EmailAddressParser.listEntry).joined(separator: ", "),
             // Recognize the full reply/forward marker set (re/fw/fwd/aw/wg) so
             // non-English or forwarded subjects don't get a doubled "Re: " prefix.
             subject: ThreadResolver.replyMarker(email.subject).isEmpty
@@ -124,17 +124,18 @@ enum EmailReplySender {
         )
     }
 
+    /// Splits a recipient field into individual addresses, keeping display
+    /// names (`Alice Smith <alice@example.com>`). Commas inside a quoted
+    /// display name don't split; `SwiftMailClient` extracts the bare address
+    /// for the SMTP envelope.
     static func parseAddresses(_ raw: String) -> [String] {
-        raw
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        EmailAddressParser.split(raw)
     }
 
     /// Extracts the domain for the Message-ID host (e.g. `me@example.com`
     /// → `example.com`). Falls back to `localhost` if parsing fails.
     private static func fromAddressDomain(of account: StoredEmailAccount) -> String {
-        let address = account.fromAddress
+        let address = EmailAddressParser.mailbox(account.fromAddress).address
         if let at = address.lastIndex(of: "@"),
            at < address.endIndex {
             let domain = address[address.index(after: at)...]

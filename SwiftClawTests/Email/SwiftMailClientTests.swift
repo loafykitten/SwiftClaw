@@ -109,6 +109,56 @@ struct SwiftMailClientTests {
         #expect(folders.first?.name == "inbox")
     }
 
+    // MARK: - Transport security
+
+    @Test(arguments: [
+        (993, MailTransportSecurity.implicitTLS),
+        (143, MailTransportSecurity.startTLS),
+        (1143, MailTransportSecurity.implicitTLS),
+    ])
+    func imapNeverAllowsPlaintextLogin(_ port: Int, _ expected: MailTransportSecurity) {
+        #expect(MailTransportPolicy.imap(port: port) == expected)
+    }
+
+    @Test(arguments: [
+        (465, MailTransportSecurity.implicitTLS),
+        (587, MailTransportSecurity.startTLS),
+        (25, MailTransportSecurity.startTLS),
+        (2525, MailTransportSecurity.startTLS),
+    ])
+    func smtpNeverAllowsPlaintextLogin(_ port: Int, _ expected: MailTransportSecurity) {
+        #expect(MailTransportPolicy.smtp(port: port) == expected)
+    }
+
+    // MARK: - Expunge scoping
+
+    @Test func expungeIsUIDScopedWithUIDPlus() {
+        #expect(SwiftMailClient.expungePlan(target: 5, supportsUIDPlus: true, alreadyDeleted: [3, 4]) == .uidExpunge)
+    }
+
+    @Test func expungeWithoutUIDPlusOnlyWhenNothingElseIsPending() {
+        #expect(SwiftMailClient.expungePlan(target: 5, supportsUIDPlus: false, alreadyDeleted: []) == .expungeMailbox)
+        #expect(SwiftMailClient.expungePlan(target: 5, supportsUIDPlus: false, alreadyDeleted: [5]) == .expungeMailbox)
+        #expect(
+            SwiftMailClient.expungePlan(target: 5, supportsUIDPlus: false, alreadyDeleted: [3]) == .leaveFlagged,
+            "another client's staged deletion must not be committed as a side effect"
+        )
+    }
+
+    // MARK: - SMTP addresses
+
+    @Test func envelopeAddressDropsTheDisplayName() throws {
+        let parsed = try #require(SwiftMailClient.swiftMailAddress("Alice Smith <alice@example.com>"))
+        #expect(parsed.address == "alice@example.com")
+        #expect(parsed.name == "Alice Smith")
+
+        let bare = try #require(SwiftMailClient.swiftMailAddress("bob@example.com"))
+        #expect(bare.address == "bob@example.com")
+        #expect(bare.name == nil)
+
+        #expect(SwiftMailClient.swiftMailAddress("undisclosed-recipients:;") == nil)
+    }
+
     // MARK: - Helpers
 
     private static func completeAccount(id: UUID) -> StoredEmailAccount {

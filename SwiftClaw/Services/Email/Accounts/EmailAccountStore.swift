@@ -211,6 +211,32 @@ final class EmailAccountStore {
         persist()
     }
 
+    /// Applies server-discovered folder metadata (LIST / SPECIAL-USE results)
+    /// to the account as it is stored *now*, not to the snapshot the request
+    /// started from. Discovery awaits the network, so writing the snapshot
+    /// back wholesale would undo edits made meanwhile and `update` would
+    /// resurrect a deleted account. No-ops (returning `false`) when the account
+    /// is gone or its IMAP connection settings changed, since the discovered
+    /// folders then describe a different server/mailbox set.
+    @discardableResult
+    func mergeDiscoveredFolders(
+        into snapshot: StoredEmailAccount,
+        _ apply: (inout StoredEmailAccount) -> Void
+    ) -> Bool {
+        guard let index = accounts.firstIndex(where: { $0.id == snapshot.id }) else { return false }
+        let current = accounts[index]
+        guard current.imapHost == snapshot.imapHost,
+              current.imapPort == snapshot.imapPort,
+              current.imapUsername == snapshot.imapUsername else { return false }
+        var merged = current
+        apply(&merged)
+        if merged != current {
+            accounts[index] = merged
+            persist()
+        }
+        return true
+    }
+
     func remove(_ account: StoredEmailAccount, deleteKeychain: Bool = true) {
         accounts.removeAll(where: { $0.id == account.id })
         if deleteKeychain {

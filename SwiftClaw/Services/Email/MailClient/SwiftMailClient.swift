@@ -22,6 +22,27 @@ import SwiftMail
 /// persists the passwords). Provide `imapPasswordOverride` /
 /// `smtpPasswordOverride` to short-circuit the Keychain read for
 /// `testConnection()` only; sync paths still go through the Keychain.
+/// Transport security for every IMAP/SMTP connection SwiftClaw opens.
+///
+/// SwiftMail's `.automatic` default treats STARTTLS on IMAP 143 / SMTP 587 as
+/// opportunistic (an attacker who strips the capability gets a plaintext
+/// login) and falls back to plaintext SMTP on any other port. SwiftClaw never
+/// authenticates in the clear: implicit-TLS ports use TLS from the first byte
+/// and every other port requires a successful STARTTLS upgrade before login.
+nonisolated enum MailTransportPolicy {
+    /// IMAP 143 is the STARTTLS port; 993 and anything non-standard use
+    /// implicit TLS.
+    static func imap(port: Int) -> MailTransportSecurity {
+        port == 143 ? .startTLS : .implicitTLS
+    }
+
+    /// SMTP 465 is implicit TLS; 587, 25, 2525, and other submission ports
+    /// must upgrade with STARTTLS.
+    static func smtp(port: Int) -> MailTransportSecurity {
+        port == 465 ? .implicitTLS : .startTLS
+    }
+}
+
 final class SwiftMailClient: MailClient, @unchecked Sendable {
     private static let logger = AppLog.make("mail")
 
@@ -84,7 +105,7 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
         }
 
         // SMTP.
-        let smtpServer = SwiftMail.SMTPServer(host: smtpHost, port: smtpPort)
+        let smtpServer = makeSMTPServer()
         do {
             try await smtpServer.connect()
             try await smtpServer.login(username: smtpUsername, password: smtpPassword ?? "")
@@ -216,19 +237,19 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             // name heuristics, and Gmail's archive (`\All`) never appears in
             // the catalog. Clobbering those with nil would break the Sent
             // APPEND and archive paths.
-            var updated = account
-            updated.folders = folders
             func catalogName(for role: MailFolderRole) -> String? {
                 folders.first { $0.role == role }?.name
             }
-            updated.sentMailbox = catalogName(for: .sent) ?? updated.sentMailbox
-            updated.draftsMailbox = catalogName(for: .drafts) ?? updated.draftsMailbox
-            updated.trashMailbox = catalogName(for: .trash) ?? updated.trashMailbox
-            updated.archiveMailbox = catalogName(for: .archive) ?? updated.archiveMailbox
-            updated.junkMailbox = catalogName(for: .junk) ?? updated.junkMailbox
-            let accountToUpdate = updated
+            let snapshot = account
             await MainActor.run {
-                EmailAccountStore.shared.update(accountToUpdate)
+                EmailAccountStore.shared.mergeDiscoveredFolders(into: snapshot) { updated in
+                    updated.folders = folders
+                    updated.sentMailbox = catalogName(for: .sent) ?? updated.sentMailbox
+                    updated.draftsMailbox = catalogName(for: .drafts) ?? updated.draftsMailbox
+                    updated.trashMailbox = catalogName(for: .trash) ?? updated.trashMailbox
+                    updated.archiveMailbox = catalogName(for: .archive) ?? updated.archiveMailbox
+                    updated.junkMailbox = catalogName(for: .junk) ?? updated.junkMailbox
+                }
             }
             return folders
         } catch {
@@ -274,7 +295,26 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
         do {
             try await withIMAPSession(channel: .interactive) { server in
                 _ = try await server.selectMailbox(mailbox)
-                try await server.move(message: UID(UInt32(uid)), to: destination)
+                let target = UID(UInt32(uid))
+                guard await server.supportsUIDPlus else {
+                    // SwiftMail's non-UIDPLUS fallback is COPY + \Deleted +
+                    // an unqualified EXPUNGE, which would also purge every
+                    // other message already marked \Deleted in the source
+                    // folder. Do the COPY + \Deleted ourselves and only
+                    // expunge when that can't broaden the deletion.
+                    let alreadyDeleted: UIDSet = try await server.search(criteria: [.deleted])
+                    try await server.copy(messages: UIDSet([target]), to: destination)
+                    try await server.store(flags: [.deleted], on: UIDSet([target]), operation: .add)
+                    if Self.expungePlan(
+                        target: target.value,
+                        supportsUIDPlus: false,
+                        alreadyDeleted: Set(alreadyDeleted.toArray().map(\.value))
+                    ) == .expungeMailbox {
+                        try await server.expunge()
+                    }
+                    return
+                }
+                try await server.move(message: target, to: destination)
             }
         } catch {
             throw MailClientError.fetchFailed(error.localizedDescription)
@@ -317,19 +357,67 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             try await withIMAPSession(channel: .interactive) { server in
                 _ = try await server.selectMailbox(mailbox)
 
-                let uidSet = UIDSet([UID(UInt32(uid))])
+                let target = UID(UInt32(uid))
+                let uidSet = UIDSet([target])
+                // A bare EXPUNGE removes every message flagged \Deleted in
+                // the folder, including deletions another client has staged
+                // but not committed. Scope it to this UID (UIDPLUS); without
+                // UIDPLUS, only expunge when nothing else is pending.
+                let supportsUIDPlus = await server.supportsUIDPlus
+                var alreadyDeleted: Set<UInt32> = []
+                if !supportsUIDPlus {
+                    let flagged: UIDSet = try await server.search(criteria: [.deleted])
+                    alreadyDeleted = Set(flagged.toArray().map(\.value))
+                }
                 try await server.store(flags: [.deleted], on: uidSet, operation: .add)
-                try await server.expunge()
+                switch Self.expungePlan(
+                    target: target.value,
+                    supportsUIDPlus: supportsUIDPlus,
+                    alreadyDeleted: alreadyDeleted
+                ) {
+                case .uidExpunge:
+                    try await server.expunge(messages: uidSet)
+                case .expungeMailbox:
+                    try await server.expunge()
+                case .leaveFlagged:
+                    throw MailClientError.unsupported(
+                        "The server can't expunge a single message while other deletions are pending; "
+                            + "it's marked deleted and will be removed when the folder is next expunged."
+                    )
+                }
             }
+        } catch let error as MailClientError {
+            throw error
         } catch {
             throw MailClientError.fetchFailed(error.localizedDescription)
         }
     }
 
+    /// How to commit a `\Deleted` flag on `target` without expunging any
+    /// other message. `alreadyDeleted` is the folder's `\Deleted` set as of
+    /// before `target` was flagged (only consulted without UIDPLUS).
+    enum ExpungePlan: Equatable {
+        /// `UID EXPUNGE <target>` (RFC 4315) — removes exactly one message.
+        case uidExpunge
+        /// Plain `EXPUNGE` — safe only because nothing else was flagged.
+        case expungeMailbox
+        /// Leave `target` flagged; a plain EXPUNGE would broaden the delete.
+        case leaveFlagged
+    }
+
+    static func expungePlan(
+        target: UInt32,
+        supportsUIDPlus: Bool,
+        alreadyDeleted: Set<UInt32>
+    ) -> ExpungePlan {
+        if supportsUIDPlus { return .uidExpunge }
+        return alreadyDeleted.subtracting([target]).isEmpty ? .expungeMailbox : .leaveFlagged
+    }
+
     func send(_ email: OutgoingEmail) async throws {
         guard isConfigured else { throw MailClientError.notConfigured }
 
-        let server = SwiftMail.SMTPServer(host: smtpHost, port: smtpPort)
+        let server = makeSMTPServer()
         do {
             try await server.connect()
             try await server.login(username: smtpUsername, password: smtpPassword ?? "")
@@ -374,31 +462,26 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
         }
 
         do {
-            let startingAccount = account
-            let accountToUpdate = try await withIMAPSession(channel: .interactive) { server in
+            let resolved = try await withIMAPSession(channel: .interactive) { server in
                 _ = try await server.listSpecialUseMailboxes()
-
-                var updated = startingAccount
-                if updated.archiveMailbox == nil,
-                   let archive = try? await server.archiveFolder.name {
-                    updated.archiveMailbox = archive
-                }
-                if updated.trashMailbox == nil,
-                   let trash = try? await server.trashFolder.name {
-                    updated.trashMailbox = trash
-                }
-                if updated.sentMailbox == nil,
-                   let sent = try? await server.sentFolder.name {
-                    updated.sentMailbox = sent
-                }
-                return updated
+                return (
+                    archive: try? await server.archiveFolder.name,
+                    trash: try? await server.trashFolder.name,
+                    sent: try? await server.sentFolder.name
+                )
             }
 
             // Persist the resolved names back to `EmailAccountStore` so
             // subsequent archive/delete/send calls hit the cache instead of
-            // re-listing mailboxes every time.
+            // re-listing mailboxes every time. Fill only names that are still
+            // unresolved on the current account.
+            let snapshot = account
             await MainActor.run {
-                EmailAccountStore.shared.update(accountToUpdate)
+                EmailAccountStore.shared.mergeDiscoveredFolders(into: snapshot) { updated in
+                    if updated.archiveMailbox == nil { updated.archiveMailbox = resolved.archive }
+                    if updated.trashMailbox == nil { updated.trashMailbox = resolved.trash }
+                    if updated.sentMailbox == nil { updated.sentMailbox = resolved.sent }
+                }
             }
         } catch {
             Self.logger.error("""
@@ -449,10 +532,10 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             additionalHeaders["References"] = email.references.joined(separator: " ")
         }
         var swiftMailEmail = SwiftMail.Email(
-            sender: EmailAddress(address: email.fromAddress),
-            recipients: email.toAddresses.map { EmailAddress(address: $0) },
-            ccRecipients: email.ccAddresses.map { EmailAddress(address: $0) },
-            bccRecipients: email.bccAddresses.map { EmailAddress(address: $0) },
+            sender: swiftMailAddress(email.fromAddress) ?? EmailAddress(address: email.fromAddress),
+            recipients: email.toAddresses.compactMap(swiftMailAddress),
+            ccRecipients: email.ccAddresses.compactMap(swiftMailAddress),
+            bccRecipients: email.bccAddresses.compactMap(swiftMailAddress),
             subject: email.subject,
             textBody: email.bodyText,
             htmlBody: email.bodyHTML
@@ -466,6 +549,16 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             swiftMailEmail.messageID = parsed
         }
         return swiftMailEmail
+    }
+
+    /// Maps a stored address (`Alice Smith <alice@example.com>` or a bare
+    /// address) to SwiftMail's split form: SMTP `MAIL FROM` / `RCPT TO` use
+    /// only `address`, the display name stays in the headers. `nil` for an
+    /// entry with no address (e.g. an empty group like `undisclosed-recipients:;`).
+    static func swiftMailAddress(_ raw: String) -> EmailAddress? {
+        let mailbox = EmailAddressParser.mailbox(raw)
+        guard mailbox.address.contains("@") else { return nil }
+        return EmailAddress(name: mailbox.name, address: mailbox.address)
     }
 
     /// Resolves the account's Archive mailbox name. Triggers a one-shot
@@ -570,7 +663,19 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
     /// with password overrides that shouldn't touch the shared sessions).
     /// Every other IMAP operation goes through `withIMAPSession`.
     private func makeIMAPServer() -> IMAPServer {
-        IMAPServer(host: imapHost, port: imapPort)
+        IMAPServer(
+            host: imapHost,
+            port: imapPort,
+            transportSecurity: MailTransportPolicy.imap(port: imapPort)
+        )
+    }
+
+    private func makeSMTPServer() -> SwiftMail.SMTPServer {
+        SwiftMail.SMTPServer(
+            host: smtpHost,
+            port: smtpPort,
+            transportSecurity: MailTransportPolicy.smtp(port: smtpPort)
+        )
     }
 
     /// Runs `body` on the account's persistent IMAP session for the given

@@ -225,6 +225,66 @@ struct EmailAccountStoreTests {
         #expect(legacy.reviewIncludedMailboxes == nil)
     }
 
+    @Test func folderDiscoveryDoesNotResurrectARemovedAccount() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        let store = EmailAccountStore(userDefaults: fixture.defaults)
+        let snapshot = Self.completeAccount()
+        store.add(snapshot)
+        store.remove(snapshot)
+
+        let applied = store.mergeDiscoveredFolders(into: snapshot) { $0.trashMailbox = "Trash" }
+
+        #expect(!applied)
+        #expect(store.accounts.isEmpty)
+    }
+
+    @Test func folderDiscoveryKeepsEditsMadeDuringTheRequest() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        let store = EmailAccountStore(userDefaults: fixture.defaults)
+        let snapshot = Self.completeAccount()
+        store.add(snapshot)
+        var edited = snapshot
+        edited.displayName = "Renamed"
+        edited.reviewIncludedMailboxes = ["Receipts"]
+        store.update(edited)
+
+        let folders = [MailFolderDescriptor(name: "Receipts", role: .custom, delimiter: "/")]
+        let applied = store.mergeDiscoveredFolders(into: snapshot) {
+            $0.folders = folders
+            $0.trashMailbox = "Deleted Items"
+        }
+
+        let reload = EmailAccountStore(userDefaults: fixture.defaults)
+        let stored = try #require(reload.account(for: snapshot.id))
+        #expect(applied)
+        #expect(stored.displayName == "Renamed")
+        #expect(stored.reviewIncludedMailboxes == ["Receipts"])
+        #expect(stored.folders == folders)
+        #expect(stored.trashMailbox == "Deleted Items")
+    }
+
+    @Test func folderDiscoveryIsDroppedWhenTheServerChanged() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+
+        let store = EmailAccountStore(userDefaults: fixture.defaults)
+        let snapshot = Self.completeAccount()
+        store.add(snapshot)
+        var edited = snapshot
+        edited.imapHost = "imap.other.com"
+        store.update(edited)
+
+        let applied = store.mergeDiscoveredFolders(into: snapshot) { $0.trashMailbox = "Trash" }
+
+        #expect(!applied)
+        #expect(store.account(for: snapshot.id)?.trashMailbox == nil)
+        #expect(store.account(for: snapshot.id)?.imapHost == "imap.other.com")
+    }
+
     private static func completeAccount() -> StoredEmailAccount {
         StoredEmailAccount(
             displayName: "Work",
