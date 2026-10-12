@@ -8,7 +8,12 @@ struct ResearchSessionFlowView: View {
     @Bindable var session: ResearchSession
 
     var body: some View {
+        // Keyed by session so switching sessions in the macOS detail column
+        // (which reuses this view) resets each screen's @State — otherwise an
+        // edited plan or clarify answers from one session would be submitted
+        // against the next.
         content
+            .id(session.id)
             .navigationTitle(session.title)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
