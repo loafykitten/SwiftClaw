@@ -149,9 +149,9 @@ struct NotesOnboardingSheet: View {
     private func createAppManagedVault() async {
         isWorking = true
         errorMessage = nil
-        await model.chooseAppManagedVault()
+        let didSwitch = await model.chooseAppManagedVault()
         isWorking = false
-        if model.configurationState == .configured {
+        if didSwitch, model.configurationState == .configured {
             complete()
         } else {
             errorMessage = model.lastConfigurationError?.errorDescription ?? "Couldn't set up a vault."
@@ -195,9 +195,9 @@ struct NotesOnboardingSheet: View {
     private func configureExternalVault(url: URL) async {
         isWorking = true
         errorMessage = nil
-        await model.chooseExternalVault(url: url)
+        let didSwitch = await model.chooseExternalVault(url: url)
         isWorking = false
-        if model.configurationState == .configured {
+        if didSwitch, model.configurationState == .configured {
             complete()
         } else {
             errorMessage = model.lastConfigurationError?.errorDescription ?? "Couldn't open that folder."

@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Reading mode for a note's currently persisted content. Wikilink taps
-/// navigate to a matching note in the current catalog when one can be
-/// found by stem or exact relative path (an approximate, non-indexed
-/// resolution — Phase 3's link graph replaces this with a real one).
+/// navigate to the note the link graph's resolution policy picks from the
+/// current catalog (exact path first, then a unique stem; ambiguous links
+/// open nothing).
 /// Relative image references (`![alt](path)` and `![[embed]]`) are loaded
 /// only through `NotesRepository.readData(relativePath:)`, resolved first
 /// relative to the note's own folder — the standard Markdown interpretation
@@ -23,8 +23,9 @@ struct NoteReadingView: View {
                 source: content,
                 imageLoadScope: notePath,
                 onWikilinkTap: { target in
-                    guard let match = Self.matchingNote(forTarget: target, in: model.notes) else { return }
-                    Task { await model.select(path: match.relativePath) }
+                    guard let path = Self.matchingNotePath(forTarget: target, from: notePath, in: model.notes),
+                          path != notePath else { return }
+                    Task { await model.select(path: path) }
                 },
                 loadImage: { relativePath in
                     await Self.loadImage(relativePath: relativePath, notePath: notePath, model: model)
@@ -36,13 +37,11 @@ struct NoteReadingView: View {
         .accessibilityLabel("Note content, reading mode")
     }
 
-    private static func matchingNote(forTarget target: String, in notes: [NoteSummary]) -> NoteSummary? {
-        notes.first {
-            $0.relativePath == target
-                || $0.relativePath == "\(target).md"
-                || $0.relativePath.caseInsensitiveCompare("\(target).md") == .orderedSame
-                || $0.title.caseInsensitiveCompare(target) == .orderedSame
-        }
+    /// The same resolution policy as backlinks and broken-link health
+    /// (`NoteLinkGraph.resolve`): an exact path match beats any stem match,
+    /// and an ambiguous target opens nothing rather than an arbitrary note.
+    static func matchingNotePath(forTarget target: String, from notePath: String, in notes: [NoteSummary]) -> String? {
+        NoteLinkGraph.resolve(target: target, sourcePath: notePath, among: notes.map(\.relativePath))
     }
 
     private static func loadImage(relativePath: String, notePath: String, model: NotesFeatureModel) async -> PlatformImage? {

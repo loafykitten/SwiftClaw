@@ -183,6 +183,11 @@ struct NotesSettingsView: View {
         } footer: {
             if model.configurationState != .configured, let message = model.lastConfigurationError?.errorDescription {
                 Text(message)
+            } else if model.lastConfigurationError == .unsavedEditorChanges,
+                      let message = model.lastConfigurationError?.errorDescription {
+                // A refused reset/switch leaves the vault configured; say why.
+                Text(message)
+                    .foregroundStyle(.red)
             } else if model.configurationState != .configured {
                 Text("No vault configured yet. Choose or create one to start taking notes.")
             }

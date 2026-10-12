@@ -25,6 +25,13 @@ enum NotesError: LocalizedError, Equatable {
     /// A revision row became stale (for example, retention pruned it while
     /// its sheet was open). No live note or conflict copy was changed.
     case revisionNotFound(String)
+    /// A vault reset/switch was refused because the open note's buffer
+    /// couldn't be saved — tearing the editor down would have discarded the
+    /// only copy. Nothing about the vault configuration changed.
+    case unsavedEditorChanges
+    /// A hash-guarded operation (a proposal's conditional rename) found the
+    /// note changed since its expected version. Nothing was changed.
+    case noteChanged(String)
     /// Wraps an error from `NotesVault`/`NoteRevisionStore` (or anything
     /// else) that doesn't need its own case — its message is reused as-is.
     case underlying(String)
@@ -45,6 +52,10 @@ enum NotesError: LocalizedError, Equatable {
             "\"\(path)\" isn't a visible Markdown note path."
         case .revisionNotFound:
             "That revision is no longer available. Refresh Revisions and try again."
+        case .unsavedEditorChanges:
+            "The open note has changes that couldn't be saved. Save or copy them, then try again."
+        case .noteChanged(let path):
+            "\"\(path)\" changed since it was read, so nothing was changed."
         case .underlying(let message):
             message
         }
@@ -56,6 +67,9 @@ enum NotesError: LocalizedError, Equatable {
     static func from(_ error: Error) -> NotesError {
         if let notesError = error as? NotesError {
             return notesError
+        }
+        if case NotesVault.VaultError.contentChanged(let path)? = error as? NotesVault.VaultError {
+            return .noteChanged(path)
         }
         if let localized = error as? LocalizedError, let description = localized.errorDescription {
             return .underlying(description)

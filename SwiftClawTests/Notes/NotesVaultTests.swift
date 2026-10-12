@@ -2,6 +2,34 @@ import Foundation
 import Testing
 @testable import SwiftClaw
 
+/// Simulates a sibling conflict file created by another process right after
+/// `NotesVault` checked that its name was unused: the first existence probe
+/// for a conflict-copy name creates that file, yet still answers "absent".
+private nonisolated final class SiblingAppearsAfterCheckFileManager: FileManager, @unchecked Sendable {
+    /// Shared with the test separately, since the file manager itself is
+    /// handed off to the vault actor.
+    let racedPath: LockedValue<String?>
+
+    init(racedPath: LockedValue<String?>) {
+        self.racedPath = racedPath
+        super.init()
+    }
+
+    override func fileExists(atPath path: String) -> Bool {
+        var shouldRace = false
+        racedPath.update { racedPath in
+            guard racedPath == nil, path.contains("(conflict ") else { return }
+            racedPath = path
+            shouldRace = true
+        }
+        if shouldRace {
+            FileManager.default.createFile(atPath: path, contents: Data("external sibling".utf8))
+            return false
+        }
+        return super.fileExists(atPath: path)
+    }
+}
+
 struct NotesVaultTests {
     private func makeTempDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -100,6 +128,29 @@ struct NotesVaultTests {
         #expect(try await vault.read(relativePath: "note.md").content == "live content")
     }
 
+    /// Another editor/sync process can claim the chosen conflict name between
+    /// the unused-name check and publication. The hash-mismatch path must
+    /// publish create-only and move on to the next suffix, never replace it.
+    @Test func hashMismatchConflictCopyNeverOverwritesASiblingThatAppearsAfterTheNameCheck() async throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let racedPathBox = LockedValue<String?>(nil)
+        let vault = NotesVault(root: root, fileManager: SiblingAppearsAfterCheckFileManager(racedPath: racedPathBox))
+        _ = try await vault.write(relativePath: "note.md", content: "live", expectedHash: nil)
+
+        let outcome = try await vault.write(relativePath: "note.md", content: "our stale edit", expectedHash: "stale-hash")
+
+        guard case .conflict(let conflictSnapshot) = outcome else {
+            Issue.record("expected a conflict")
+            return
+        }
+        let racedPath = try #require(racedPathBox.value)
+        #expect(try String(contentsOfFile: racedPath, encoding: .utf8) == "external sibling")
+        #expect(conflictSnapshot.relativePath != URL(fileURLWithPath: racedPath).lastPathComponent)
+        #expect(conflictSnapshot.content == "our stale edit")
+        #expect(try await vault.read(relativePath: "note.md").content == "live")
+    }
+
     @Test func explicitConflictCopyRequiresAnExistingSafeSourceNote() async throws {
         let root = try makeTempDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -142,6 +193,30 @@ struct NotesVaultTests {
         let destinationOnDisk = try String(contentsOf: root.appendingPathComponent("destination.md"), encoding: .utf8)
         #expect(destinationOnDisk == "destination content")
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("source.md").path))
+    }
+
+    /// A hash-guarded rename moves only the version the caller saw.
+    @Test func conditionalRenameRefusesAChangedSourceAndMovesAnUnchangedOne() async throws {
+        let root = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vault = NotesVault(root: root)
+        let original = try await vault.write(relativePath: "source.md", content: "seen by the proposal", expectedHash: nil)
+        guard case .wrote(let seen) = original else {
+            Issue.record("expected a successful create")
+            return
+        }
+        try Data("edited afterwards".utf8).write(to: root.appendingPathComponent("source.md"))
+
+        await #expect(throws: NotesVault.VaultError.contentChanged("source.md")) {
+            _ = try await vault.rename(from: "source.md", to: "moved.md", expectedHash: seen.sha256)
+        }
+        #expect(try await vault.read(relativePath: "source.md").content == "edited afterwards")
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("moved.md").path))
+
+        let current = try await vault.read(relativePath: "source.md")
+        let moved = try await vault.rename(from: "source.md", to: "moved.md", expectedHash: current.sha256)
+        #expect(moved.content == "edited afterwards")
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("source.md").path))
     }
 
     @Test func enumerateSkipsHiddenEntriesAndNonMarkdownFiles() async throws {

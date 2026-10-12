@@ -19,7 +19,9 @@ and is preview-safe.
 `NotesVault`, `NoteRevisionStore`, `VaultReconciler`, `NotesIndexer`,
 `SearchIndex`, and `NoteLinkGraph` are actors for their background or mutable
 resources. A `VaultOperationLeaseCoordinator` keeps vault reset/switch from
-interleaving with proposal approval or revision restore.
+interleaving with proposal approval or revision restore. Reset/switch also
+first saves the open editor's buffer and is refused (vault unchanged) when that
+buffer can't be saved and isn't already in a conflict copy.
 
 ## Vaults and file safety (`Services/Notes/Vault/`)
 
@@ -37,9 +39,10 @@ Safety rules:
 - Reads return raw content plus SHA-256 and modification time.
 - Saves compare the caller's expected hash inside one coordinated replacement.
   A mismatch never overwrites: the attempted content becomes a sibling
-  `Name (conflict <timestamp>).md` copy.
-- Creates and renames are create-only/no-clobber operations. Deletes move files
-  to Trash.
+  `Name (conflict <timestamp>).md` copy, itself published create-only so a
+  sibling that appears meanwhile is never replaced.
+- Creates and renames are create-only/no-clobber operations; a proposal rename
+  is also hash-checked inside its coordinated move. Deletes move files to Trash.
 - `AtomicFileWriter` publishes complete content atomically; a reader never sees
   a partially written file.
 - FSEvents are hints. `VaultReconciler` debounces them and also full-scans on
@@ -82,7 +85,10 @@ normalizer.
 - `embeddings(chunk_id, model_id, dim, vector)`.
 
 `NotesIndexer` parses and chunks changed notes, skips unchanged hashes, and can
-rebuild the cache from the catalog. Search combines FTS and optional on-device
+rebuild the cache from the catalog. The startup catalog sync also drops cached
+notes the catalog lacks (deletions/renames made while the app was closed).
+Multi-statement writes run as one `SQLiteDatabase.transaction` call, never as
+separately awaited `BEGIN`/`COMMIT`s. Search combines FTS and optional on-device
 `NLEmbedding` cosine results with reciprocal-rank fusion. Missing embeddings or
 FTS5 degrade visibly instead of crashing. The generated 5,000-note performance
 gate runs without embeddings and requires a rebuild under 30 seconds.
@@ -103,7 +109,8 @@ Notes-scoped in v1 (see the cross-feature follow-ups below).
 `search_notes` and `read_note` are registered on `ToolRegistry.shared`. They are
 always allowed when Notes is enabled/configured and disappear when it is not.
 Search returns cited snippets; read returns verbatim content with a truncation
-notice when capped.
+notice when capped, and only for visible Markdown note paths (never dotfiles,
+`.git/`, or non-Markdown files).
 
 `propose_note_edit` and `propose_note_create` are request-bound chat tools. They
 insert a `NoteEditProposal` into the main local SwiftData store and queue a diff

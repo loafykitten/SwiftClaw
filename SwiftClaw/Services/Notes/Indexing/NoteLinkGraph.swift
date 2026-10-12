@@ -45,12 +45,14 @@ actor NoteLinkGraph {
     /// this type does no parsing of its own.
     func replaceLinksAndTags(forNote path: String, links: [WikilinkOccurrence], tags: [String]) async throws {
         try await ensureSchema()
-        try await database.execute("BEGIN;")
-        do {
-            try await database.execute("INSERT OR IGNORE INTO notes (path) VALUES (?);", params: [.text(path)])
-            try await database.execute("DELETE FROM links WHERE source_path = ?;", params: [.text(path)])
+        // One non-suspending database operation: see
+        // `SQLiteDatabase.transaction` for why awaiting BEGIN/COMMIT
+        // separately is unsafe on this reentrant actor.
+        try await database.transaction { database in
+            try database.execute("INSERT OR IGNORE INTO notes (path) VALUES (?);", params: [.text(path)])
+            try database.execute("DELETE FROM links WHERE source_path = ?;", params: [.text(path)])
             for link in links {
-                try await database.execute(
+                try database.execute(
                     """
                     INSERT INTO links (source_path, kind, page_path, heading, alias, normalized_path, normalized_stem)
                     VALUES (?, ?, ?, ?, ?, ?, ?);
@@ -62,17 +64,13 @@ actor NoteLinkGraph {
                     ]
                 )
             }
-            try await database.execute("DELETE FROM tags WHERE source_path = ?;", params: [.text(path)])
+            try database.execute("DELETE FROM tags WHERE source_path = ?;", params: [.text(path)])
             for tag in Set(tags) {
-                try await database.execute(
+                try database.execute(
                     "INSERT OR IGNORE INTO tags (source_path, tag) VALUES (?, ?);",
                     params: [.text(path), .text(tag)]
                 )
             }
-            try await database.execute("COMMIT;")
-        } catch {
-            try? await database.execute("ROLLBACK;")
-            throw error
         }
     }
 
@@ -83,25 +81,35 @@ actor NoteLinkGraph {
     /// current `notes` table, never cached.
     func removeNote(_ path: String) async throws {
         try await ensureSchema()
-        try await database.execute("BEGIN;")
-        do {
-            try await database.execute("DELETE FROM notes WHERE path = ?;", params: [.text(path)])
-            try await database.execute("DELETE FROM links WHERE source_path = ?;", params: [.text(path)])
-            try await database.execute("DELETE FROM tags WHERE source_path = ?;", params: [.text(path)])
-            try await database.execute("COMMIT;")
-        } catch {
-            try? await database.execute("ROLLBACK;")
-            throw error
+        try await database.transaction { database in
+            try database.execute("DELETE FROM notes WHERE path = ?;", params: [.text(path)])
+            try database.execute("DELETE FROM links WHERE source_path = ?;", params: [.text(path)])
+            try database.execute("DELETE FROM tags WHERE source_path = ?;", params: [.text(path)])
         }
     }
 
     /// Wipes all notes/links/tags back to empty — the graph is a
-    /// rebuildable cache, same contract as `SearchIndex.rebuild()`.
+    /// rebuildable cache, same contract as `SearchIndex.rebuild()`. One
+    /// transaction, so a concurrent mutation lands wholly before or after.
     func rebuild() async throws {
         try await ensureSchema()
-        try await database.execute("DELETE FROM notes;")
-        try await database.execute("DELETE FROM links;")
-        try await database.execute("DELETE FROM tags;")
+        try await database.transaction { database in
+            try database.execute("DELETE FROM notes;")
+            try database.execute("DELETE FROM links;")
+            try database.execute("DELETE FROM tags;")
+        }
+    }
+
+    /// Every note path the graph currently knows, for reconciling the cache
+    /// against a complete catalog (deletions that happened while the app
+    /// was closed never arrive as a delta).
+    func notePaths() async throws -> Set<String> {
+        try await ensureSchema()
+        let rows = try await database.query("SELECT path FROM notes UNION SELECT source_path FROM links UNION SELECT source_path FROM tags;")
+        return Set(rows.compactMap { row -> String? in
+            guard case .text(let path)? = row.first else { return nil }
+            return path
+        })
     }
 
     /// All outgoing links from `path`, resolved against the current vault state.
@@ -156,16 +164,39 @@ actor NoteLinkGraph {
     /// so path changes invalidate resolution without retaining stale state.
     private func resolutionIndex() async throws -> ResolutionIndex {
         let rows = try await database.query("SELECT path FROM notes;")
+        return Self.makeResolutionIndex(paths: rows.compactMap { row -> String? in
+            guard case .text(let path)? = row.first else { return nil }
+            return path
+        })
+    }
+
+    private static func makeResolutionIndex(paths: [String]) -> ResolutionIndex {
         var index = ResolutionIndex()
-        index.exactPaths.reserveCapacity(rows.count)
-        index.stems.reserveCapacity(rows.count)
-        for row in rows {
-            guard case .text(let path)? = row.first else { continue }
+        index.exactPaths.reserveCapacity(paths.count)
+        index.stems.reserveCapacity(paths.count)
+        for path in paths {
             let normalizedPath = WikilinkScanner.normalize(path: path)
             index.exactPaths[normalizedPath, default: []].append(path)
             index.stems[WikilinkScanner.stem(ofNormalizedPath: normalizedPath), default: []].append(path)
         }
         return index
+    }
+
+    /// Resolves a wikilink target as written (`Page`, `Folder/Page.md`,
+    /// `Page#Heading`) against `paths` with exactly the graph's policy —
+    /// exact path first, then a unique stem, never a guess between
+    /// candidates — for callers (reading mode) that resolve against the
+    /// in-memory catalog instead of the database.
+    nonisolated static func resolve(target: String, sourcePath: String, among paths: [String]) -> String? {
+        let pagePath = target.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)
+            .first.map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+        let normalizedPath = WikilinkScanner.normalize(path: pagePath)
+        return resolve(
+            normalizedPath: normalizedPath,
+            normalizedStem: WikilinkScanner.stem(ofNormalizedPath: normalizedPath),
+            sourcePath: sourcePath,
+            resolutionIndex: makeResolutionIndex(paths: paths)
+        )
     }
 
     private static func decode(row: [SQLiteValue], resolutionIndex: ResolutionIndex) throws -> ResolvedLink {

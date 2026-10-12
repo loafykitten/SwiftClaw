@@ -138,9 +138,11 @@ actor SearchIndex {
     @discardableResult
     func upsert(document: DocumentInput, chunks: [ChunkInput]) async throws -> Int64 {
         try await ensureSchema()
-        try await database.execute("BEGIN;")
-        do {
-            try await database.execute(
+        // One non-suspending database operation, so a reentrant caller can't
+        // nest a BEGIN or interleave statements (see
+        // `SQLiteDatabase.transaction`).
+        return try await database.transaction { database in
+            try database.execute(
                 """
                 INSERT INTO documents (source_type, source_id, title, uri, content_hash, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -155,16 +157,16 @@ actor SearchIndex {
                     .text(document.uri), .text(document.contentHash), .real(document.updatedAt.timeIntervalSince1970),
                 ]
             )
-            let rows = try await database.query(
+            let rows = try database.query(
                 "SELECT id FROM documents WHERE source_type = ? AND source_id = ?;",
                 params: [.text(document.sourceType), .text(document.sourceID)]
             )
             guard case .integer(let documentID)? = rows.first?.first else {
                 throw IndexError.documentLookupFailed
             }
-            try await database.execute("DELETE FROM chunks WHERE document_id = ?;", params: [.integer(documentID)])
+            try database.execute("DELETE FROM chunks WHERE document_id = ?;", params: [.integer(documentID)])
             for chunk in chunks {
-                try await database.execute(
+                try database.execute(
                     """
                     INSERT INTO chunks (document_id, ordinal, heading_path, byte_start, byte_end, content)
                     VALUES (?, ?, ?, ?, ?, ?);
@@ -175,11 +177,7 @@ actor SearchIndex {
                     ]
                 )
             }
-            try await database.execute("COMMIT;")
             return documentID
-        } catch {
-            try? await database.execute("ROLLBACK;")
-            throw error
         }
     }
 
@@ -191,6 +189,21 @@ actor SearchIndex {
             "DELETE FROM documents WHERE source_type = ? AND source_id = ?;",
             params: [.text(sourceType), .text(sourceID)]
         )
+    }
+
+    /// Every indexed source ID of `sourceType` — lets a caller reconcile the
+    /// cache against a complete catalog and drop documents whose source
+    /// vanished while nothing was watching.
+    func sourceIDs(sourceType: String) async throws -> Set<String> {
+        try await ensureSchema()
+        let rows = try await database.query(
+            "SELECT source_id FROM documents WHERE source_type = ?;",
+            params: [.text(sourceType)]
+        )
+        return Set(rows.compactMap { row -> String? in
+            guard case .text(let sourceID)? = row.first else { return nil }
+            return sourceID
+        })
     }
 
     /// Replaces a chunk's embedding for `modelID` (one embedding per

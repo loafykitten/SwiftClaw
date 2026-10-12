@@ -77,6 +77,12 @@ struct ReadNoteTool: Tool {
             !path.isEmpty else {
             throw ToolError.missingArgument("path")
         }
+        // The vault's containment checks alone would still serve dotfiles
+        // (`.env`, `.git/config`) and non-Markdown files; the model may only
+        // read what enumeration exposes.
+        guard VaultIgnoreRules.isVisibleMarkdownNotePath(path) else {
+            throw ToolError.invalidArguments("path must be a visible vault-relative Markdown note")
+        }
 
         let rawHeading = arguments["heading"]?.stringValue?
             .trimmingCharacters(in: .whitespacesAndNewlines)

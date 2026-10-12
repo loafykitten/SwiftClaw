@@ -253,32 +253,44 @@ final class NotesFeatureModel {
         await configureAndActivate(location: location)
     }
 
-    /// Onboarding action: create/open the app-managed vault.
-    func chooseAppManagedVault() async {
+    /// Onboarding action: create/open the app-managed vault. `false` when
+    /// the switch was refused before anything changed (see
+    /// `teardownCurrentVault()`); `lastConfigurationError` says why.
+    @discardableResult
+    func chooseAppManagedVault() async -> Bool {
         await applyNewVaultLocation(.appManaged)
     }
 
     /// Onboarding action: adopt a user-chosen external folder (already
     /// granted via `NSOpenPanel`), saving a fresh security-scoped bookmark
-    /// under a stable generated key.
-    func chooseExternalVault(url: URL) async {
+    /// under a stable generated key. `false` when the switch was refused
+    /// before anything changed.
+    @discardableResult
+    func chooseExternalVault(url: URL) async -> Bool {
         let key = "notes.vault.bookmark.\(UUID().uuidString)"
         do {
             try bookmarkStore.save(url: url, forKey: key)
         } catch {
             lastConfigurationError = NotesError.from(error)
-            return
+            return false
         }
-        await applyNewVaultLocation(.external(bookmarkKey: key))
+        return await applyNewVaultLocation(.external(bookmarkKey: key))
     }
 
-    private func applyNewVaultLocation(_ location: VaultLocation) async {
+    private func applyNewVaultLocation(_ location: VaultLocation) async -> Bool {
         // `currentLocation` is nil when reopening the persisted external
         // bookmark failed during startup. Fall back to the stored location so
         // choosing another vault still cleans up that obsolete bookmark.
         let previousLocation = currentLocation ?? SettingsStorage.loadNotesVaultLocation(userDefaults: userDefaults)
         let previousBookmarkKey = bookmarkKey(for: previousLocation)
-        await teardownCurrentVault()
+        guard await teardownCurrentVault() else {
+            // The current vault stays; drop the bookmark minted for the
+            // refused switch so it doesn't linger unused.
+            if let newBookmarkKey = bookmarkKey(for: location), newBookmarkKey != previousBookmarkKey {
+                bookmarkStore.remove(forKey: newBookmarkKey)
+            }
+            return false
+        }
 
         // A genuinely new/different vault gets a fresh vaultID so its
         // revisions/index never collide with (or resurrect) a previous
@@ -292,15 +304,18 @@ final class NotesFeatureModel {
         }
 
         await configureAndActivate(location: location)
+        return true
     }
 
     /// Settings action: disconnect the current vault configuration. Never
     /// touches the vault's file contents — only forgets where it is, so the
     /// next onboarding pass (or picking the same folder again) starts clean.
-    func resetVaultConfiguration() async {
+    /// `false` when refused because the open note couldn't be saved.
+    @discardableResult
+    func resetVaultConfiguration() async -> Bool {
         let persistedLocation = SettingsStorage.loadNotesVaultLocation(userDefaults: userDefaults)
         let bookmarkToRemove = bookmarkKey(for: currentLocation ?? persistedLocation)
-        await teardownCurrentVault()
+        guard await teardownCurrentVault() else { return false }
         // An approval that acquired a lease can resolve this bookmark for each
         // vault operation. Keep it available until teardown has drained that
         // approval and cleared the old vault; removing it earlier can revoke
@@ -317,6 +332,7 @@ final class NotesFeatureModel {
         userDefaults.removeObject(forKey: SettingsKeys.notesHasCompletedOnboarding)
         configurationState = .needsOnboarding
         lastConfigurationError = nil
+        return true
     }
 
     private func bookmarkKey(for location: VaultLocation?) -> String? {
@@ -634,7 +650,29 @@ final class NotesFeatureModel {
         return vaultOperationLeases.acquireLease()
     }
 
-    private func teardownCurrentVault() async {
+    /// Saves the open editor's buffer before teardown discards the editor.
+    /// `false` (with `lastConfigurationError` set) when the buffer couldn't
+    /// be saved and isn't already preserved in a conflict copy — the editor
+    /// holds the only copy, so the caller must abort the reset/switch.
+    private func preserveEditorBufferForTeardown() async -> Bool {
+        guard let editor else { return true }
+        await editor.flushPendingSave()
+        guard !editor.hasUnpreservedChanges else {
+            lastConfigurationError = .unsavedEditorChanges
+            return false
+        }
+        return true
+    }
+
+    /// `false` when teardown was refused because the open note's unsaved
+    /// buffer couldn't be preserved; nothing was torn down in that case.
+    @discardableResult
+    private func teardownCurrentVault() async -> Bool {
+        // Before anything is torn down: the editor's buffer must reach disk
+        // (or already sit in a conflict copy). A late disappearance-triggered
+        // flush can't be relied on — it may run after the bookmark is gone.
+        guard await preserveEditorBufferForTeardown() else { return false }
+
         // Marks teardown as beginning (blocking new
         // `acquireVaultOperationLease` calls) and waits for any in-flight
         // approval that already holds a lease to finish, *before* any of the
@@ -643,6 +681,8 @@ final class NotesFeatureModel {
         // operation is still using them.
         let teardown = await vaultOperationLeases.beginTeardownAndWaitForDrain()
         defer { vaultOperationLeases.endTeardown(teardown) }
+        // Typing may have continued while the drain was suspended.
+        guard await preserveEditorBufferForTeardown() else { return false }
 
         configurationGeneration &+= 1
         // Cancel (rather than merely orphan) any in-flight settings bootstrap
@@ -692,6 +732,7 @@ final class NotesFeatureModel {
         healthError = nil
         isRebuildingIndex = false
         rebuildIndexError = nil
+        return true
     }
 
     // MARK: - Reconciliation
@@ -707,7 +748,17 @@ final class NotesFeatureModel {
     func handle(delta: VaultReconciler.ReconcileDelta, fromConfigurationGeneration generation: Int) async {
         guard generation == configurationGeneration else { return }
         guard let repository else { return }
+        // Captured with the repository so this delta can only ever reach the
+        // indexer of the vault it came from.
+        let indexer = self.indexer
         _ = await repository.apply(delta: delta)
+        if let reconcileOperationGate {
+            await reconcileOperationGate.enterAndWaitForRelease()
+        }
+        // A vault switch may have completed while `apply` was suspended:
+        // the old catalog must not replace the new vault's, and an old
+        // removal must not touch the new vault's index.
+        guard generation == configurationGeneration else { return }
         notes = repository.notes
         editor?.candidateNotes = repository.notes
 
@@ -1131,6 +1182,12 @@ final class NotesFeatureModel {
     @ObservationIgnored
     var toolOperationGate: ToolOperationGate?
 
+    /// Test-only, like `toolOperationGate`: holds a reconcile delta right
+    /// after `NotesRepository.apply(delta:)` returns, so a test can complete
+    /// a vault switch inside that real suspension window.
+    @ObservationIgnored
+    var reconcileOperationGate: ToolOperationGate?
+
     /// `search_notes`' sole search boundary — the indexer, never the raw
     /// index database. Captures `configurationGeneration` and the indexer
     /// itself before the `await`: if a vault reset/switch completes while
@@ -1162,6 +1219,11 @@ final class NotesFeatureModel {
         let generation = configurationGeneration
         guard let repository, isAvailableForReadTools else {
             throw ToolError.notConfigured(toolName: "Read Note", reason: Self.readToolsUnavailableReason)
+        }
+        // Model-facing reads see only what enumeration exposes — never
+        // dotfiles, `.git/`, or non-Markdown files.
+        guard VaultIgnoreRules.isVisibleMarkdownNotePath(relativePath) else {
+            throw NotesError.invalidNotePath(relativePath)
         }
         let snapshot = try await repository.read(relativePath: relativePath)
         if let toolOperationGate {

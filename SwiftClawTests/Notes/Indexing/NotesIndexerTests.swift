@@ -107,6 +107,48 @@ struct NotesIndexerTests {
         #expect(await store.readCount() == 1)
     }
 
+    /// Deletions and renames made while the app was closed never arrive as
+    /// a delta; reopening the persisted caches and syncing the complete
+    /// catalog must drop the stale entries from both stores.
+    @Test func catalogSyncAfterReopeningPersistedCachesDropsOfflineDeletionsAndRenames() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let indexPath = directory.appendingPathComponent("index.sqlite").path
+        let linksPath = directory.appendingPathComponent("links.sqlite").path
+
+        let store = FakeNoteStore()
+        await store.set("Deleted.md", content: "walrus secrets [[Target]]", modifiedAt: Self.epoch)
+        await store.set("Old Name.md", content: "narwhal facts [[Target]]", modifiedAt: Self.epoch)
+        await store.set("Target.md", content: "the target", modifiedAt: Self.epoch)
+        do {
+            let indexer = NotesIndexer(
+                searchIndex: try SearchIndex(path: indexPath), linkGraph: try NoteLinkGraph(path: linksPath),
+                noteReader: { path in try await store.read(path) }, catalogProvider: { await store.catalog() }
+            )
+            await indexer.syncCatalog(await store.catalog())
+        }
+
+        // While the app is closed: one note deleted, one renamed.
+        await store.remove("Deleted.md")
+        await store.remove("Old Name.md")
+        await store.set("New Name.md", content: "narwhal facts [[Target]]", modifiedAt: Self.epoch)
+
+        let searchIndex = try SearchIndex(path: indexPath)
+        let linkGraph = try NoteLinkGraph(path: linksPath)
+        let indexer = NotesIndexer(
+            searchIndex: searchIndex, linkGraph: linkGraph,
+            noteReader: { path in try await store.read(path) }, catalogProvider: { await store.catalog() }
+        )
+        let outcome = await indexer.syncCatalog(await store.catalog())
+
+        #expect(outcome.removed == 2)
+        #expect(try await searchIndex.ftsSearch(query: "walrus").isEmpty)
+        #expect(try await searchIndex.ftsSearch(query: "narwhal").map(\.document.sourceID) == ["New Name.md"])
+        #expect(try await linkGraph.backlinks(to: "Target.md").map(\.sourcePath) == ["New Name.md"])
+        #expect(try await searchIndex.sourceIDs(sourceType: NotesIndexer.sourceType) == ["New Name.md", "Target.md"])
+    }
+
     @Test func modifiedContentReindexes() async throws {
         let store = FakeNoteStore()
         await store.set("Note.md", content: "original alpha content", modifiedAt: Self.epoch)

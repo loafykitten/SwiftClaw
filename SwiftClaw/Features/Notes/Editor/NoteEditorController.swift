@@ -833,6 +833,13 @@ final class NoteEditorController {
         scheduleAutosave()
     }
 
+    /// True while the on-screen buffer exists nowhere on disk: dirty, and
+    /// not already preserved verbatim in a conflict copy. Vault teardown
+    /// refuses to discard such a buffer.
+    var hasUnpreservedChanges: Bool {
+        isDirty && !hasConflictCopyForCurrentText
+    }
+
     private var hasConflictCopyForCurrentText: Bool {
         conflictBanner != nil && conflictBannerContent == currentText
     }

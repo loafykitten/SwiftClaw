@@ -95,6 +95,24 @@ actor SQLiteDatabase {
         }
     }
 
+    /// Runs `body` inside `BEGIN`/`COMMIT` (rolling back if it throws) as one
+    /// synchronous, actor-isolated call. Callers on another actor must use
+    /// this rather than awaiting separate `BEGIN`/statement/`COMMIT` calls:
+    /// each `await` is a suspension point where a reentrant caller could
+    /// issue a nested `BEGIN` or interleave its statements into the open
+    /// transaction.
+    func transaction<T: Sendable>(_ body: @Sendable (isolated SQLiteDatabase) throws -> T) throws -> T {
+        try execute("BEGIN;")
+        do {
+            let result = try body(self)
+            try execute("COMMIT;")
+            return result
+        } catch {
+            try? execute("ROLLBACK;")
+            throw error
+        }
+    }
+
     /// Runs a `SELECT` and returns every row as an array of column values.
     func query(_ sql: String, params: [SQLiteValue] = []) throws -> [[SQLiteValue]] {
         let statement = try prepared(for: sql)

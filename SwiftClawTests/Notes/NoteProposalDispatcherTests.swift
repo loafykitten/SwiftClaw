@@ -270,6 +270,43 @@ struct NoteProposalDispatcherTests {
         #expect(updatedChat.visibleMessages.contains { $0.content.contains("not applied") })
     }
 
+    /// The base hash is enforced by the rename itself, not only by an
+    /// earlier read: a changed source is never moved, a clean one is.
+    @Test func renameApprovalMovesOnlyTheProposedVersion() async throws {
+        let (repository, vault, vaultRoot, _) = try makeRepository()
+        defer { try? FileManager.default.removeItem(at: vaultRoot) }
+        let container = try makeContainer()
+        let chat = insertChat(in: container)
+        guard case .wrote(let original) = try await vault.write(relativePath: "note.md", content: "original", expectedHash: nil) else {
+            Issue.record("expected a successful create")
+            return
+        }
+        _ = try await vault.write(relativePath: "note.md", content: "changed externally", expectedHash: original.sha256)
+
+        let stale = NoteEditProposal(
+            kind: .rename, notePath: "note.md", newPath: "renamed.md", baseContentHash: original.sha256,
+            summary: "Rename", chatID: chat.id, originatingVaultID: defaultVaultID
+        )
+        insertProposal(stale, in: container)
+        let dispatcher = makeDispatcher(container: container, repository: repository, vaultID: defaultVaultID)
+        await dispatcher.perform(action: .approve, itemID: stale.id)
+
+        #expect(try #require(fetchProposal(id: stale.id, in: container)).status == .conflicted)
+        #expect(try await vault.read(relativePath: "note.md").content == "changed externally")
+        #expect(!FileManager.default.fileExists(atPath: vaultRoot.appendingPathComponent("renamed.md").path))
+
+        let current = try await vault.read(relativePath: "note.md")
+        let fresh = NoteEditProposal(
+            kind: .rename, notePath: "note.md", newPath: "renamed.md", baseContentHash: current.sha256,
+            summary: "Rename", chatID: chat.id, originatingVaultID: defaultVaultID
+        )
+        insertProposal(fresh, in: container)
+        await dispatcher.perform(action: .approve, itemID: fresh.id)
+
+        #expect(try #require(fetchProposal(id: fresh.id, in: container)).status == .applied)
+        #expect(try await vault.read(relativePath: "renamed.md").content == "changed externally")
+    }
+
     @Test func approveOfACreateProposalOverAnExistingPathConflictsWithoutWritingAConflictCopy() async throws {
         let (repository, vault, vaultRoot, _) = try makeRepository()
         defer { try? FileManager.default.removeItem(at: vaultRoot) }

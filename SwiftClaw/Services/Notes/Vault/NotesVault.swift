@@ -43,10 +43,15 @@ actor NotesVault {
         case invalidUTF8(String)
         case fileNotFound(String)
         case destinationExists(String)
+        /// A hash-guarded operation found the file's content changed since
+        /// the caller read it; nothing was moved or written.
+        case contentChanged(String)
         case ioFailure(String)
 
         var errorDescription: String? {
             switch self {
+            case .contentChanged(let path):
+                "\"\(path)\" changed since it was read."
             case .invalidRelativePath(let path):
                 "\"\(path)\" isn't a valid note path."
             case .invalidUTF8(let path):
@@ -176,14 +181,12 @@ actor NotesVault {
                 }
 
                 guard matchesCurrentState else {
-                    let conflictURLs = makeConflictURLs(for: coordinatedURL, matching: url)
-                    try AtomicFileWriter.write(data, to: conflictURLs.coordinatedURL, fileManager: fileManager)
-                    let conflictRelativePath = try computeRelativePath(for: conflictURLs.logicalURL)
+                    // Coordinating the original note doesn't protect its
+                    // sibling, so the copy is published create-only: a
+                    // same-name file that appears after the unused-name
+                    // check is never replaced.
                     return .conflict(
-                        conflictSnapshot: try snapshot(
-                            at: conflictURLs.coordinatedURL,
-                            relativePath: conflictRelativePath
-                        )
+                        conflictSnapshot: try publishConflictCopy(data, besideCoordinated: coordinatedURL, logicalURL: url)
                     )
                 }
 
@@ -211,28 +214,42 @@ actor NotesVault {
             }
 
             return try coordinateReplacement(at: logicalURL) { coordinatedURL in
-                while true {
-                    let conflictURLs = makeConflictURLs(for: coordinatedURL, matching: logicalURL)
-                    do {
-                        try AtomicFileWriter.createExclusive(
-                            data,
-                            at: conflictURLs.coordinatedURL,
-                            fileManager: fileManager
-                        )
-                        let conflictRelativePath = try computeRelativePath(for: conflictURLs.logicalURL)
-                        return try snapshot(
-                            at: conflictURLs.coordinatedURL,
-                            relativePath: conflictRelativePath
-                        )
-                    } catch AtomicFileWriter.WriteError.alreadyExists {
-                        continue
-                    } catch {
-                        throw VaultError.ioFailure(
-                            "Couldn't restore a revision for \"\(relativePath)\": \(error.localizedDescription)"
-                        )
-                    }
+                do {
+                    return try publishConflictCopy(data, besideCoordinated: coordinatedURL, logicalURL: logicalURL)
+                } catch {
+                    throw VaultError.ioFailure(
+                        "Couldn't restore a revision for \"\(relativePath)\": \(error.localizedDescription)"
+                    )
                 }
             }
+        }
+    }
+
+    /// Publishes `data` as a new `Name (conflict <timestamp>).md` sibling,
+    /// create-only: an external process that claims the chosen name between
+    /// `makeConflictURLs`'s unused-name check and publication makes this try
+    /// the next deterministic suffix rather than overwrite that file.
+    private func publishConflictCopy(
+        _ data: Data,
+        besideCoordinated coordinatedURL: URL,
+        logicalURL: URL
+    ) throws -> NoteFileSnapshot {
+        while true {
+            let conflictURLs = makeConflictURLs(for: coordinatedURL, matching: logicalURL)
+            do {
+                try AtomicFileWriter.createExclusive(
+                    data,
+                    at: conflictURLs.coordinatedURL,
+                    fileManager: fileManager
+                )
+            } catch AtomicFileWriter.WriteError.alreadyExists {
+                continue
+            }
+            let conflictRelativePath = try computeRelativePath(for: conflictURLs.logicalURL)
+            return try snapshot(
+                at: conflictURLs.coordinatedURL,
+                relativePath: conflictRelativePath
+            )
         }
     }
 
@@ -265,24 +282,39 @@ actor NotesVault {
 
     /// Moves a note. Never clobbers an existing file at `newRelativePath` —
     /// callers must resolve naming conflicts themselves before calling this.
+    /// A non-nil `expectedHash` makes the move conditional: the source's
+    /// current hash is checked inside the same coordinated move access, so
+    /// a cooperating editor's save can't land between the check and the
+    /// move; a mismatch throws `.contentChanged` and moves nothing.
     @discardableResult
-    func rename(from relativePath: String, to newRelativePath: String) async throws -> NoteFileSnapshot {
+    func rename(
+        from relativePath: String,
+        to newRelativePath: String,
+        expectedHash: String? = nil
+    ) async throws -> NoteFileSnapshot {
         try await withScope {
             let sourceURL = try resolveExistingURL(for: relativePath)
             let destinationURL = try resolveMutationURL(for: newRelativePath)
-            guard !fileManager.fileExists(atPath: destinationURL.path) else {
-                throw VaultError.destinationExists(newRelativePath)
+            return try coordinateMove(from: sourceURL, to: destinationURL) { coordinatedSource, coordinatedDestination in
+                if let expectedHash {
+                    guard try Self.sha256Hex(contentsOf: coordinatedSource) == expectedHash else {
+                        throw VaultError.contentChanged(relativePath)
+                    }
+                }
+                guard !fileManager.fileExists(atPath: coordinatedDestination.path) else {
+                    throw VaultError.destinationExists(newRelativePath)
+                }
+                try fileManager.createDirectory(
+                    at: coordinatedDestination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                do {
+                    try fileManager.moveItem(at: coordinatedSource, to: coordinatedDestination)
+                } catch {
+                    throw VaultError.ioFailure("Couldn't rename \"\(relativePath)\": \(error.localizedDescription)")
+                }
+                return try snapshot(at: coordinatedDestination, relativePath: newRelativePath)
             }
-            try fileManager.createDirectory(
-                at: destinationURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            do {
-                try fileManager.moveItem(at: sourceURL, to: destinationURL)
-            } catch {
-                throw VaultError.ioFailure("Couldn't rename \"\(relativePath)\": \(error.localizedDescription)")
-            }
-            return try snapshot(at: destinationURL, relativePath: newRelativePath)
         }
     }
 
@@ -328,6 +360,41 @@ actor NotesVault {
         }
         guard let result else {
             throw VaultError.ioFailure("Couldn't coordinate a replacement for \"\(url.lastPathComponent)\".")
+        }
+        return try result.get()
+    }
+
+    /// The move counterpart of `coordinateReplacement`: coordinates the
+    /// source for moving and the destination for replacing in one access,
+    /// and tells presenters about a successful move.
+    private func coordinateMove<T: Sendable>(
+        from sourceURL: URL,
+        to destinationURL: URL,
+        accessor: (URL, URL) throws -> T
+    ) throws -> T {
+        let coordinator = NSFileCoordinator()
+        var coordinationError: NSError?
+        var result: Result<T, Error>?
+
+        coordinator.coordinate(
+            writingItemAt: sourceURL,
+            options: .forMoving,
+            writingItemAt: destinationURL,
+            options: .forReplacing,
+            error: &coordinationError
+        ) { coordinatedSource, coordinatedDestination in
+            coordinator.item(at: coordinatedSource, willMoveTo: coordinatedDestination)
+            result = Result { try accessor(coordinatedSource, coordinatedDestination) }
+            if case .success = result {
+                coordinator.item(at: coordinatedSource, didMoveTo: coordinatedDestination)
+            }
+        }
+
+        if let coordinationError {
+            throw VaultError.ioFailure("Couldn't coordinate a move for \"\(sourceURL.lastPathComponent)\": \(coordinationError.localizedDescription)")
+        }
+        guard let result else {
+            throw VaultError.ioFailure("Couldn't coordinate a move for \"\(sourceURL.lastPathComponent)\".")
         }
         return try result.get()
     }

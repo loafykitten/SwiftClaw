@@ -13,6 +13,34 @@ struct NoteLinkGraphTests {
         )
     }
 
+    /// The actor is reentrant: overlapping mutations and a rebuild must not
+    /// nest a `BEGIN` or interleave statements into another transaction.
+    @Test func overlappingMutationsAndRebuildsNeverCollideInsideATransaction() async throws {
+        let graph = try NoteLinkGraph(path: ":memory:")
+        let target = link(to: "Target")
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for index in 0..<40 {
+                group.addTask {
+                    try await graph.replaceLinksAndTags(forNote: "Note \(index).md", links: [target, target], tags: ["a", "b"])
+                }
+                group.addTask {
+                    try await graph.removeNote("Note \(index).md")
+                }
+                if index.isMultiple(of: 10) {
+                    group.addTask { try await graph.rebuild() }
+                }
+            }
+            try await group.waitForAll()
+        }
+
+        // Every note ends up wholly present or wholly absent: never with a
+        // partial set of its two link rows.
+        for index in 0..<40 {
+            let count = try await graph.links(forSource: "Note \(index).md").count
+            #expect(count == 0 || count == 2)
+        }
+    }
+
     @Test func exactNormalizedPathResolvesEvenWithAmbiguousStemElsewhere() async throws {
         let graph = try NoteLinkGraph(path: ":memory:")
         try await graph.replaceLinksAndTags(forNote: "Folder/Page.md", links: [], tags: [])

@@ -732,6 +732,96 @@ struct NotesFeatureModelTests {
         }
     }
 
+    /// A reconcile delta from the old vault that resumes after a switch
+    /// completes must not publish the old catalog or apply its removal to
+    /// the new vault's index.
+    @Test func reconcileDeltaSuspendedAcrossAVaultSwitchCannotTouchTheNewVault() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let model = try makeModel(defaults: fixture.defaults)
+        let externalFolder = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: externalFolder) }
+        try Data("A note about narwhals.".utf8).write(to: externalFolder.appendingPathComponent("Shared.md"))
+
+        await model.chooseAppManagedVault()
+        let oldRoot = URL(fileURLWithPath: try #require(model.stats.resolvedPath))
+        try Data("old vault copy".utf8).write(to: oldRoot.appendingPathComponent("Shared.md"))
+        await model.handle(delta: .init(added: ["Shared.md"], modified: [], removed: [], renamedPairs: []))
+        try FileManager.default.removeItem(at: oldRoot.appendingPathComponent("Shared.md"))
+
+        let gate = ToolOperationGate()
+        model.reconcileOperationGate = gate
+        async let staleDelta: Void = model.handle(
+            delta: .init(added: [], modified: [], removed: ["Shared.md"], renamedPairs: [])
+        )
+        await gate.waitUntilEntered()
+        model.reconcileOperationGate = nil
+        await model.chooseExternalVault(url: externalFolder)
+        gate.release()
+        await staleDelta
+
+        #expect(model.notes.map(\.relativePath) == ["Shared.md"])
+        model.setSearchQuery("narwhals")
+        try? await Task.sleep(for: .milliseconds(400))
+        #expect(model.searchResults.map(\.document.sourceID) == ["Shared.md"])
+    }
+
+    /// Teardown must not discard the only copy of the open note's edits:
+    /// a reset first saves a dirty buffer, and refuses (keeping the vault
+    /// and editor) when that save fails.
+    @Test func resetSavesADirtyEditorBufferBeforeTearingDown() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let model = try makeModel(defaults: fixture.defaults)
+
+        await model.chooseAppManagedVault()
+        await model.createNote()
+        let selectedPath = try #require(model.selectedPath)
+        let vaultRoot = URL(fileURLWithPath: try #require(model.stats.resolvedPath))
+        model.editor?.textDidChange("typed just before reset")
+
+        #expect(await model.resetVaultConfiguration())
+
+        #expect(model.configurationState == .needsOnboarding)
+        let onDisk = try String(contentsOf: vaultRoot.appendingPathComponent(selectedPath), encoding: .utf8)
+        #expect(onDisk == "typed just before reset")
+    }
+
+    @Test func resetAndVaultSwitchRefuseToDiscardAnUnsavableEditorBuffer() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let model = try makeModel(defaults: fixture.defaults)
+        let externalFolder = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: externalFolder) }
+
+        await model.chooseAppManagedVault()
+        await model.createNote()
+        let selectedPath = try #require(model.selectedPath)
+        let resolvedPath = try #require(model.stats.resolvedPath)
+        let editor = try #require(model.editor)
+        editor.textDidChange("unsaved, and unsavable")
+        // An unwritable vault root makes every atomic save fail.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: resolvedPath)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: resolvedPath) }
+
+        #expect(await model.resetVaultConfiguration() == false)
+        #expect(await model.chooseExternalVault(url: externalFolder) == false)
+
+        #expect(model.configurationState == .configured)
+        #expect(model.lastConfigurationError == .unsavedEditorChanges)
+        #expect(model.editor === editor)
+        #expect(model.selectedPath == selectedPath)
+        #expect(editor.currentText == "unsaved, and unsavable")
+        #expect(editor.isDirty)
+        #expect(model.stats.resolvedPath == resolvedPath)
+
+        // Once the save can land, the same reset proceeds and keeps the text.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: resolvedPath)
+        #expect(await model.resetVaultConfiguration())
+        let onDisk = try String(contentsOf: URL(fileURLWithPath: resolvedPath).appendingPathComponent(selectedPath), encoding: .utf8)
+        #expect(onDisk == "unsaved, and unsavable")
+    }
+
     @Test func resettingVaultConfigurationClearsSearchAndHealthState() async throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }

@@ -394,9 +394,16 @@ final class NotesRepository {
     /// clobbering an existing destination) and updates the catalog entry's
     /// identity/path in place.
     @discardableResult
-    func rename(from relativePath: String, to newRelativePath: String) async throws -> NoteSummary {
+    func rename(
+        from relativePath: String,
+        to newRelativePath: String,
+        expectedHash: String? = nil
+    ) async throws -> NoteSummary {
         do {
             let current = try await vault.read(relativePath: relativePath)
+            if let expectedHash, current.sha256 != expectedHash {
+                throw NotesError.noteChanged(relativePath)
+            }
             try await revisionStore.snapshot(key: relativePath, content: current.content)
         } catch {
             throw NotesError.from(error)
@@ -404,7 +411,9 @@ final class NotesRepository {
 
         let renamed: NoteFileSnapshot
         do {
-            renamed = try await vault.rename(from: relativePath, to: newRelativePath)
+            // The vault re-verifies `expectedHash` inside its coordinated
+            // move, closing the window after the read/snapshot above.
+            renamed = try await vault.rename(from: relativePath, to: newRelativePath, expectedHash: expectedHash)
         } catch {
             throw NotesError.from(error)
         }

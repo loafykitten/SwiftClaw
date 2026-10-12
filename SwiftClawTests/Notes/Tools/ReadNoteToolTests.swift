@@ -220,6 +220,25 @@ struct ReadNoteToolTests {
         }
     }
 
+    /// The vault's containment check alone would still serve dotfiles and
+    /// non-Markdown files; the tool must refuse them before any read.
+    @Test(arguments: [".env", ".git/config", ".obsidian/workspace.json", "folder/.hidden.md", ".git/Note.md", "notes.txt", "../Note.md"])
+    func hiddenOrNonMarkdownPathsAreRejectedWithoutReading(path: String) async {
+        let readCount = LockedValue(0)
+        let tool = ReadNoteTool(dependencies: .init(
+            isAvailable: { true },
+            readNote: { path in
+                readCount.update { $0 += 1 }
+                return NoteFileSnapshot(relativePath: path, content: "SECRET=1", sha256: "h", modifiedAt: Date(timeIntervalSince1970: 0))
+            }
+        ))
+
+        await #expect(throws: ToolError.self) {
+            _ = try await tool.execute(arguments: ["path": .string(path)])
+        }
+        #expect(readCount.value == 0)
+    }
+
     @Test func sharedRegistryOffersReadNoteAutomatically() {
         let tool = ToolRegistry.shared.tool(named: "read_note")
         #expect(tool != nil)

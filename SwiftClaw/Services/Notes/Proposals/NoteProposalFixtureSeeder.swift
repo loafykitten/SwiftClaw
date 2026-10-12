@@ -578,7 +578,7 @@ enum NoteProposalFixtureSeeder {
                 throw FixtureFileError.fixtureStateCouldNotBeSaved
             }
             try await markFixtureComplete(in: fixtureRoot)
-            logger.notice("Seeded five credential-free note proposal cards against temporary vault \(vaultURL.path, privacy: .public)")
+            logger.notice("Seeded five credential-free note proposal cards against temporary vault \(vaultURL.path)")
         } catch {
             logger.error("Note proposal fixture setup failed before completion: \(String(describing: error))")
             await rollbackIncompleteFixture(at: fixtureRoot)
@@ -604,7 +604,7 @@ enum NoteProposalFixtureSeeder {
             logger.error("Existing note proposal fixture could not reactivate its temporary vault: \(NotesFeatureModel.shared.lastConfigurationError?.localizedDescription ?? "unknown error")")
             return
         }
-        logger.notice("Reused existing credential-free note proposal fixture at \(vaultURL.path, privacy: .public)")
+        logger.notice("Reused existing credential-free note proposal fixture at \(vaultURL.path)")
     }
 
     /// Clears the isolated Notes bookmark/settings after a failed seed, then

@@ -162,10 +162,10 @@ final class NoteProposalDispatcher: ReviewActionDispatcher {
             return
         } catch let error as NotesError {
             switch error {
-            case .externalConflict(_), .pathAlreadyExists(_):
+            case .externalConflict(_), .pathAlreadyExists(_), .noteChanged(_):
                 markConflicted(proposal, in: context)
             case .partialLoadFailure(_), .createFailed(_), .invalidNotePath(_),
-                 .revisionNotFound(_), .underlying(_):
+                 .revisionNotFound(_), .unsavedEditorChanges, .underlying(_):
                 restorePendingAfterOperationFailure(proposal, in: context)
             }
             return
@@ -240,13 +240,20 @@ final class NoteProposalDispatcher: ReviewActionDispatcher {
         )
     }
 
+    /// The base hash rides all the way into the vault's coordinated move: a
+    /// check here followed by an unconditional rename would let an edit
+    /// landing in between move a note the proposal never saw.
     private func applyRename(_ proposal: NoteEditProposal, repository: NotesRepository) async throws {
-        guard let newPath = proposal.newPath else { throw ProposalConflict() }
-        let current = try await repository.read(relativePath: proposal.notePath)
-        guard current.sha256 == proposal.baseContentHash else {
+        // A rename with no base hash can't be verified, so it never applies
+        // (and a nil `expectedHash` would make the move unconditional).
+        guard let newPath = proposal.newPath, let baseContentHash = proposal.baseContentHash else {
             throw ProposalConflict()
         }
-        _ = try await repository.rename(from: proposal.notePath, to: newPath)
+        _ = try await repository.rename(
+            from: proposal.notePath,
+            to: newPath,
+            expectedHash: baseContentHash
+        )
     }
 
     private func markConflicted(_ proposal: NoteEditProposal, in context: ModelContext) {

@@ -139,10 +139,29 @@ actor NotesIndexer {
     /// re-reading note files whose indexed hash already matches the catalog's
     /// `NoteSummary.sha256`. Catalog hashes are used only for this bootstrap
     /// path; ordinary reconciliation still reads the changed file.
+    ///
+    /// `notes` must be the *complete* catalog: anything the persisted caches
+    /// still hold that it lacks is removed. Deletions and renames that
+    /// happened while the app was closed never arrive as a reconcile delta
+    /// (reconciliation starts from the current filesystem), so without this
+    /// their content would stay searchable and their links live forever.
     @discardableResult
     func syncCatalog(_ notes: [NoteSummary]) async -> RunOutcome {
         var indexed = 0
+        var removed = 0
         var failed: [String] = []
+
+        let catalogPaths = Set(notes.map(\.relativePath))
+        do {
+            let cachedPaths = try await searchIndex.sourceIDs(sourceType: Self.sourceType)
+                .union(linkGraph.notePaths())
+            for path in cachedPaths.subtracting(catalogPaths).sorted() {
+                if await removeNote(path) { removed += 1 } else { failed.append(path) }
+            }
+        } catch {
+            Self.logger.error("listing cached notes failed, skipping stale-entry cleanup: \(String(describing: error))")
+        }
+
         for note in notes {
             if await indexNote(note.relativePath, catalogHash: note.sha256) {
                 indexed += 1
@@ -151,7 +170,7 @@ actor NotesIndexer {
             }
         }
         freshness = Freshness(lastSuccessAt: Date(), lastFailedPaths: failed, lastRunWasRebuild: false)
-        return RunOutcome(indexed: indexed, removed: 0, failedPaths: failed)
+        return RunOutcome(indexed: indexed, removed: removed, failedPaths: failed)
     }
 
     /// Wipes both stores and reindexes every note the catalog currently
@@ -261,7 +280,7 @@ actor NotesIndexer {
             try await linkGraph.replaceLinksAndTags(forNote: relativePath, links: links, tags: tags)
             return true
         } catch {
-            Self.logger.error("index failed for \(relativePath, privacy: .public), skipping: \(String(describing: error))")
+            Self.logger.error("index failed for \(relativePath), skipping: \(String(describing: error))")
             return false
         }
     }
@@ -273,7 +292,7 @@ actor NotesIndexer {
             try await linkGraph.removeNote(relativePath)
             return true
         } catch {
-            Self.logger.error("remove failed for \(relativePath, privacy: .public): \(String(describing: error))")
+            Self.logger.error("remove failed for \(relativePath): \(String(describing: error))")
             return false
         }
     }
