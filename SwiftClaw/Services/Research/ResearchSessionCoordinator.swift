@@ -1,6 +1,11 @@
 import Foundation
 import os
 import SwiftData
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 @MainActor
 final class ResearchSessionCoordinator {
@@ -39,6 +44,14 @@ final class ResearchSessionCoordinator {
     /// Coordinator-owned planning work, keyed by session id so deletion can
     /// cancel it — a view-owned Task would keep writing into a deleted model.
     private var planningTasks: [UUID: Task<Void, Never>] = [:]
+    /// Finished runs whose save failed, keyed by session id. Held here rather
+    /// than only as unsaved changes on the shared main context, because any
+    /// other component whose own save fails rolls that context back — which
+    /// would discard the report and revert the session to its persisted
+    /// `running` state. Re-applied and retried until a save lands.
+    private var unsavedResults: [UUID: CompletedRun] = [:]
+    private var lifecycleObservers: [NSObjectProtocol] = []
+    private var pendingRetryTask: Task<Void, Never>?
 
     /// The session currently running deep research, if any. The UI disables
     /// start/resume/retry actions while another session holds the slot.
@@ -99,6 +112,7 @@ final class ResearchSessionCoordinator {
         // would silently drop the change.
         let modelContext = modelContainer.mainContext
         self.modelContext = modelContext
+        observeSaveOpportunities(for: modelContext)
 
         do {
             let sessions = try modelContext.fetch(FetchDescriptor<ResearchSession>())
@@ -216,6 +230,8 @@ final class ResearchSessionCoordinator {
             return
         }
 
+        // A new run supersedes a previous result that never reached the store.
+        unsavedResults[session.id] = nil
         payload.plan = approvedPlan
         session.planPayload = payload
         session.status = .running
@@ -284,6 +300,7 @@ final class ResearchSessionCoordinator {
         guard let modelContext else { return }
         planningTasks[session.id]?.cancel()
         planningTasks[session.id] = nil
+        unsavedResults[session.id] = nil
         if activeSessionID == session.id {
             deletedSessionIDs.insert(session.id)
             activeRunTask?.cancel()
@@ -309,13 +326,98 @@ final class ResearchSessionCoordinator {
         }
     }
 
+    /// Whether a finished run's result for `sessionID` hasn't been saved yet.
+    func hasUnsavedResult(for sessionID: UUID) -> Bool {
+        unsavedResults[sessionID] != nil
+    }
+
+    /// Re-applies a finished run's unsaved result if a rollback of the shared
+    /// context reverted it, so the report stays readable and exportable.
+    func restoreUnsavedResult(for session: ResearchSession) {
+        unsavedResults[session.id]?.noteViewedState(of: session)
+        guard let unsaved = unsavedResults[session.id], !unsaved.isApplied(to: session) else {
+            return
+        }
+        unsaved.apply(to: session)
+    }
+
+    /// Re-applies every unsaved result and tries to save them again. Runs on
+    /// its own after any other successful save of the shared context (the
+    /// store works again) and when the app resigns active or backgrounds; a
+    /// failure keeps them, with their warning, for the next attempt.
+    func retryUnsavedResults() {
+        guard !unsavedResults.isEmpty, let modelContext else { return }
+        var sessions: [UUID: ResearchSession] = [:]
+        for id in unsavedResults.keys {
+            guard let session = fetchSession(id: id) else { continue }
+            unsavedResults[id]?.noteViewedState(of: session)
+            guard var saved = unsavedResults[id] else { continue }
+            saved.saveFailureMessage = nil
+            saved.apply(to: session)
+            sessions[id] = session
+        }
+
+        do {
+            try saveHandler(modelContext)
+        } catch {
+            Self.logger.error("Could not save research result on retry: \(String(describing: error))")
+            for (id, session) in sessions {
+                unsavedResults[id]?.apply(to: session)
+            }
+            return
+        }
+        for id in sessions.keys {
+            unsavedResults[id] = nil
+        }
+    }
+
     #if DEBUG
         func waitForIdleForTesting() async {
             if let activeRunTask {
                 await activeRunTask.value
             }
+            if let pendingRetryTask {
+                await pendingRetryTask.value
+            }
         }
     #endif
+
+    /// Retries unsaved results when saving is likely to work or about to
+    /// matter: after another successful save of the shared context (deferred
+    /// a turn — saving from inside its notification would re-enter it), and
+    /// when the app resigns active or moves to the background.
+    private func observeSaveOpportunities(for modelContext: ModelContext) {
+        let center = NotificationCenter.default
+        lifecycleObservers.append(center.addObserver(
+            forName: ModelContext.didSave,
+            object: modelContext,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.unsavedResults.isEmpty, self.pendingRetryTask == nil else { return }
+                self.pendingRetryTask = Task { @MainActor [weak self] in
+                    self?.pendingRetryTask = nil
+                    self?.retryUnsavedResults()
+                }
+            }
+        })
+
+        #if os(macOS)
+            let lifecycleNotifications = [NSApplication.willResignActiveNotification]
+        #else
+            let lifecycleNotifications = [
+                UIApplication.willResignActiveNotification,
+                UIApplication.didEnterBackgroundNotification,
+            ]
+        #endif
+        for name in lifecycleNotifications {
+            lifecycleObservers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.retryUnsavedResults()
+                }
+            })
+        }
+    }
 
     private func drainProgress(
         _ buffer: ResearchProgressEventBuffer,
@@ -358,42 +460,47 @@ final class ResearchSessionCoordinator {
         to session: ResearchSession,
         wasCancelled: Bool
     ) {
-        session.reportMarkdown = result.reportMarkdown
-        session.sources = result.sources
-        session.evidence = result.evidence
-        session.openQuestions = result.openQuestions
-        session.unverifiedClaimCount = result.unverifiedClaimCount
-        session.completedAt = .now
-        session.errorMessage = nil
-
         var checkpoint = session.progress ?? ResearchSessionCheckpoint()
         checkpoint.completedStage = activeStage ?? checkpoint.completedStage
         checkpoint.sourceCount = result.sources.count
         checkpoint.activityFeed = ResearchProgressMonitor.shared.activityFeed
         checkpoint.degradationNotes = result.degradationNotes
         checkpoint.canResume = wasCancelled
-        session.progress = checkpoint
 
         let isPartial = result.isPartial || !result.degradationNotes.isEmpty
+        let status: ResearchSessionStatus
+        let isUnviewed: Bool
         if wasCancelled {
-            session.status = .cancelled
-            session.isUnviewed = !result.reportMarkdown.isEmpty
+            status = .cancelled
+            isUnviewed = !result.reportMarkdown.isEmpty
         } else {
-            session.status = isPartial ? .completedPartial : .completed
-            session.isUnviewed = true
+            status = isPartial ? .completedPartial : .completed
+            isUnviewed = true
         }
+
+        var completed = CompletedRun(
+            result: result,
+            status: status,
+            completedAt: .now,
+            isUnviewed: isUnviewed,
+            checkpoint: checkpoint
+        )
+        completed.apply(to: session)
 
         do {
             try modelContext.map { try saveHandler($0) }
         } catch {
-            // The result stays on the main context's session, so it's still
-            // readable (and any later successful save persists it). Say so
-            // instead of announcing a completion that isn't durable.
+            // Keep the result on the coordinator, not just as unsaved changes
+            // on the shared context another component may roll back, and
+            // retry it later. Say so instead of announcing a completion that
+            // isn't durable.
             Self.logger.error("Could not save research result: \(String(describing: error))")
-            session.errorMessage = """
-                The report couldn't be saved: \(error.localizedDescription) It's shown \
-                here until SwiftClaw quits — use Save to Notes to keep a copy.
+            completed.saveFailureMessage = """
+                The report couldn't be saved yet: \(error.localizedDescription) SwiftClaw \
+                will try again automatically; use Save to Notes to keep a copy now.
                 """
+            completed.apply(to: session)
+            unsavedResults[session.id] = completed
             return
         }
 
@@ -461,6 +568,51 @@ final class ResearchSessionCoordinator {
 
     private static func isRunningFamily(_ status: ResearchSessionStatus) -> Bool {
         status == .running || status == .planning || status == .clarifying
+    }
+}
+
+/// Everything a finished run writes onto its session, held as a value so the
+/// coordinator can re-apply it after the shared context rolls back.
+private nonisolated struct CompletedRun {
+    let result: DeepResearchRunResult
+    let status: ResearchSessionStatus
+    let completedAt: Date
+    /// Only ever goes from unviewed to viewed, so re-applying the result
+    /// never marks a report the user already opened as unread again.
+    private(set) var isUnviewed: Bool
+    let checkpoint: ResearchSessionCheckpoint
+    /// The session's `errorMessage` while the result isn't durable.
+    var saveFailureMessage: String?
+
+    /// Records that the user opened the report since it was applied
+    /// (`markViewed` clears the session's flag).
+    @MainActor
+    mutating func noteViewedState(of session: ResearchSession) {
+        if isUnviewed, !session.isUnviewed, isApplied(to: session) {
+            isUnviewed = false
+        }
+    }
+
+    @MainActor
+    func apply(to session: ResearchSession) {
+        session.reportMarkdown = result.reportMarkdown
+        session.sources = result.sources
+        session.evidence = result.evidence
+        session.openQuestions = result.openQuestions
+        session.unverifiedClaimCount = result.unverifiedClaimCount
+        session.completedAt = completedAt
+        session.errorMessage = saveFailureMessage
+        session.progress = checkpoint
+        session.status = status
+        session.isUnviewed = isUnviewed
+    }
+
+    /// Whether `session` still shows this result (no rollback reverted it).
+    @MainActor
+    func isApplied(to session: ResearchSession) -> Bool {
+        session.status == status
+            && session.reportMarkdown == result.reportMarkdown
+            && session.errorMessage == saveFailureMessage
     }
 }
 

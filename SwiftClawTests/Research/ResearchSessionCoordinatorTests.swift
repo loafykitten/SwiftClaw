@@ -153,6 +153,148 @@ struct ResearchSessionCoordinatorTests {
         #expect(stored.reportMarkdown == nil)
     }
 
+    /// A failed report save leaves the result as unsaved changes on the
+    /// shared main context; another component's failed save then rolls that
+    /// context back. The coordinator still holds the report, puts it back,
+    /// and persists it on retry.
+    @Test func unsavedReportSurvivesAnotherComponentsRollbackAndPersistsOnRetry() async throws {
+        let container = try Self.inMemoryContainer(including: [
+            MemoryCollection.self, MemoryEntry.self, MemoryProposal.self, MemoryActivityEvent.self,
+        ])
+        var failSaves = false
+        let coordinator = Self.coordinator(
+            runHandler: { _, _, _, _ in
+                failSaves = true
+                return Self.completedResult()
+            },
+            saveHandler: { context in
+                if failSaves { throw CoordinatorTestError.saveFailed }
+                try context.save()
+            }
+        )
+        coordinator.configure(modelContainer: container)
+        let session = coordinator.createSession(topic: "Rolled back topic")
+        await coordinator.generatePlan(session: session)
+        let plan = try #require(session.planPayload?.plan)
+        coordinator.startRun(session: session, approvedPlan: plan)
+        await coordinator.waitForIdleForTesting()
+        #expect(session.reportMarkdown == "# Report\n\nFinished.")
+        #expect(coordinator.hasUnsavedResult(for: session.id))
+
+        // Memory shares the main context and rolls it back when its save fails.
+        let failingMemory = MemoryRepository(modelContext: container.mainContext) { _ in
+            throw CoordinatorTestError.saveFailed
+        }
+        #expect(throws: MemoryError.saveFailed) {
+            try failingMemory.createCollection(title: "Doomed", createdBy: .user)
+        }
+        #expect(session.status == .running)
+        #expect(session.reportMarkdown == nil)
+
+        coordinator.restoreUnsavedResult(for: session)
+        #expect(session.status == .completed)
+        #expect(session.reportMarkdown == "# Report\n\nFinished.")
+        #expect(session.evidence.count == 1)
+        #expect(session.errorMessage?.contains("couldn't be saved") == true)
+
+        // Still failing: the retry keeps the result and its warning.
+        coordinator.retryUnsavedResults()
+        #expect(coordinator.hasUnsavedResult(for: session.id))
+        #expect(session.errorMessage?.contains("couldn't be saved") == true)
+        #expect(try Self.fetch(session.id, in: container).status == .running)
+
+        failSaves = false
+        coordinator.retryUnsavedResults()
+
+        #expect(!coordinator.hasUnsavedResult(for: session.id))
+        let stored = try Self.fetch(session.id, in: container)
+        #expect(stored.status == .completed)
+        #expect(stored.reportMarkdown == "# Report\n\nFinished.")
+        #expect(stored.sources.count == 1)
+        #expect(stored.errorMessage == nil)
+    }
+
+    /// Once the store works again, any other component's successful save of
+    /// the shared context triggers the retry on its own.
+    @Test func unsavedReportRetriesAfterAnotherSuccessfulSave() async throws {
+        let container = try Self.inMemoryContainer(including: [
+            MemoryCollection.self, MemoryEntry.self, MemoryProposal.self, MemoryActivityEvent.self,
+        ])
+        var failSaves = false
+        let coordinator = Self.coordinator(
+            runHandler: { _, _, _, _ in
+                failSaves = true
+                return Self.completedResult()
+            },
+            saveHandler: { context in
+                if failSaves { throw CoordinatorTestError.saveFailed }
+                try context.save()
+            }
+        )
+        coordinator.configure(modelContainer: container)
+        let session = coordinator.createSession(topic: "Retried topic")
+        await coordinator.generatePlan(session: session)
+        let plan = try #require(session.planPayload?.plan)
+        coordinator.startRun(session: session, approvedPlan: plan)
+        await coordinator.waitForIdleForTesting()
+
+        let failingMemory = MemoryRepository(modelContext: container.mainContext) { _ in
+            throw CoordinatorTestError.saveFailed
+        }
+        _ = try? failingMemory.createCollection(title: "Doomed", createdBy: .user)
+        #expect(session.reportMarkdown == nil)
+
+        failSaves = false
+        let memory = MemoryRepository(modelContext: container.mainContext)
+        try memory.createCollection(title: "Kept", createdBy: .user)
+        await coordinator.waitForIdleForTesting()
+
+        #expect(!coordinator.hasUnsavedResult(for: session.id))
+        let stored = try Self.fetch(session.id, in: container)
+        #expect(stored.status == .completed)
+        #expect(stored.reportMarkdown == "# Report\n\nFinished.")
+        #expect(stored.errorMessage == nil)
+    }
+
+    /// Opening the report while it's unsaved clears its unread flag; a later
+    /// retry (including one triggered by that very save) must not undo it.
+    @Test func retryKeepsAReportTheUserAlreadyViewedAsRead() async throws {
+        let container = try Self.inMemoryContainer()
+        var failSaves = false
+        let coordinator = Self.coordinator(
+            runHandler: { _, _, _, _ in
+                failSaves = true
+                return Self.completedResult()
+            },
+            saveHandler: { context in
+                if failSaves { throw CoordinatorTestError.saveFailed }
+                try context.save()
+            }
+        )
+        coordinator.configure(modelContainer: container)
+        let session = coordinator.createSession(topic: "Viewed topic")
+        await coordinator.generatePlan(session: session)
+        let plan = try #require(session.planPayload?.plan)
+        coordinator.startRun(session: session, approvedPlan: plan)
+        await coordinator.waitForIdleForTesting()
+        #expect(session.isUnviewed)
+
+        // Viewed while saves still fail: the flag only changes in memory.
+        session.isUnviewed = false
+        coordinator.retryUnsavedResults()
+        #expect(!session.isUnviewed)
+
+        // Storage recovers; another successful save triggers the retry.
+        failSaves = false
+        try container.mainContext.save()
+        await coordinator.waitForIdleForTesting()
+
+        #expect(!coordinator.hasUnsavedResult(for: session.id))
+        let stored = try Self.fetch(session.id, in: container)
+        #expect(stored.status == .completed)
+        #expect(!stored.isUnviewed)
+    }
+
     @Test func configureMapsInterruptedRunWithoutReportToCancelledAndResumable() throws {
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
@@ -250,9 +392,11 @@ struct ResearchSessionCoordinatorTests {
         )
     }
 
-    private static func inMemoryContainer() throws -> ModelContainer {
+    private static func inMemoryContainer(
+        including otherModels: [any PersistentModel.Type] = []
+    ) throws -> ModelContainer {
         try ModelContainer(
-            for: ResearchSession.self,
+            for: Schema([ResearchSession.self] + otherModels),
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
     }

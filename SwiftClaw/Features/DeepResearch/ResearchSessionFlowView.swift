@@ -14,6 +14,12 @@ struct ResearchSessionFlowView: View {
         // against the next.
         content
             .id(session.id)
+            // Another component's failed save can roll the shared context
+            // back, reverting a finished-but-unsaved run to "running"; the
+            // coordinator still holds its result, so put it back on screen.
+            .onChange(of: session.status, initial: true) {
+                ResearchSessionCoordinator.shared.restoreUnsavedResult(for: session)
+            }
             .navigationTitle(session.title)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
