@@ -34,6 +34,11 @@ final class AppBootstrap {
             AppRouter.shared.pruneUnreadChats(keeping: Set(chats.map(\.id)))
         }
 
+        // A generation can't survive relaunch; clear flags a quit or crash
+        // left set, or those chats' composers stay disabled for good. Main
+        // context so open chat views see the change immediately.
+        ChatGenerationRecovery.recoverInterruptedGenerations(in: modelContainer.mainContext)
+
         // Drains any notification quick actions that were tapped before the
         // container existed (cold-launch action tap).
         NotificationMailActionHandler.shared.configure(modelContainer: modelContainer)

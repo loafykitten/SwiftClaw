@@ -90,12 +90,13 @@ final class Chat {
         return derived
     }
 
+    @discardableResult
     func appendMessage(
         role: ChatMessageRole,
         content: String,
         imageAttachments: [ImageAttachmentRecord] = [],
         reviewCard: ReviewCardPayload? = nil
-    ) {
+    ) -> ChatMessage {
         let nextIndex = (messages.map(\.sortIndex).max() ?? -1) + 1
         let message = ChatMessage(
             role: role,
@@ -108,6 +109,21 @@ final class Chat {
         messages.append(message)
         noteMessageChanged(message)
         updatedAt = .now
+        return message
+    }
+
+    /// Reverses an `appendMessage` whose save failed, so a later save of the
+    /// context can't persist a message whose attachment files were already
+    /// rolled back (and a resend doesn't duplicate it).
+    func discardUnsavedMessage(
+        _ message: ChatMessage,
+        in modelContext: ModelContext,
+        restoringUpdatedAt previousUpdatedAt: Date
+    ) {
+        messages.removeAll { $0.id == message.id }
+        modelContext.delete(message)
+        refreshLatestVisibleMessageAt()
+        updatedAt = previousUpdatedAt
     }
 
     /// Invalidation is explicit, not observed: property observers on @Model

@@ -887,9 +887,11 @@ private struct ChatTranscriptView: View {
             return false
         }
 
+        let previousModelSelection = chat.modelSelection
+        let previousUpdatedAt = chat.updatedAt
         chat.modelSelection = submission.model
         chat.errorMessage = nil
-        chat.appendMessage(
+        let userMessage = chat.appendMessage(
             role: .user,
             content: input,
             imageAttachments: finalizedAttachments
@@ -899,6 +901,11 @@ private struct ChatTranscriptView: View {
             try modelContext.save()
             ImageAttachmentStore.shared.deleteDraftAttachments(submission.imageAttachments)
         } catch {
+            // Undo the insert too: a later save would otherwise persist a
+            // message pointing at the images deleted below, and a resend
+            // would duplicate it.
+            chat.discardUnsavedMessage(userMessage, in: modelContext, restoringUpdatedAt: previousUpdatedAt)
+            chat.modelSelection = previousModelSelection
             ImageAttachmentStore.shared.deleteAttachments(finalizedAttachments)
             chat.isGenerating = false
             presentSubmissionError(.saveFailed(error))

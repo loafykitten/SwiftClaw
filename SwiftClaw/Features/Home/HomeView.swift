@@ -149,6 +149,11 @@ struct HomeView: View {
             try modelContext.save()
             ImageAttachmentStore.shared.deleteDraftAttachments(submission.imageAttachments)
         } catch {
+            // Undo the inserts too: a later save would otherwise persist a
+            // chat whose images are deleted below, and a resend would
+            // create a duplicate chat.
+            modelContext.delete(userMessage)
+            modelContext.delete(chat)
             ImageAttachmentStore.shared.deleteAttachments(finalizedAttachments)
             presentSubmissionError(.saveFailed(error))
             isCreatingChat = false

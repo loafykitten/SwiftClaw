@@ -52,6 +52,12 @@ final class ChatTaskCoordinator {
         }
     }
 
+    /// Whether a completion task launched this process is still tracked for
+    /// the chat — i.e. its persisted `isGenerating` flag is live, not stale.
+    func hasActiveCompletion(for chatID: UUID) -> Bool {
+        completionTasks[chatID] != nil
+    }
+
     func cancelTasks(for chatID: UUID) {
         completionTasks[chatID]?.cancel()
         completionTasks[chatID] = nil
