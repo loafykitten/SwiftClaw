@@ -88,7 +88,10 @@ final class NotificationSchedulingSpy: NotificationScheduling {
         addedRequests.removeAll { identifiers.contains($0.identifier) }
     }
 
+    private(set) var pendingRequestsLookupCount = 0
+
     func pendingNotificationRequests() async -> [UNNotificationRequest] {
-        addedRequests
+        pendingRequestsLookupCount += 1
+        return addedRequests
     }
 }

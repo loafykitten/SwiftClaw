@@ -105,9 +105,13 @@ as chips in the month grid, all-day strip, and agenda — see
   Reminder slots.
 - Reconciliation runs after store saves (`.calendarStoreDidChange`), remote
   changes, settings changes, and every 12 hours. Disabling alerts clears booked
-  requests; disabling Calendar calls `clearAllPendingAlerts()`, which first
-  waits for in-flight posts. Scheduled posts re-check the feature toggle
-  after their authorization lookup, so a disable mid-post books nothing.
+  requests; that reconcile pass, like `clearAllPendingAlerts()` (called when
+  Calendar itself is disabled), first waits for in-flight posts, so an add
+  still suspended in the notification center lands and is then removed. A
+  pass that a newer one overtook while it was suspended stops before
+  touching requests, so a quick off-then-on can't clear the re-enabled alerts.
+  Scheduled posts re-check the feature toggle after their authorization
+  lookup, so a disable mid-post books nothing.
 - Taps route through `NotificationRoutingPayload.Kind.calendarEvent` to
   `AppRouter.showCalendar()`.
 

@@ -423,4 +423,72 @@ struct CalendarAlertSchedulerTests {
         #expect(harness.spy.addedRequests.isEmpty)
         #expect(harness.spy.removedPendingIdentifierBatches.flatMap(\.self).count == 1)
     }
+
+    /// Turning the alert toggle off runs ordinary reconciliation, not the
+    /// feature-shutdown clear. A post still suspended inside `add` from the
+    /// pass before must land first and be removed, not survive the disable.
+    @Test func disablingAlertsWaitsForAddsAlreadyInFlight() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+        Self.insertAlarmedEvent(harness)
+        harness.spy.suspendsAdds = true
+
+        await harness.scheduler.reconcile(modelContainer: harness.container)
+        await Self.waitUntil { harness.spy.suspendedAddCount > 0 }
+        #expect(harness.spy.suspendedAddCount == 1)
+
+        // Toggle off (NotificationSettingsView → settingsDidChange path).
+        harness.fixture.defaults.set(false, forKey: SettingsKeys.notificationsCalendarAlertsEnabled)
+        let waitsBefore = harness.service.inFlightPostWaitCount
+        let lookupsBefore = harness.spy.pendingRequestsLookupCount
+        let disable = Task { await harness.scheduler.reconcile(modelContainer: harness.container) }
+        // The disable pass must start draining before it lists pending
+        // requests; without the drain it would read the still-empty list.
+        await Self.waitUntil {
+            harness.service.inFlightPostWaitCount > waitsBefore
+                || harness.spy.pendingRequestsLookupCount > lookupsBefore
+        }
+        #expect(harness.service.inFlightPostWaitCount > waitsBefore)
+        #expect(harness.spy.pendingRequestsLookupCount == lookupsBefore)
+        harness.spy.resumeSuspendedAdds()
+        await disable.value
+        await harness.service.flushPostsForTesting()
+
+        #expect(harness.spy.addedRequests.isEmpty)
+        #expect(harness.spy.removedPendingIdentifierBatches.flatMap(\.self).count == 1)
+    }
+
+    /// Alerts switched back on while the disable pass is still draining: the
+    /// newer enabled pass books, and the stale disable pass must not then
+    /// remove what it booked.
+    @Test func staleDisablePassDoesNotUndoAReenable() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+        Self.insertAlarmedEvent(harness)
+        harness.spy.suspendsAdds = true
+
+        await harness.scheduler.reconcile(modelContainer: harness.container)
+        await Self.waitUntil { harness.spy.suspendedAddCount > 0 }
+        #expect(harness.spy.suspendedAddCount == 1)
+
+        harness.fixture.defaults.set(false, forKey: SettingsKeys.notificationsCalendarAlertsEnabled)
+        let waitsBefore = harness.service.inFlightPostWaitCount
+        let disable = Task { await harness.scheduler.reconcile(modelContainer: harness.container) }
+        await Self.waitUntil { harness.service.inFlightPostWaitCount > waitsBefore }
+        #expect(harness.service.inFlightPostWaitCount > waitsBefore)
+
+        // Back on before the drain finishes; this pass's own add lands.
+        harness.fixture.defaults.set(true, forKey: SettingsKeys.notificationsCalendarAlertsEnabled)
+        harness.spy.suspendsAdds = false
+        await harness.scheduler.reconcile(modelContainer: harness.container)
+        await Self.waitUntil { !harness.spy.addedRequests.isEmpty }
+        #expect(!harness.spy.addedRequests.isEmpty)
+
+        harness.spy.resumeSuspendedAdds()
+        await disable.value
+        await harness.service.flushPostsForTesting()
+
+        #expect(!harness.spy.addedRequests.isEmpty)
+        #expect(harness.spy.removedPendingIdentifierBatches.isEmpty)
+    }
 }

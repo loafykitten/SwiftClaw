@@ -100,7 +100,9 @@ back to the manual editor with the typed phrase as the title.
   `settings.reminders.allDayAlertMinutes` (default 9:00 AM; configured in
   Settings › Notifications), with calendar components preventing DST shifts.
 - Content fingerprints make edits replace stale requests. Disabling the alert
-  source or feature clears booked alerts.
+  source or feature clears booked alerts, after waiting for in-flight posts
+  so an add already past its gate is removed instead of surviving; a pass
+  overtaken by a newer one stops before touching requests.
 - Taps route through `NotificationRoutingPayload.Kind.reminder` to
   `AppRouter.showReminders(focusing:)`. Routing is a no-op while the feature is
   disabled. Otherwise it selects the reminder's list, or opens the editor when

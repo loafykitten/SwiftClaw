@@ -44,6 +44,11 @@ final class CalendarAlertScheduler {
     /// a quick feature disable→enable can't read booked identifiers that the
     /// straggling clear is about to delete (which would skip rebooking them).
     private var pendingClear: Task<Void, Never>?
+    /// Bumped by every reconciliation pass. A pass that suspended while a
+    /// newer one started stops before touching requests: the newer pass read
+    /// fresher settings and store state, and the older one's desired set
+    /// (empty, for a disable) would undo what it booked.
+    private var reconcileGeneration = 0
 
     /// Injectable clock so tests pin "now".
     var now: () -> Date = { .now }
@@ -140,6 +145,8 @@ final class CalendarAlertScheduler {
     /// so tests drive it directly.
     func reconcile(modelContainer overrideContainer: ModelContainer? = nil) async {
         guard let container = overrideContainer ?? modelContainer else { return }
+        reconcileGeneration += 1
+        let generation = reconcileGeneration
         if let pendingClear {
             await pendingClear.value
             self.pendingClear = nil
@@ -213,7 +220,16 @@ final class CalendarAlertScheduler {
             desired.removeLast(desired.count - budget)
         }
 
+        // Disabling: a post that passed its gate before the toggle flipped
+        // may still be suspended inside `center.add`, invisible to the
+        // pending list until it lands — let it land, or this pass finds
+        // nothing to remove and the alert survives the disable. (Same
+        // synchronous stretch as the read above, so the two agree.)
+        if !alertsEnabledProvider() {
+            await notificationService.waitForInFlightPosts()
+        }
         let booked = await notificationService.pendingCalendarAlertIdentifiers()
+        guard generation == reconcileGeneration else { return }
         let desiredIdentifiers = Set(desired.map(\.identifier))
 
         let stale = booked.subtracting(desiredIdentifiers)

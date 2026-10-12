@@ -84,6 +84,10 @@ final class AppNotificationService: NSObject {
     func flushPostsForTesting() async {
         await waitForInFlightPosts()
     }
+
+    /// How many times something started waiting for in-flight posts, so
+    /// race tests can tell a drain began before releasing a suspended add.
+    @ObservationIgnored private(set) var inFlightPostWaitCount = 0
     #endif
 
     /// Awaits every post that is still between its gate and `center.add`.
@@ -91,6 +95,9 @@ final class AppNotificationService: NSObject {
     /// already past its gate lands first and is then removed, instead of
     /// being added after the clear read an empty list.
     func waitForInFlightPosts() async {
+        #if DEBUG
+        inFlightPostWaitCount += 1
+        #endif
         // Snapshot: posts started while waiting are gated on the new state.
         for task in Array(postTasks.values) {
             await task.value
