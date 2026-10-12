@@ -1540,9 +1540,22 @@ enum SettingsStorage {
         onDayContaining date: Date,
         calendar: Calendar = .current
     ) -> Date? {
+        // Build the wall-clock time from hour/minute components rather than
+        // adding elapsed minutes to midnight: on a DST transition day that
+        // offset lands an hour early or late (09:00 became 10:00 / 08:00).
+        // A time skipped by spring-forward resolves to the first instant
+        // after the gap; a time repeated by fall-back uses its first pass.
         let clamped = emailReviewDailyTimeRange.clamping(minutesAfterMidnight)
         let start = calendar.startOfDay(for: date)
-        return calendar.date(byAdding: .minute, value: clamped, to: start)
+        return calendar.date(
+            bySettingHour: clamped / 60,
+            minute: clamped % 60,
+            second: 0,
+            of: start,
+            matchingPolicy: .nextTime,
+            repeatedTimePolicy: .first,
+            direction: .forward
+        )
     }
 
     static func dailyReviewMinutes(afterMidnightFrom date: Date, calendar: Calendar = .current) -> Int {
