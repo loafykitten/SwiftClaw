@@ -215,7 +215,7 @@ struct NotesFeatureModelTests {
         #expect(fixture.defaults.data(forKey: bookmarkKey) != nil)
 
         lease.release()
-        await resetTask.value
+        _ = await resetTask.value
 
         #expect(fixture.defaults.data(forKey: bookmarkKey) == nil)
     }

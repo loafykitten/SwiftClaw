@@ -241,7 +241,7 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
                 folders.first { $0.role == role }?.name
             }
             let snapshot = account
-            await MainActor.run {
+            _ = await MainActor.run {
                 EmailAccountStore.shared.mergeDiscoveredFolders(into: snapshot) { updated in
                     updated.folders = folders
                     updated.sentMailbox = catalogName(for: .sent) ?? updated.sentMailbox
@@ -443,7 +443,7 @@ final class SwiftMailClient: MailClient, @unchecked Sendable {
             // re-listing mailboxes every time. Fill only names that are still
             // unresolved on the current account.
             let snapshot = account
-            await MainActor.run {
+            _ = await MainActor.run {
                 EmailAccountStore.shared.mergeDiscoveredFolders(into: snapshot) { updated in
                     if updated.archiveMailbox == nil { updated.archiveMailbox = resolved.archive }
                     if updated.trashMailbox == nil { updated.trashMailbox = resolved.trash }
