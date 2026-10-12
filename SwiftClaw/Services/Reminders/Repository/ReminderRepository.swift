@@ -49,6 +49,28 @@ final class ReminderRepository {
         }
     }
 
+    /// Why undoing a completion log was refused. Nothing changes.
+    enum UndoCompletionError: LocalizedError, Equatable {
+        /// Only the newest log can rewind its master.
+        case notLatestCompletion
+        /// A log written before completions recorded their snapshot.
+        case notRecorded
+        /// The master was skipped, rescheduled, or had its repeat edited
+        /// after this completion.
+        case changedSinceCompletion
+
+        var errorDescription: String? {
+            switch self {
+            case .notLatestCompletion:
+                String(localized: "Only the most recent completion of a repeating reminder can be undone.")
+            case .notRecorded:
+                String(localized: "This completion was saved by an earlier version of SwiftClaw and can't be undone.")
+            case .changedSinceCompletion:
+                String(localized: "This reminder was skipped, rescheduled, or had its repeat changed after it was completed, so the completion can't be undone.")
+            }
+        }
+    }
+
     let modelContext: ModelContext
 
     /// Inside `performTransaction`, saves are deferred to one commit at the end.
@@ -290,9 +312,13 @@ final class ReminderRepository {
         }
         try performTransaction {
             if let repeatRule = reminder.afterCompletionRepeat {
-                completeAfterCompletionMaster(reminder, repeatRule: repeatRule, at: date)
+                logCompletion(of: reminder, at: date) {
+                    advanceAfterCompletionMaster(reminder, repeatRule: repeatRule, completedAt: date)
+                }
             } else if reminder.recurrenceRuleString != nil {
-                completeFixedScheduleMaster(reminder, at: date)
+                logCompletion(of: reminder, at: date) {
+                    advanceFixedScheduleMaster(reminder, markExhaustedAt: date)
+                }
             } else {
                 reminder.completedAt = date
                 reminder.modifiedAt = .now
@@ -301,22 +327,21 @@ final class ReminderRepository {
         }
     }
 
-    /// Undoes a completion. For log rows this restores the master's scheduled
-    /// occurrence and removes the log; for plain reminders it clears
-    /// `completedAt`. Returns false (changing nothing) when the log can't be
-    /// undone: it isn't the latest, or the master changed after it (a skip,
-    /// a reschedule, a rule edit) so rewinding would clobber that change.
-    @discardableResult
-    func uncomplete(_ reminder: Reminder) throws -> Bool {
+    /// Undoes a completion. For log rows this restores the master to its
+    /// recorded pre-completion state and removes the log; for plain reminders
+    /// it clears `completedAt`. Throws `UndoCompletionError` (changing
+    /// nothing) when the log can't be undone: it isn't the latest, or the
+    /// master changed after it (a skip, a reschedule, a rule edit) so
+    /// rewinding would clobber that change.
+    func uncomplete(_ reminder: Reminder) throws {
         try performTransaction {
             if reminder.isCompletionLog {
-                guard uncompleteLog(reminder) else { return false }
+                try uncompleteLog(reminder)
             } else {
                 reminder.completedAt = nil
                 reminder.modifiedAt = .now
             }
             save()
-            return true
         }
     }
 
@@ -571,17 +596,20 @@ final class ReminderRepository {
         }
     }
 
-    private func completeFixedScheduleMaster(_ master: Reminder, at date: Date) {
-        insertCompletionLog(for: master, at: date)
-        advanceFixedScheduleMaster(master, markExhaustedAt: date)
+    /// Logs the completion of `master`'s current occurrence, advances it,
+    /// and records on the log what the advance changed, for undo.
+    private func logCompletion(of master: Reminder, at date: Date, advance: () -> Void) {
+        let before = master.recurrenceState
+        let log = insertCompletionLog(for: master, at: date)
+        advance()
+        log.completionSnapshot = ReminderCompletionSnapshot(before: before, after: master.recurrenceState)
     }
 
-    private func completeAfterCompletionMaster(
+    private func advanceAfterCompletionMaster(
         _ master: Reminder,
         repeatRule: ReminderAfterCompletionRepeat,
-        at date: Date
+        completedAt date: Date
     ) {
-        insertCompletionLog(for: master, at: date)
         master.dueDate = ReminderRecurrenceEngine.nextDueDate(
             afterCompletion: date,
             repeat: repeatRule,
@@ -636,85 +664,52 @@ final class ReminderRepository {
         return log
     }
 
-    private func uncompleteLog(_ log: Reminder) -> Bool {
+    private func uncompleteLog(_ log: Reminder) throws {
         guard let parentID = log.parentReminderID,
               let master = reminder(withID: parentID)
         else {
             modelContext.delete(log)
-            return true
+            return
         }
 
         // Only the latest log may rewind the master — undoing an older
         // occurrence would drag `dueDate` back behind still-present logs and
         // re-inflate COUNT for an advance that still stands.
         let latest = completionLog(of: master).last
-        guard log.id == latest?.id else { return false }
+        guard log.id == latest?.id else { throw UndoCompletionError.notLatestCompletion }
 
         // Being the latest log doesn't mean the master is as the completion
-        // left it: a later skip or edit has no log row. Replay the completion
-        // and undo only when the master still matches the replay.
-        guard let priorRuleString = ruleStringBeforeCompletion(log, of: master) else { return false }
+        // left it: a later skip or edit has no log row. Undo only while the
+        // master still matches the recorded after-state.
+        guard let snapshot = log.completionSnapshot else { throw UndoCompletionError.notRecorded }
+        guard Self.matches(master.recurrenceState, snapshot.after) else {
+            throw UndoCompletionError.changedSinceCompletion
+        }
 
-        master.dueDate = log.originalOccurrenceDate
-        master.recurrenceRuleString = priorRuleString
+        master.dueDate = snapshot.before.dueDate
+        master.completedAt = snapshot.before.completedAt
+        master.recurrenceRuleString = snapshot.before.recurrenceRuleString
+        master.afterCompletionRepeat = snapshot.before.afterCompletionRepeat
         refreshRecurrenceEnd(of: master)
-        master.completedAt = nil
         master.modifiedAt = .now
         modelContext.delete(log)
-        return true
     }
 
-    /// The master's recurrence rule from just before `log`'s completion, or
-    /// nil when the master no longer matches what that completion produced.
-    /// The outer optional is the verdict; the inner is the rule itself (nil
-    /// for after-completion repeats).
-    private func ruleStringBeforeCompletion(_ log: Reminder, of master: Reminder) -> String?? {
-        let original = log.originalOccurrenceDate
-
-        if let repeatRule = master.afterCompletionRepeat {
-            guard let completedAt = log.completedAt, master.completedAt == nil else { return nil }
-            let expected = ReminderRecurrenceEngine.nextDueDate(
-                afterCompletion: completedAt,
-                repeat: repeatRule,
-                hasDueTime: master.hasDueTime,
-                calendar: calendar(for: master)
-            )
-            return Self.isSameInstant(master.dueDate, expected) ? .some(master.recurrenceRuleString) : nil
-        }
-
-        guard let ruleString = master.recurrenceRuleString else { return nil }
-        guard let original else {
-            // No scheduled date to advance from: the completion only stamped
-            // the master complete.
-            let unchanged = master.dueDate == nil && Self.isSameInstant(master.completedAt, log.completedAt)
-            return unchanged ? .some(ruleString) : nil
-        }
-
-        // A completion that exhausted the series kept its due date and COUNT
-        // and stamped `completedAt`; any other consumed one COUNT.
-        let exhausted = master.completedAt != nil && Self.isSameInstant(master.completedAt, log.completedAt)
-        let priorRuleString = exhausted ? ruleString : Self.incrementingCount(of: ruleString)
-        let replay = ReminderRecurrenceEngine.nextDueDate(
-            afterScheduled: original,
-            ruleString: priorRuleString,
-            timeZone: timeZone(for: master)
-        )
-        let unchanged = if let next = replay.nextDueDate {
-            !exhausted && Self.isSameInstant(master.dueDate, next)
-        } else {
-            exhausted && Self.isSameInstant(master.dueDate, original)
-        }
-        return unchanged ? .some(priorRuleString) : nil
-    }
-
-    /// The rule with COUNT re-inflated by one (unchanged without COUNT).
-    private static func incrementingCount(of ruleString: String) -> String {
-        guard var rule = RecurrenceRule(rruleString: ruleString),
-              case let .occurrenceCount(count) = rule.end,
-              count < Int.max
-        else { return ruleString }
-        rule.end = .occurrenceCount(count + 1)
-        return rule.rruleString
+    /// Whether the master's current state is the recorded one. Rules compare
+    /// parsed, since the editor re-serializes an unchanged rule.
+    private static func matches(
+        _ current: ReminderCompletionSnapshot.State,
+        _ recorded: ReminderCompletionSnapshot.State
+    ) -> Bool {
+        guard isSameInstant(current.dueDate, recorded.dueDate),
+              isSameInstant(current.completedAt, recorded.completedAt),
+              current.afterCompletionRepeat == recorded.afterCompletionRepeat
+        else { return false }
+        if current.recurrenceRuleString == recorded.recurrenceRuleString { return true }
+        guard let currentRule = current.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)),
+              let recordedRule = recorded.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:))
+        else { return false }
+        return currentRule == recordedRule
     }
 
     /// Second-granular equality, absorbing storage round-trip drift.

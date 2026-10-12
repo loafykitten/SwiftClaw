@@ -360,7 +360,9 @@ struct ReminderRepositoryTests {
         let ruleBefore = master.recurrenceRuleString
         let dueBefore = master.dueDate
 
-        try repository.uncomplete(logs[0]) // the older occurrence
+        #expect(throws: ReminderRepository.UndoCompletionError.notLatestCompletion) {
+            try repository.uncomplete(logs[0]) // the older occurrence
+        }
 
         #expect(repository.completionLog(of: master).count == 2)
         #expect(master.dueDate == dueBefore)
@@ -454,7 +456,9 @@ struct ReminderRepositoryTests {
         #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=1")
 
         let log = try #require(repository.completionLog(of: master).first)
-        #expect(try !repository.uncomplete(log))
+        #expect(throws: ReminderRepository.UndoCompletionError.changedSinceCompletion) {
+            try repository.uncomplete(log)
+        }
 
         #expect(master.dueDate == Self.date(2026, 6, 3, 9))
         #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=1")
@@ -475,7 +479,9 @@ struct ReminderRepositoryTests {
         repository.noteUpdated(master)
 
         let log = try #require(repository.completionLog(of: master).first)
-        #expect(try !repository.uncomplete(log))
+        #expect(throws: ReminderRepository.UndoCompletionError.changedSinceCompletion) {
+            try repository.uncomplete(log)
+        }
         #expect(master.dueDate == Self.date(2026, 6, 20, 9))
     }
 
@@ -493,7 +499,7 @@ struct ReminderRepositoryTests {
         // Unchanged since completion: undo restores the original due date.
         try repository.complete(master, at: Self.date(2026, 6, 1, 11))
         var log = try #require(repository.completionLog(of: master).first)
-        #expect(try repository.uncomplete(log))
+        try repository.uncomplete(log)
         #expect(master.dueDate == Self.date(2026, 6, 5, 9))
         #expect(repository.completionLog(of: master).isEmpty)
 
@@ -501,8 +507,92 @@ struct ReminderRepositoryTests {
         try repository.complete(master, at: Self.date(2026, 6, 1, 11))
         try repository.skipOccurrence(of: master)
         log = try #require(repository.completionLog(of: master).first)
-        #expect(try !repository.uncomplete(log))
+        #expect(throws: ReminderRepository.UndoCompletionError.changedSinceCompletion) {
+            try repository.uncomplete(log)
+        }
         #expect(master.dueDate == Self.date(2026, 6, 5, 11))
+    }
+
+    /// Complete day 1 of `DAILY;COUNT=3`, then raise the remaining count
+    /// from 2 to 10 without moving day 2. Replaying from the current rule
+    /// would accept the undo and write COUNT=11; the recorded after-state
+    /// shows the rule was edited, so the undo is refused.
+    @Test func undoAfterACountEditIsRejected() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let master = repository.insert(Reminder(
+            title: "Daily",
+            dueDate: Self.date(2026, 6, 1, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY;COUNT=3"
+        ))
+        try repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=2")
+        master.recurrenceRuleString = "FREQ=DAILY;COUNT=10"
+        repository.noteUpdated(master)
+
+        let log = try #require(repository.completionLog(of: master).first)
+        #expect(throws: ReminderRepository.UndoCompletionError.changedSinceCompletion) {
+            try repository.uncomplete(log)
+        }
+
+        #expect(master.dueDate == Self.date(2026, 6, 2, 9))
+        #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=10")
+        #expect(repository.completionLog(of: master).count == 1)
+    }
+
+    /// Edits that leave the schedule alone (a title change, an editor save
+    /// that re-serializes the same rule) don't block undo, which restores
+    /// the pre-completion state exactly.
+    @Test func undoAfterANonScheduleEditRestoresTheRecordedState() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let master = repository.insert(Reminder(
+            title: "Daily",
+            dueDate: Self.date(2026, 6, 1, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY;COUNT=3"
+        ))
+        try repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        let log = try #require(repository.completionLog(of: master).first)
+        #expect(log.completionSnapshot?.before.recurrenceRuleString == "FREQ=DAILY;COUNT=3")
+        #expect(log.completionSnapshot?.after.recurrenceRuleString == "FREQ=DAILY;COUNT=2")
+
+        master.title = "Daily stretch"
+        let rule = try #require(master.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)))
+        master.recurrenceRuleString = rule.rruleString
+        repository.noteUpdated(master)
+
+        try repository.uncomplete(log)
+
+        #expect(master.dueDate == Self.date(2026, 6, 1, 9))
+        #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=3")
+        #expect(master.completedAt == nil)
+        #expect(master.title == "Daily stretch")
+        #expect(repository.completionLog(of: master).isEmpty)
+    }
+
+    /// Logs from before completions recorded a snapshot can't be undone
+    /// safely, so undo refuses them instead of guessing.
+    @Test func undoOfALogWithoutASnapshotIsRejected() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let master = repository.insert(Reminder(
+            title: "Daily",
+            dueDate: Self.date(2026, 6, 1, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY;COUNT=3"
+        ))
+        try repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        let log = try #require(repository.completionLog(of: master).first)
+        log.completionSnapshotData = nil
+        repository.saveChanges()
+
+        #expect(throws: ReminderRepository.UndoCompletionError.notRecorded) {
+            try repository.uncomplete(log)
+        }
+        #expect(master.dueDate == Self.date(2026, 6, 2, 9))
+        #expect(repository.completionLog(of: master).count == 1)
     }
 
     // MARK: - Single-mutation save failures

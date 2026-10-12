@@ -44,6 +44,9 @@ final class Reminder {
     /// scheduled occurrence that was completed.
     var parentReminderID: UUID?
     var originalOccurrenceDate: Date?
+    /// Logs only: JSON `ReminderCompletionSnapshot` of the master before and
+    /// after this completion, so undo can restore it exactly.
+    var completionSnapshotData: Data?
     /// EventKit `calendarItemExternalIdentifier` or VTODO UID; the upsert key
     /// that makes re-imports idempotent.
     var externalIdentifier: String?
