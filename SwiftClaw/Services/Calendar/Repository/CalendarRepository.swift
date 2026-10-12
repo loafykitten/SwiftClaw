@@ -238,7 +238,8 @@ final class CalendarRepository {
     /// (same fields, linked via `parentEventID`) is returned for the caller to
     /// mutate. EventKit's detached-occurrence shape, so imports map directly.
     @discardableResult
-    func detachOccurrence(of master: CalendarEvent, at occurrenceStart: Date) -> CalendarEvent {
+    func detachOccurrence(of master: CalendarEvent, at requestedStart: Date) -> CalendarEvent {
+        let occurrenceStart = normalizedOccurrenceKey(requestedStart, of: master)
         let override = CalendarEvent(
             title: master.title,
             startDate: occurrenceStart,
@@ -269,7 +270,7 @@ final class CalendarRepository {
     /// Removes a single occurrence from a recurring master (EXDATE).
     func deleteOccurrence(of master: CalendarEvent, at occurrenceStart: Date) throws {
         try performTransaction {
-            master.exceptionDates.append(occurrenceStart)
+            master.exceptionDates.append(normalizedOccurrenceKey(occurrenceStart, of: master))
             master.modifiedAt = .now
             save()
         }
@@ -277,12 +278,14 @@ final class CalendarRepository {
 
     /// Ends a recurring master just before `occurrenceStart`; that occurrence
     /// and everything after (including now-orphaned overrides) is removed.
-    func deleteThisAndFuture(of master: CalendarEvent, from occurrenceStart: Date) throws {
-        guard var rule = master.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)) else {
+    func deleteThisAndFuture(of master: CalendarEvent, from requestedStart: Date) throws {
+        guard master.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)) != nil else {
             try deleteEventSeries(master)
             return
         }
         try performTransaction {
+            let occurrenceStart = normalizedOccurrenceKey(requestedStart, of: master)
+            guard var rule = master.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)) else { return }
             let until = occurrenceStart.addingTimeInterval(-1)
             rule.end = .untilDate(until)
             master.recurrenceRuleString = rule.rruleString
@@ -350,6 +353,8 @@ final class CalendarRepository {
     ) {
         var changed = false
         for override in overrides(of: master) {
+            // Its key must be in the master's (canonical) encoding.
+            normalizeLegacyCivilDates(of: override)
             let original = override.originalOccurrenceDate ?? override.startDate
             let isMasked = RecurrenceExpander.isException(original, exceptionDates: master.exceptionDates)
             if let identifier = override.externalIdentifier, identifier.hasPrefix(importedIdentifierPrefix) {
@@ -445,68 +450,89 @@ final class CalendarRepository {
         return changed
     }
 
-    /// One-time, per-row conversion of legacy all-day values (local-midnight
-    /// instants) to canonical civil dates. Each legacy instant is read as a
-    /// day in `calendar`'s zone, which is best effort: a row created in
-    /// another zone and never opened since migrates to the day it showed on
-    /// this device just before the upgrade. The `dateEncodingVersion` marker
-    /// makes it idempotent: stamped rows are never fetched again, so nothing
-    /// double-converts, and a legacy row that arrives later (a CloudKit
-    /// merge from an older build) converts on the next launch. A failed
-    /// fetch or save changes nothing and retries next launch.
+    /// Conversion of legacy all-day values (local-midnight instants) to
+    /// canonical civil dates (`CalendarEvent.convertLegacyCivilDatesIfNeeded`).
+    /// Each legacy instant is read as a day in `calendar`'s zone, which is
+    /// best effort: a row created in another zone and never opened since
+    /// migrates to the day it showed on this device just before the upgrade.
+    /// The per-row `dateEncodingVersion` marker makes it idempotent: stamped
+    /// rows are never fetched again, so nothing double-converts. Runs at
+    /// launch and before every post-merge dedupe, so legacy rows a sync
+    /// delivers later convert too.
+    ///
+    /// An override's original-occurrence key is in its master's encoding, so
+    /// an override whose master can't be resolved yet (a merge delivered it
+    /// first) stays legacy and unstamped for a later pass.
+    ///
+    /// One scoped transaction: changes other writers left pending are saved
+    /// first, and if that save fails the migration doesn't run at all
+    /// (nothing is rolled back). A failed fetch or commit converts nothing
+    /// and retries next time.
     @discardableResult
     func migrateAllDayDatesToCivilEncodingIfNeeded(calendar: Calendar = .current) -> Int {
-        let legacy = (try? modelContext.fetch(FetchDescriptor<CalendarEvent>(
-            predicate: #Predicate { $0.dateEncodingVersion == nil }
-        ))) ?? []
-        guard !legacy.isEmpty else { return 0 }
-        // Overrides key their original occurrence in the master's encoding.
-        let allDayMasterIDs = Set(
-            ((try? modelContext.fetch(FetchDescriptor<CalendarEvent>(
-                predicate: #Predicate { $0.isAllDay && $0.parentEventID == nil }
-            ))) ?? []).map(\.id)
-        )
-        let civil = { (date: Date) in CivilDay.canonicalDate(forLocal: date, in: calendar) }
-
-        var converted = 0
-        for event in legacy {
-            if event.isAllDay {
-                let legacyStart = event.startDate
-                event.setAllDaySpan(localStart: event.startDate, localEnd: event.endDate, calendar: calendar)
-                event.exceptionDates = event.exceptionDates.map(civil)
-                if let rule = event.recurrenceRuleString {
-                    event.recurrenceRuleString = RecurrenceRule.civilRuleString(fromImported: rule, readingIn: calendar)
-                }
-                // Degraded one-off occurrences are keyed "<uid>@<start>".
-                event.externalIdentifier = Self.rekeyed(
-                    event.externalIdentifier,
-                    replacing: legacyStart,
-                    with: event.startDate
-                )
-                refreshRecurrenceEnd(of: event)
-                converted += 1
-            }
-            if let parentID = event.parentEventID, allDayMasterIDs.contains(parentID),
-               let original = event.originalOccurrenceDate {
-                event.originalOccurrenceDate = civil(original)
-                // Imported overrides are keyed "<uid>@detached@<original>".
-                event.externalIdentifier = Self.rekeyed(
-                    event.externalIdentifier,
-                    replacing: original,
-                    with: civil(original)
-                )
-            }
-            event.dateEncodingVersion = CivilDay.encodingVersion
-        }
         do {
-            try modelContext.save()
-            NotificationCenter.default.post(name: .calendarStoreDidChange, object: nil)
+            return try migrateLegacyCivilDates(calendar: calendar)
         } catch {
-            modelContext.rollback()
             Self.logger.error("civil date migration failed: \(String(describing: error))")
             return 0
         }
-        return converted
+    }
+
+    @discardableResult
+    private func migrateLegacyCivilDates(calendar: Calendar) throws -> Int {
+        let legacy = try modelContext.fetch(FetchDescriptor<CalendarEvent>(
+            predicate: #Predicate { $0.dateEncodingVersion == nil }
+        ))
+        guard !legacy.isEmpty else { return 0 }
+        let parentIDs = Array(Set(legacy.compactMap(\.parentEventID)))
+        let parents = parentIDs.isEmpty ? [] : try modelContext.fetch(FetchDescriptor<CalendarEvent>(
+            predicate: #Predicate { parentIDs.contains($0.id) }
+        ))
+        var masterIsAllDay: [UUID: Bool] = [:]
+        for parent in parents where masterIsAllDay[parent.id] == nil {
+            masterIsAllDay[parent.id] = parent.isAllDay
+        }
+
+        return try performTransaction {
+            var converted = 0
+            for event in legacy {
+                var parentIsAllDay: Bool?
+                if let parentID = event.parentEventID {
+                    guard let resolved = masterIsAllDay[parentID] else { continue }
+                    parentIsAllDay = resolved
+                }
+                if event.convertLegacyCivilDatesIfNeeded(masterIsAllDay: parentIsAllDay, calendar: calendar) {
+                    refreshRecurrenceEnd(of: event)
+                    converted += 1
+                }
+            }
+            save()
+            return converted
+        }
+    }
+
+    /// Converts `event` if it is still a legacy row, before a mutation writes
+    /// canonical values into it; otherwise the next migration pass would
+    /// convert those values a second time. Unlike the bulk pass this must
+    /// stamp the row now, so an override whose master is missing is
+    /// converted against its own all-day state. Returns whether the row was
+    /// legacy (so all-day keys derived from it before this call were too).
+    @discardableResult
+    func normalizeLegacyCivilDates(of event: CalendarEvent, calendar: Calendar = .current) -> Bool {
+        guard event.dateEncodingVersion == nil else { return false }
+        let masterIsAllDay = event.parentEventID.flatMap { self.event(withID: $0)?.isAllDay }
+        if event.convertLegacyCivilDatesIfNeeded(masterIsAllDay: masterIsAllDay, calendar: calendar) {
+            refreshRecurrenceEnd(of: event)
+        }
+        return true
+    }
+
+    /// Normalizes a master about to take an occurrence key. A key the UI
+    /// derived from a still-legacy all-day row is a legacy instant too, and
+    /// converts with it.
+    private func normalizedOccurrenceKey(_ key: Date, of master: CalendarEvent) -> Date {
+        let wasLegacy = normalizeLegacyCivilDates(of: master)
+        return wasLegacy && master.isAllDay ? CivilDay.canonicalDate(forLocal: key) : key
     }
 
     /// Re-keys a recurring master's EXDATEs and its overrides'
@@ -545,14 +571,6 @@ final class CalendarRepository {
         for override in overrides(of: master) where !nativeOverridesOnly || override.externalIdentifier == nil {
             override.originalOccurrenceDate = override.originalOccurrenceDate.map(convert)
         }
-    }
-
-    /// An import identity whose trailing "@<reference-date seconds>" names
-    /// `old`, re-pointed at `new`; anything else passes through.
-    private static func rekeyed(_ identifier: String?, replacing old: Date, with new: Date) -> String? {
-        let suffix = "@\(old.timeIntervalSinceReferenceDate)"
-        guard let identifier, identifier.hasSuffix(suffix) else { return identifier }
-        return String(identifier.dropLast(suffix.count)) + "@\(new.timeIntervalSinceReferenceDate)"
     }
 
     // MARK: - Transactions
@@ -624,6 +642,8 @@ final class CalendarRepository {
         let event: CalendarEvent
         if let existing = self.event(withExternalIdentifier: externalIdentifier) {
             event = existing
+            // A still-legacy row converts before the import writes into it.
+            normalizeLegacyCivilDates(of: event)
         } else {
             event = CalendarEvent(externalIdentifier: externalIdentifier)
             modelContext.insert(event)
@@ -666,6 +686,17 @@ final class CalendarRepository {
     /// exception dates. Independently created native events are genuinely
     /// distinct and untouched. Also sweeps overrides whose master is gone.
     func dedupeAfterRemoteMerge() {
+        // A merge can deliver legacy rows from an older build; convert them
+        // first so duplicates collapse in one encoding (unioning legacy
+        // EXDATE instants into a canonical survivor would resurrect deleted
+        // occurrences). If that fails, skip this pass rather than merge mixed
+        // encodings; the next merge retries.
+        do {
+            try migrateLegacyCivilDates(calendar: .current)
+        } catch {
+            Self.logger.error("post-merge civil date migration failed: \(String(describing: error))")
+            return
+        }
         dedupeCalendars()
         dedupeEvents()
         sweepOrphanedOverrides()

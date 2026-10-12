@@ -50,6 +50,8 @@ nonisolated struct CalendarEventDraft {
     /// rows — a detached occurrence can't itself recur.
     @MainActor
     func apply(to event: CalendarEvent, in repository: CalendarRepository, calendar: Calendar = .current) {
+        // A still-legacy row converts before canonical values land in it.
+        repository.normalizeLegacyCivilDates(of: event, calendar: calendar)
         event.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let wasAllDay = event.isAllDay
         if isAllDay {

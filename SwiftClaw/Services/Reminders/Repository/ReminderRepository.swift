@@ -324,6 +324,8 @@ final class ReminderRepository {
             return
         }
         try performTransaction {
+            // After the stale-click check, which compares the rendered value.
+            normalizeLegacyCivilDates(of: reminder)
             if let repeatRule = reminder.afterCompletionRepeat {
                 logCompletion(of: reminder, at: date) {
                     advanceAfterCompletionMaster(reminder, repeatRule: repeatRule, completedAt: date)
@@ -348,6 +350,7 @@ final class ReminderRepository {
     /// rewinding would clobber that change.
     func uncomplete(_ reminder: Reminder) throws {
         try performTransaction {
+            normalizeLegacyCivilDates(of: reminder)
             if reminder.isCompletionLog {
                 try uncompleteLog(reminder)
             } else {
@@ -365,6 +368,7 @@ final class ReminderRepository {
     func skipOccurrence(of master: Reminder, at date: Date = .now) throws {
         guard !master.isCompletionLog else { return }
         try performTransaction {
+            normalizeLegacyCivilDates(of: master)
             if let repeatRule = master.afterCompletionRepeat, let dueDate = master.localDueDate() {
                 master.dueDate = ReminderRecurrenceEngine.nextDueDate(
                     afterCompletion: dueDate,
@@ -442,6 +446,7 @@ final class ReminderRepository {
             reminder = Reminder(externalIdentifier: externalIdentifier)
             modelContext.insert(reminder)
         }
+        normalizeLegacyCivilDates(of: reminder)
         apply(reminder)
         reminder.modifiedAt = .now
         refreshRecurrenceEnd(of: reminder)
@@ -498,6 +503,7 @@ final class ReminderRepository {
                 if reminder.modelContext == nil {
                     modelContext.insert(reminder)
                 }
+                normalizeLegacyCivilDates(of: reminder)
                 apply(identity, reminder)
                 reminder.modifiedAt = .now
                 refreshRecurrenceEnd(of: reminder)
@@ -588,6 +594,15 @@ final class ReminderRepository {
     /// `externalIdentifier`, and log rows whose master is gone. Keeps the
     /// earliest `createdAt` and re-points relationships at the survivor.
     func dedupeAfterRemoteMerge() {
+        // A merge can deliver legacy rows from an older build; convert them
+        // first so duplicates collapse in one encoding. If that fails, skip
+        // this pass rather than merge mixed encodings (the next merge retries).
+        do {
+            try migrateLegacyCivilDates(calendar: .current)
+        } catch {
+            Self.logger.error("post-merge civil date migration failed: \(String(describing: error))")
+            return
+        }
         dedupeLists()
         dedupeReminders()
         sweepOrphanedCompletionLogs()
@@ -609,47 +624,52 @@ final class ReminderRepository {
         }
     }
 
-    /// One-time, per-row conversion of legacy date-only values (local
-    /// start-of-day instants) to canonical civil dates: due dates, log rows'
-    /// `originalOccurrenceDate`, and RRULE UNTIL. Legacy instants are read
+    /// Conversion of legacy date-only values (local start-of-day instants)
+    /// to canonical civil dates: due dates, log rows' `originalOccurrenceDate`
+    /// and completion snapshots, and RRULE UNTIL
+    /// (`Reminder.convertLegacyCivilDatesIfNeeded`). Legacy instants are read
     /// as days in `calendar`'s zone (best effort: the day the row showed on
-    /// this device just before the upgrade). The `dateEncodingVersion`
-    /// marker makes it idempotent, so stamped rows are never fetched again
-    /// and nothing double-converts. A failed fetch or save changes nothing
-    /// and retries next launch.
+    /// this device just before the upgrade). The per-row
+    /// `dateEncodingVersion` marker makes it idempotent: stamped rows are
+    /// never fetched again, so nothing double-converts. Runs at launch and
+    /// before every post-merge dedupe, so legacy rows a sync delivers later
+    /// convert too.
+    ///
+    /// One scoped transaction: changes other writers left pending are saved
+    /// first, and if that save fails the migration doesn't run at all
+    /// (nothing is rolled back). A failed commit rolls back only the
+    /// migration. Either way it retries next time.
     @discardableResult
     func migrateDateOnlyDueDatesToCivilEncodingIfNeeded(calendar: Calendar = .current) -> Int {
-        let legacy = (try? modelContext.fetch(FetchDescriptor<Reminder>(
-            predicate: #Predicate { $0.dateEncodingVersion == nil }
-        ))) ?? []
-        guard !legacy.isEmpty else { return 0 }
-        let civil = { (date: Date) in CivilDay.canonicalDate(forLocal: date, in: calendar) }
-
-        var converted = 0
-        for reminder in legacy {
-            if !reminder.hasDueTime {
-                if let dueDate = reminder.dueDate {
-                    reminder.dueDate = civil(dueDate)
-                    converted += 1
-                }
-                // A log row copies its master's `hasDueTime` at completion.
-                reminder.originalOccurrenceDate = reminder.originalOccurrenceDate.map(civil)
-                if let rule = reminder.recurrenceRuleString {
-                    reminder.recurrenceRuleString = RecurrenceRule.civilRuleString(fromImported: rule, readingIn: calendar)
-                    refreshRecurrenceEnd(of: reminder)
-                }
-            }
-            reminder.dateEncodingVersion = CivilDay.encodingVersion
-        }
         do {
-            try modelContext.save()
-            NotificationCenter.default.post(name: .reminderStoreDidChange, object: nil)
+            return try migrateLegacyCivilDates(calendar: calendar)
         } catch {
-            modelContext.rollback()
             Self.logger.error("civil date migration failed: \(String(describing: error))")
             return 0
         }
-        return converted
+    }
+
+    @discardableResult
+    private func migrateLegacyCivilDates(calendar: Calendar) throws -> Int {
+        let legacy = try modelContext.fetch(FetchDescriptor<Reminder>(
+            predicate: #Predicate { $0.dateEncodingVersion == nil }
+        ))
+        guard !legacy.isEmpty else { return 0 }
+        return try performTransaction {
+            var converted = 0
+            for reminder in legacy where reminder.convertLegacyCivilDatesIfNeeded(calendar: calendar) {
+                converted += 1
+            }
+            save()
+            return converted
+        }
+    }
+
+    /// Converts `reminder` if it is still a legacy row, before a mutation
+    /// writes canonical values into it; otherwise the next migration pass
+    /// would convert those values a second time.
+    func normalizeLegacyCivilDates(of reminder: Reminder, calendar: Calendar = .current) {
+        reminder.convertLegacyCivilDatesIfNeeded(calendar: calendar)
     }
 
     /// Logs the completion of `master`'s current occurrence, advances it,
@@ -727,6 +747,8 @@ final class ReminderRepository {
             modelContext.delete(log)
             return
         }
+        // The snapshot and the master must share an encoding.
+        normalizeLegacyCivilDates(of: master)
 
         // Only the latest log may rewind the master — undoing an older
         // occurrence would drag `dueDate` back behind still-present logs and

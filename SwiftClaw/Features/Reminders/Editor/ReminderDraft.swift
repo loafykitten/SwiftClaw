@@ -90,6 +90,8 @@ nonisolated struct ReminderDraft {
     /// Date-only values go back to canonical civil dates, read in `calendar`.
     @MainActor
     func apply(to reminder: Reminder, in repository: ReminderRepository, calendar: Calendar = .current) {
+        // A still-legacy row converts before canonical values land in it.
+        repository.normalizeLegacyCivilDates(of: reminder, calendar: calendar)
         reminder.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         reminder.notes = notes.isEmpty ? nil : notes
         reminder.urlString = urlString.isEmpty ? nil : urlString

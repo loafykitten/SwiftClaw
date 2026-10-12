@@ -37,8 +37,14 @@ Apple Calendar overlay.
   instants. Legacy rows (`dateEncodingVersion == nil`, local-midnight
   instants) convert once at launch
   (`CalendarRepository.migrateAllDayDatesToCivilEncodingIfNeeded`, from
-  `AppBootstrap`), reading each instant in the zone current at migration
-  time; the per-row marker keeps it idempotent.
+  `AppBootstrap`, and again before every post-merge dedupe so legacy rows
+  a sync delivers convert before duplicates collapse), reading each
+  instant in the zone current at migration time; the per-row marker keeps
+  it idempotent. It runs as one scoped `performTransaction`, and an
+  override whose master hasn't arrived stays legacy for a later pass.
+  Mutation paths (editor drafts, import upserts, occurrence detach and
+  delete, the span setter) normalize a still-legacy row first, so new
+  canonical values never sit under a nil marker.
 - `Services/Calendar/Repository/CalendarRepository.swift` is the single
   mutation boundary and the identity authority (deterministic lookups,
   `dedupeAfterRemoteMerge()` for CloudKit-merge duplicates). User-facing

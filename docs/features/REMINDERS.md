@@ -46,9 +46,12 @@ template (`docs/features/CALENDAR.md`).
   ones step from the civil day of the completion in the current zone.
   `pendingReminders(dueBefore:)` widens its store bound by a day and
   filters and sorts on the local due moment. Timed reminders keep absolute
-  instants. Legacy rows convert once at launch
-  (`ReminderRepository.migrateDateOnlyDueDatesToCivilEncodingIfNeeded`,
-  per-row `dateEncodingVersion` marker).
+  instants. Legacy rows convert once at launch and before every post-merge
+  dedupe (`ReminderRepository.migrateDateOnlyDueDatesToCivilEncodingIfNeeded`,
+  per-row `dateEncodingVersion` marker), log rows together with their
+  completion snapshots so undo restores the right day. Editor drafts,
+  import upserts, complete, skip, and undo normalize a still-legacy row
+  before writing.
 - Priority raw values sit on the RFC 5545 / EKReminder scale (0/1/5/9).
 - Checklist items are a JSON blob on `checklistData` (the `alarmsData`
   pattern from `docs/conventions/MODELS.md`).

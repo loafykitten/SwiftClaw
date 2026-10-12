@@ -160,11 +160,47 @@ final class Reminder {
         return hasDueTime ? dueDate : CivilDay(canonical: dueDate).startDate(in: calendar)
     }
 
-    /// Makes the reminder date-only, due on `day`.
+    /// Makes the reminder date-only, due on `day`. A legacy row is converted
+    /// first, so the canonical value never lands next to unconverted fields
+    /// under a nil marker (a later migration would convert it twice).
     func setDueDay(_ day: CivilDay) {
+        convertLegacyCivilDatesIfNeeded()
         dueDate = day.canonicalDate
         hasDueTime = false
         timeZoneIdentifier = nil
+    }
+
+    /// Converts a legacy row (`dateEncodingVersion == nil`) in place and
+    /// stamps it: a date-only row's due date, original occurrence, RRULE
+    /// UNTIL (and the `recurrenceEndDate` derived from it), and the due dates
+    /// and UNTILs in its completion snapshot, read as days in `calendar`'s
+    /// zone. Everything is row-local (a log copies its master's
+    /// `hasDueTime`), so one call converts the row atomically. Returns
+    /// whether a date-only value changed; false for an already-stamped row.
+    @discardableResult
+    func convertLegacyCivilDatesIfNeeded(calendar: Calendar = .current) -> Bool {
+        guard dateEncodingVersion == nil else { return false }
+        dateEncodingVersion = CivilDay.encodingVersion
+        guard !hasDueTime else { return false }
+        let civil = { (date: Date) in CivilDay.canonicalDate(forLocal: date, in: calendar) }
+        let civilRule = { (rule: String) in RecurrenceRule.civilRuleString(fromImported: rule, readingIn: calendar) }
+
+        dueDate = dueDate.map(civil)
+        originalOccurrenceDate = originalOccurrenceDate.map(civil)
+        if let rule = recurrenceRuleString {
+            recurrenceRuleString = civilRule(rule)
+            if case let .untilDate(until) = RecurrenceRule(rruleString: civilRule(rule))?.end {
+                recurrenceEndDate = until
+            }
+        }
+        if var snapshot = completionSnapshot {
+            for keyPath in [\ReminderCompletionSnapshot.before, \ReminderCompletionSnapshot.after] {
+                snapshot[keyPath: keyPath].dueDate = snapshot[keyPath: keyPath].dueDate.map(civil)
+                snapshot[keyPath: keyPath].recurrenceRuleString = snapshot[keyPath: keyPath].recurrenceRuleString.map(civilRule)
+            }
+            completionSnapshot = snapshot
+        }
+        return dueDate != nil || originalOccurrenceDate != nil
     }
 
     /// Whether the reminder's list is shown in the UI (list-less reminders

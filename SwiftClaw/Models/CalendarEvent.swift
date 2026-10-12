@@ -132,11 +132,59 @@ final class CalendarEvent {
     }
 
     /// Stores an all-day span: `dayCount` civil days from `firstDay`.
+    /// A legacy row is converted first, so canonical values never land next
+    /// to unconverted fields under a nil marker (a later migration would
+    /// convert them twice).
     func setAllDaySpan(from firstDay: CivilDay, dayCount: Int) {
+        convertLegacyCivilDatesIfNeeded()
         isAllDay = true
         startDate = firstDay.canonicalDate
         endDate = firstDay.adding(days: max(1, dayCount)).canonicalDate
         timeZoneIdentifier = nil
+    }
+
+    /// Converts a legacy row (`dateEncodingVersion == nil`) in place and
+    /// stamps it: an all-day row's span, EXDATEs, RRULE UNTIL, and
+    /// "…@<start>" import key, plus an override's `originalOccurrenceDate`
+    /// (and "…@detached@<original>" key) when its master is all-day. The
+    /// original-occurrence key is in the master's encoding, so pass the
+    /// master's state as `masterIsAllDay`; nil falls back to this row's own
+    /// state (a best guess for an override whose master can't be found).
+    /// Legacy instants are read as days in `calendar`'s zone. Callers
+    /// re-derive `recurrenceEndDate`. Returns whether any value changed.
+    @discardableResult
+    func convertLegacyCivilDatesIfNeeded(masterIsAllDay: Bool? = nil, calendar: Calendar = .current) -> Bool {
+        guard dateEncodingVersion == nil else { return false }
+        // Stamp first: the span setter below re-enters this check.
+        dateEncodingVersion = CivilDay.encodingVersion
+        let civil = { (date: Date) in CivilDay.canonicalDate(forLocal: date, in: calendar) }
+        var changed = false
+        if isAllDay {
+            let legacyStart = startDate
+            setAllDaySpan(localStart: startDate, localEnd: endDate, calendar: calendar)
+            exceptionDates = exceptionDates.map(civil)
+            recurrenceRuleString = recurrenceRuleString.map {
+                RecurrenceRule.civilRuleString(fromImported: $0, readingIn: calendar)
+            }
+            // Degraded one-off occurrences are keyed "<uid>@<start>".
+            externalIdentifier = Self.rekeyed(externalIdentifier, replacing: legacyStart, with: startDate)
+            changed = true
+        }
+        if parentEventID != nil, masterIsAllDay ?? isAllDay, let original = originalOccurrenceDate {
+            originalOccurrenceDate = civil(original)
+            // Imported overrides are keyed "<uid>@detached@<original>".
+            externalIdentifier = Self.rekeyed(externalIdentifier, replacing: original, with: civil(original))
+            changed = true
+        }
+        return changed
+    }
+
+    /// An import identity whose trailing "@<reference-date seconds>" names
+    /// `old`, re-pointed at `new`; anything else passes through.
+    private static func rekeyed(_ identifier: String?, replacing old: Date, with new: Date) -> String? {
+        let suffix = "@\(old.timeIntervalSinceReferenceDate)"
+        guard let identifier, identifier.hasSuffix(suffix) else { return identifier }
+        return String(identifier.dropLast(suffix.count)) + "@\(new.timeIntervalSinceReferenceDate)"
     }
 
     /// Stores an all-day span from local instants (editors, EventKit): the

@@ -537,6 +537,233 @@ struct CivilDateTests {
         #expect(parsedUntil == .untilDate(Self.day(2026, 12, 10).canonicalEndOfDay))
     }
 
+    // MARK: - Migration hardening
+
+    /// Finding 1: a legacy completion snapshot converts with its log row, so
+    /// undo restores the right civil day. London leaves BST on Oct 25, 2026:
+    /// the legacy after-state (Oct 26 00:00 GMT) already equals its canonical
+    /// value, while the before-state (Oct 25 00:00 BST = Oct 24 23:00Z) would
+    /// otherwise be restored as Oct 24.
+    @Test func legacyCompletionSnapshotsConvertWithTheirLog() throws {
+        let london = Self.calendar("Europe/London")
+        let repository = try Self.reminderRepository()
+        let legacyBefore = Self.date(2026, 10, 25, in: london)
+        let legacyAfter = Self.date(2026, 10, 26, in: london)
+
+        let master = Reminder(title: "Water plants", dueDate: legacyAfter, recurrenceRuleString: "FREQ=DAILY")
+        master.dateEncodingVersion = nil
+        repository.insert(master)
+        let log = Reminder(title: "Water plants", dueDate: legacyBefore, completedAt: Self.date(2026, 10, 25, 9, in: london))
+        log.parentReminderID = master.id
+        log.originalOccurrenceDate = legacyBefore
+        log.completionSnapshot = ReminderCompletionSnapshot(
+            before: .init(dueDate: legacyBefore, completedAt: nil, recurrenceRuleString: "FREQ=DAILY", afterCompletionRepeat: nil),
+            after: .init(dueDate: legacyAfter, completedAt: nil, recurrenceRuleString: "FREQ=DAILY", afterCompletionRepeat: nil)
+        )
+        log.dateEncodingVersion = nil
+        repository.insert(log)
+
+        repository.migrateDateOnlyDueDatesToCivilEncodingIfNeeded(calendar: london)
+        let snapshot = try #require(log.completionSnapshot)
+        #expect(snapshot.before.dueDate == Self.day(2026, 10, 25).canonicalDate)
+        #expect(snapshot.after.dueDate == Self.day(2026, 10, 26).canonicalDate)
+        #expect(master.dueDay == Self.day(2026, 10, 26))
+
+        try repository.uncomplete(log)
+        #expect(master.dueDay == Self.day(2026, 10, 25))
+
+        // Snapshots taken after the migration record canonical values.
+        try repository.complete(master, at: Self.date(2026, 10, 25, 9, in: london))
+        let newLog = try #require(repository.completionLog(of: master).last)
+        #expect(newLog.dateEncodingVersion == CivilDay.encodingVersion)
+        #expect(newLog.completionSnapshot?.before.dueDate == Self.day(2026, 10, 25).canonicalDate)
+        #expect(newLog.completionSnapshot?.after.dueDate == Self.day(2026, 10, 26).canonicalDate)
+    }
+
+    /// Finding 2: editing a still-legacy row converts and stamps it first,
+    /// so a later migration doesn't shift the newly chosen day again.
+    @Test func editingALegacyRowStampsItBeforeWritingCivilDates() throws {
+        let chicago = Self.chicago
+        let reminders = try Self.reminderRepository()
+        let reminder = Reminder(title: "Pay rent", dueDate: Self.date(2026, 7, 1, in: chicago))
+        reminder.dateEncodingVersion = nil
+        reminders.insert(reminder)
+        var draft = ReminderDraft(from: reminder, calendar: chicago)
+        draft.dueDate = Self.date(2026, 7, 11, 12, in: chicago)
+        draft.apply(to: reminder, in: reminders, calendar: chicago)
+        #expect(reminder.dateEncodingVersion == CivilDay.encodingVersion)
+        #expect(reminders.migrateDateOnlyDueDatesToCivilEncodingIfNeeded(calendar: chicago) == 0)
+        #expect(reminder.dueDay == Self.day(2026, 7, 11))
+
+        // The model setter guards direct writers too.
+        let direct = Reminder(title: "Direct", dueDate: Self.date(2026, 7, 1, in: chicago))
+        direct.dateEncodingVersion = nil
+        direct.setDueDay(Self.day(2026, 7, 11))
+        #expect(direct.dateEncodingVersion == CivilDay.encodingVersion)
+
+        let events = try Self.calendarRepository()
+        let event = CalendarEvent(
+            title: "Holiday",
+            startDate: Self.date(2026, 7, 1, in: chicago),
+            endDate: Self.date(2026, 7, 2, in: chicago),
+            isAllDay: true,
+            calendar: events.defaultCalendar()
+        )
+        event.dateEncodingVersion = nil
+        events.insert(event)
+        var eventDraft = CalendarEventDraft(from: event, calendar: chicago)
+        eventDraft.start = Self.date(2026, 7, 11, in: chicago)
+        eventDraft.end = Self.date(2026, 7, 12, in: chicago)
+        eventDraft.apply(to: event, in: events, calendar: chicago)
+        #expect(event.dateEncodingVersion == CivilDay.encodingVersion)
+        #expect(events.migrateAllDayDatesToCivilEncodingIfNeeded(calendar: chicago) == 0)
+        #expect(event.startDate == Self.day(2026, 7, 11).canonicalDate)
+    }
+
+    /// Finding 2, occurrence keys: deleting an occurrence of a still-legacy
+    /// all-day series converts the key the UI derived from it, too.
+    @Test func deletingAnOccurrenceOfALegacySeriesUsesACivilKey() throws {
+        let current = Calendar.current
+        let repository = try Self.calendarRepository()
+        let master = CalendarEvent(
+            title: "Daily",
+            startDate: Self.date(2026, 7, 10, in: current),
+            endDate: Self.date(2026, 7, 11, in: current),
+            isAllDay: true,
+            recurrenceRuleString: "FREQ=DAILY;COUNT=5",
+            calendar: repository.defaultCalendar()
+        )
+        master.dateEncodingVersion = nil
+        repository.insert(master)
+        try repository.deleteOccurrence(of: master, at: Self.date(2026, 7, 12, in: current))
+        #expect(master.exceptionDates == [Self.day(2026, 7, 12).canonicalDate])
+        #expect(master.startDate == Self.day(2026, 7, 10).canonicalDate)
+    }
+
+    /// Finding 3: legacy duplicates a sync delivers convert before the
+    /// post-merge dedupe, so their EXDATEs union in the same encoding.
+    @Test func remoteMergeConvertsLegacyDuplicatesBeforeDeduping() throws {
+        let current = Calendar.current
+        let repository = try Self.calendarRepository()
+        let survivor = CalendarEvent(
+            title: "Series",
+            recurrenceRuleString: "FREQ=DAILY",
+            externalIdentifier: "shared-uid",
+            calendar: repository.defaultCalendar()
+        )
+        survivor.setAllDaySpan(from: Self.day(2026, 7, 10), dayCount: 1)
+        survivor.exceptionDates = [Self.day(2026, 7, 12).canonicalDate]
+        survivor.createdAt = Self.date(2026, 7, 1, in: current)
+        repository.insert(survivor)
+
+        let legacyCopy = CalendarEvent(
+            title: "Series",
+            startDate: Self.date(2026, 7, 10, in: current),
+            endDate: Self.date(2026, 7, 11, in: current),
+            isAllDay: true,
+            recurrenceRuleString: "FREQ=DAILY",
+            externalIdentifier: "shared-uid",
+            calendar: repository.defaultCalendar()
+        )
+        legacyCopy.exceptionDates = [Self.date(2026, 7, 12, in: current)]
+        legacyCopy.createdAt = Self.date(2026, 7, 2, in: current)
+        legacyCopy.dateEncodingVersion = nil
+        repository.insert(legacyCopy)
+
+        repository.dedupeAfterRemoteMerge()
+        let remaining = try #require(repository.event(withExternalIdentifier: "shared-uid"))
+        #expect(remaining.id == survivor.id)
+        #expect(remaining.exceptionDates == [Self.day(2026, 7, 12).canonicalDate])
+    }
+
+    @Test func reminderRemoteMergeConvertsLegacyRowsFirst() throws {
+        let repository = try Self.reminderRepository()
+        let legacy = Reminder(title: "Synced", dueDate: Self.date(2026, 7, 10, in: Calendar.current))
+        legacy.dateEncodingVersion = nil
+        repository.insert(legacy)
+        repository.dedupeAfterRemoteMerge()
+        #expect(legacy.dateEncodingVersion == CivilDay.encodingVersion)
+        #expect(legacy.dueDay == Self.day(2026, 7, 10))
+    }
+
+    /// Finding 4: an override delivered before its master stays legacy and
+    /// unstamped, and converts once the master arrives.
+    @Test func overrideArrivingBeforeItsMasterConvertsOnALaterPass() throws {
+        let chicago = Self.chicago
+        let repository = try Self.calendarRepository()
+        let masterID = UUID()
+        let legacyOriginal = Self.date(2026, 7, 12, in: chicago)
+        let override = CalendarEvent(
+            title: "Moved",
+            startDate: Self.date(2026, 7, 13, 9, in: chicago),
+            endDate: Self.date(2026, 7, 13, 10, in: chicago),
+            timeZoneIdentifier: "America/Chicago",
+            calendar: repository.defaultCalendar()
+        )
+        override.parentEventID = masterID
+        override.originalOccurrenceDate = legacyOriginal
+        override.dateEncodingVersion = nil
+        repository.insert(override)
+
+        repository.migrateAllDayDatesToCivilEncodingIfNeeded(calendar: chicago)
+        #expect(override.dateEncodingVersion == nil)
+        #expect(override.originalOccurrenceDate == legacyOriginal)
+
+        let master = CalendarEvent(
+            id: masterID,
+            title: "Daily",
+            startDate: Self.date(2026, 7, 10, in: chicago),
+            endDate: Self.date(2026, 7, 11, in: chicago),
+            isAllDay: true,
+            recurrenceRuleString: "FREQ=DAILY",
+            calendar: repository.defaultCalendar()
+        )
+        master.dateEncodingVersion = nil
+        repository.insert(master)
+        repository.migrateAllDayDatesToCivilEncodingIfNeeded(calendar: chicago)
+        #expect(override.dateEncodingVersion == CivilDay.encodingVersion)
+        #expect(override.originalOccurrenceDate == Self.day(2026, 7, 12).canonicalDate)
+        #expect(override.startDate == Self.date(2026, 7, 13, 9, in: chicago))
+    }
+
+    /// A failed migration rolls back only itself, and never discards work
+    /// other writers left pending on the shared context.
+    @Test func failedMigrationLeavesRowsLegacyAndOtherPendingWorkIntact() throws {
+        struct Refused: Error {}
+        let schema = Schema([CalendarEvent.self, UserCalendar.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let working = CalendarRepository(modelContext: context)
+        let legacyStart = Self.date(2026, 7, 10, in: Calendar.current)
+        let legacy = CalendarEvent(
+            title: "Holiday",
+            startDate: legacyStart,
+            endDate: legacyStart.addingTimeInterval(24 * 3600),
+            isAllDay: true,
+            calendar: working.defaultCalendar()
+        )
+        legacy.dateEncodingVersion = nil
+        working.insert(legacy)
+
+        // Commit fails: the migration's own changes roll back.
+        let failing = CalendarRepository(modelContext: context, persist: { _ in throw Refused() })
+        #expect(failing.migrateAllDayDatesToCivilEncodingIfNeeded() == 0)
+        #expect(legacy.dateEncodingVersion == nil)
+        #expect(legacy.startDate == legacyStart)
+
+        // Pending work from another writer can't be saved: the migration
+        // doesn't run, and that work stays pending rather than rolled back.
+        let pending = UserCalendar(name: "Unsaved")
+        context.insert(pending)
+        #expect(failing.migrateAllDayDatesToCivilEncodingIfNeeded() == 0)
+        #expect(context.hasChanges)
+        #expect(working.calendars().contains { $0.name == "Unsaved" })
+        #expect(legacy.dateEncodingVersion == nil)
+    }
+
     // MARK: - Editors and quick entry
 
     @Test func allDayDraftSavesUntilAsACivilDay() throws {
