@@ -23,20 +23,20 @@ enum SampleEmailSeeder {
             StoredEmailAccount(
                 displayName: "Work",
                 imapHost: "imap.work.example.com",
-                imapUsername: "fenn@work.example.com",
+                imapUsername: "alex@work.example.com",
                 smtpHost: "smtp.work.example.com",
-                smtpUsername: "fenn@work.example.com",
-                fromAddress: "fenn@work.example.com"
+                smtpUsername: "alex@work.example.com",
+                fromAddress: "alex@work.example.com"
             )
         )
         let personal = store.add(
             StoredEmailAccount(
                 displayName: "Personal",
                 imapHost: "imap.personal.example.com",
-                imapUsername: "fenn@personal.example.com",
+                imapUsername: "alex@personal.example.com",
                 smtpHost: "smtp.personal.example.com",
-                smtpUsername: "fenn@personal.example.com",
-                fromAddress: "fenn@personal.example.com"
+                smtpUsername: "alex@personal.example.com",
+                fromAddress: "alex@personal.example.com"
             )
         )
 
