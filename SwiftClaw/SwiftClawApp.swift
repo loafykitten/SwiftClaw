@@ -1,10 +1,3 @@
-//
-//  SwiftClawApp.swift
-//  SwiftClaw
-//
-//  Created by Fenn on 6/12/26.
-//
-
 import SwiftUI
 import SwiftData
 import os
