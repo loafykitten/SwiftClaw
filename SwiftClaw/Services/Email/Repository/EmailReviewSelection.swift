@@ -305,8 +305,10 @@ extension EmailRepository {
     /// explicitly requested folders always; otherwise archived/trashed only
     /// when their include flag is set, and the rest per role eligibility
     /// (inbox/sent always, opted-in custom folders, never junk/drafts).
-    /// Sorted oldest-first so `.last` is the latest considered message.
-    private static func consideredMessages(
+    /// Sorted oldest-first so `.last` is the latest considered message. Also
+    /// the message set `EmailReviewThreadDescriptor` serializes, so selection
+    /// and payload share one folder scope.
+    static func consideredMessages(
         of thread: EmailThread,
         filter: EmailReviewFetchFilter
     ) -> [Email] {

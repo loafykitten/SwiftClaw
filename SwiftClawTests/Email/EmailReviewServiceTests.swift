@@ -304,6 +304,58 @@ struct EmailReviewServiceTests {
     }
 
     @Test
+    func mailArrivingDuringInferenceLeavesItsThreadUnstamped() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let accountID = UUID()
+        repository.upsertMessages([
+            Self.message(uid: 1, messageID: "<race-root@example.com>", subject: "Race", date: .now.addingTimeInterval(-600)),
+            Self.message(uid: 2, messageID: "<race-quiet@example.com>", subject: "Quiet", date: .now.addingTimeInterval(-500)),
+        ], mailbox: "INBOX", accountID: accountID)
+        repository.resolveThreads()
+
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
+        service.completeProvider = { _, _, _, tools in
+            if let fetchTool = tools.first(where: { $0.name == "fetch_inbox_emails" }) {
+                _ = try await fetchTool.execute(arguments: [:])
+            }
+            // A reply lands (dated before the pass completes) while the model
+            // is still thinking — it never appears in the fetched payload.
+            await MainActor.run {
+                let lateRepository = EmailRepository(modelContext: ModelContext(container))
+                lateRepository.upsertMessages([
+                    EmailRepositoryTests.simpleMessage(
+                        uid: 3, messageID: "<race-late@example.com>", subject: "Re: Race",
+                        date: .now.addingTimeInterval(-60),
+                        inReplyTo: "<race-root@example.com>", references: ["<race-root@example.com>"]
+                    ),
+                ], mailbox: "INBOX", accountID: accountID)
+                lateRepository.resolveThreads()
+            }
+            return ""
+        }
+
+        #expect(await service.runOnce() == true)
+
+        let threads = try ModelContext(container).fetch(FetchDescriptor<EmailThread>())
+        let raceThread = try #require(threads.first { thread in
+            thread.messages.contains { $0.messageID == "<race-root@example.com>" }
+        })
+        let quietThread = try #require(threads.first { thread in
+            thread.messages.contains { $0.messageID == "<race-quiet@example.com>" }
+        })
+        #expect(raceThread.messages.count == 2)
+        // The unseen reply keeps its thread eligible; the untouched thread is
+        // stamped as usual.
+        #expect(raceThread.lastReviewedAt == nil)
+        #expect(quietThread.lastReviewedAt != nil)
+        #expect(repository.fetchNonArchivedThreadsForReview().map(\.id) == [raceThread.id])
+    }
+
+    @Test
     func reviewPromptOmitsArchivedMessagesFromMixedThread() async throws {
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
@@ -347,7 +399,7 @@ struct EmailReviewServiceTests {
 
         // The fetched thread JSON describes only the active message; the
         // archived one is omitted (`EmailReviewThreadDescriptor.make` uses the
-        // reviewable set).
+        // selection's considered message set).
         let result = try #require(await capture.result)
         #expect(result.contains("active@example.com"))
         #expect(result.contains("Active body still needs attention"))

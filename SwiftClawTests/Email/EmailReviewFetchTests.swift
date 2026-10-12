@@ -16,7 +16,7 @@ struct EmailReviewFetchTests {
     @MainActor
     private final class FetchedIDBox {
         private(set) var ids: [UUID] = []
-        func add(_ newIDs: [UUID]) { ids.append(contentsOf: newIDs) }
+        func add(_ threads: [EmailReviewFetchedThread]) { ids.append(contentsOf: threads.map(\.threadID)) }
     }
 
     private func suppressionOnlyFilter() -> EmailReviewFetchFilter {
@@ -442,6 +442,86 @@ struct EmailReviewFetchTests {
 
         let requested = try await tool.execute(arguments: ["folders": .array([.string("Spam")])])
         #expect(requested.contains("Tool junk"))
+    }
+
+    @Test func fetchToolPayloadFollowsTheSelectionFolderScope() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let repository = EmailRepository(modelContext: ModelContext(container))
+        let base = Date()
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(
+                uid: 1, messageID: "<scope-root@example.com>", subject: "Scope inbox",
+                date: base.addingTimeInterval(-300)
+            )],
+            mailbox: "INBOX", accountID: Self.accountID
+        )
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(
+                uid: 2, messageID: "<scope-custom@example.com>", subject: "Scope custom",
+                date: base.addingTimeInterval(-200),
+                inReplyTo: "<scope-root@example.com>", references: ["<scope-root@example.com>"]
+            )],
+            mailbox: "Projects", accountID: Self.accountID, role: .custom
+        )
+        repository.upsertMessages(
+            [EmailRepositoryTests.simpleMessage(
+                uid: 3, messageID: "<scope-junk@example.com>", subject: "Scope junk",
+                date: base.addingTimeInterval(-100),
+                inReplyTo: "<scope-root@example.com>", references: ["<scope-root@example.com>"]
+            )],
+            mailbox: "Spam", accountID: Self.accountID, role: .junk
+        )
+        repository.resolveThreads()
+        #expect(try ModelContext(container).fetch(FetchDescriptor<EmailThread>()).count == 1)
+
+        let tool = EmailReviewFetchTool(
+            modelContainer: container,
+            applySuppression: false,
+            defaults: Self.fetchDefaults(limit: 10)
+        )
+
+        // Scheduled scope: the custom folder isn't opted in, so its message
+        // stays out of the payload even though the thread was selected.
+        let scheduled = try await tool.execute(arguments: [:])
+        #expect(scheduled.contains("Scope inbox"))
+        #expect(!scheduled.contains("Scope custom"))
+        #expect(!scheduled.contains("Scope junk"))
+
+        // An explicit Junk request keeps the junk message in the mixed thread.
+        let requested = try await tool.execute(arguments: ["folders": .array([.string("Spam")])])
+        #expect(requested.contains("Scope inbox"))
+        #expect(requested.contains("Scope junk"))
+        #expect(!requested.contains("Scope custom"))
+    }
+
+    @Test func intArgumentRejectsNonIntegralOrOutOfRangeNumbers() throws {
+        #expect(try EmailReviewFetchTool.intArgument(.number(7), name: "limit") == 7)
+        #expect(try EmailReviewFetchTool.intArgument(.string(" 12 "), name: "limit") == 12)
+        #expect(try EmailReviewFetchTool.intArgument(nil, name: "limit") == nil)
+        #expect(try EmailReviewFetchTool.intArgument(.bool(true), name: "limit") == nil)
+        for bad: JSONValue in [
+            .number(1e100), .number(-1e100), .number(2.5), .number(.infinity), .number(.nan),
+            .string("1e100"), .string("abc"),
+        ] {
+            #expect(throws: ToolError.self) {
+                _ = try EmailReviewFetchTool.intArgument(bad, name: "limit")
+            }
+        }
+    }
+
+    @Test func fetchToolRejectsHugeNumericArgumentsWithoutTrapping() async throws {
+        let container = try EmailRepositoryTests.inMemoryContainer()
+        let tool = EmailReviewFetchTool(
+            modelContainer: container,
+            applySuppression: false,
+            defaults: Self.fetchDefaults(limit: 10)
+        )
+        await #expect(throws: ToolError.self) {
+            _ = try await tool.execute(arguments: ["limit": .number(1e100)])
+        }
+        await #expect(throws: ToolError.self) {
+            _ = try await tool.execute(arguments: ["max_age_days": .number(-1e300)])
+        }
     }
 
     private static func fetchDefaults(limit: Int) -> EmailReviewFetchDefaults {

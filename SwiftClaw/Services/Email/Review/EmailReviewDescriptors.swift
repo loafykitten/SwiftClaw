@@ -12,15 +12,15 @@ nonisolated struct EmailReviewThreadDescriptor: Codable, Sendable {
     let isFlagged: Bool
     let messages: [EmailReviewMessageDescriptor]
 
-    /// Builds the prompt snapshot for a thread. Shared by the scheduled/manual
-    /// review pass and the `fetch_inbox_emails` tool so both serialize threads
-    /// identically. Describes the thread's reviewable (inbox) messages, falling
-    /// back to all messages when the reviewable set is empty — the case when a
-    /// fully archived or trashed thread is surfaced via an include flag.
+    /// Builds the prompt snapshot for a thread from exactly the messages the
+    /// review selection considered (`EmailRepository.consideredMessages`), so
+    /// the payload honors the same folder scope that picked the thread:
+    /// excluded custom folders stay out, and explicitly requested Junk/Drafts
+    /// messages stay in even beside Inbox mail. Falls back to all messages
+    /// only when handed an empty set.
     @MainActor
-    static func make(for thread: EmailThread) -> EmailReviewThreadDescriptor {
-        let reviewable = thread.reviewableMessages
-        let source = reviewable.isEmpty ? thread.sortedMessages : reviewable
+    static func make(for thread: EmailThread, messages selected: [Email]) -> EmailReviewThreadDescriptor {
+        let source = selected.isEmpty ? thread.sortedMessages : selected.sorted { $0.date < $1.date }
         let latest = source.last
         let messages = source.map { message in
             EmailReviewMessageDescriptor(
@@ -39,9 +39,7 @@ nonisolated struct EmailReviewThreadDescriptor: Codable, Sendable {
             threadID: thread.id,
             subject: latest?.subject ?? "",
             latestMessageDate: latest.map { EmailReviewDateFormatter.string(from: $0.date) } ?? "",
-            participantSummary: reviewable.isEmpty
-                ? thread.participantSummary
-                : thread.reviewParticipantSummary,
+            participantSummary: thread.participantSummary(for: source),
             snippet: latest?.snippet ?? "",
             unreadCount: source.filter { !$0.isRead }.count,
             isFlagged: source.contains { $0.isFlagged },

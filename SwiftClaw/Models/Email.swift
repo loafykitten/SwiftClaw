@@ -105,7 +105,7 @@ final class EmailThread {
         messages.filter { !$0.isRead }.count
     }
 
-    private func participantSummary(for messages: [Email]) -> String {
+    func participantSummary(for messages: [Email]) -> String {
         let addresses = messages.flatMap { [$0.displayFromAddress] + $0.displayToAddresses }
         let unique = Array(NSOrderedSet(array: addresses)).compactMap { $0 as? String }
         return unique.prefix(3).joined(separator: ", ")
