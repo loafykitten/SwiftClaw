@@ -80,6 +80,8 @@ nonisolated struct PageFetcher: Sendable {
         }
 
         guard await FetchDestinationPolicy.allows(url, resolveHost: resolveHost) else {
+            // A cancelled lookup fails closed; report it as the cancellation.
+            try Task.checkCancellation()
             throw PageFetchError.blockedDestination
         }
 

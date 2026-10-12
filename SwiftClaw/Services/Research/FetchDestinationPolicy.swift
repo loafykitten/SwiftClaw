@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 
 /// Decides whether a research fetch may contact a URL. Search results are
 /// attacker-influenced, and fetched text flows into prompts sent to the
@@ -108,10 +109,28 @@ nonisolated enum FetchDestinationPolicy {
     /// Resolves through the system resolver on a background queue, since
     /// `getaddrinfo` blocks.
     static let systemResolver: HostResolver = { host in
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: resolveSynchronously(host))
+        await resolve(host, blockingLookup: resolveSynchronously)
+    }
+
+    /// Runs a blocking lookup off the cooperative pool, returning no
+    /// addresses (failing closed) as soon as the calling task is cancelled.
+    /// `getaddrinfo` itself can't be interrupted, so a stalled lookup keeps
+    /// its background thread until DNS gives up; its late result is dropped.
+    static func resolve(
+        _ host: String,
+        blockingLookup: @escaping @Sendable (String) -> [[UInt8]]
+    ) async -> [[UInt8]] {
+        guard !Task.isCancelled else { return [] }
+        let waiter = ResolutionWaiter()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                guard waiter.install(continuation) else { return }
+                DispatchQueue.global(qos: .utility).async {
+                    waiter.finish(with: blockingLookup(host))
+                }
             }
+        } onCancel: {
+            waiter.finish(with: [])
         }
     }
 
@@ -146,5 +165,51 @@ nonisolated enum FetchDestinationPolicy {
             cursor = info.ai_next
         }
         return addresses
+    }
+}
+
+/// Resumes one resolution continuation exactly once, whichever of the lookup
+/// or cancellation finishes first. Cancellation can arrive before the
+/// continuation is installed, so a result that lands early is held for it.
+private nonisolated final class ResolutionWaiter: Sendable {
+    private enum State {
+        case pending
+        case waiting(CheckedContinuation<[[UInt8]], Never>)
+        case finished([[UInt8]])
+        case resumed
+    }
+
+    private let state = Mutex(State.pending)
+
+    /// `false` when cancellation already resumed `continuation`, so the
+    /// caller can skip starting a lookup nobody will read.
+    func install(_ continuation: CheckedContinuation<[[UInt8]], Never>) -> Bool {
+        let early: [[UInt8]]? = state.withLock { state in
+            guard case .finished(let addresses) = state else {
+                state = .waiting(continuation)
+                return nil
+            }
+            state = .resumed
+            return addresses
+        }
+        guard let early else { return true }
+        continuation.resume(returning: early)
+        return false
+    }
+
+    func finish(with addresses: [[UInt8]]) {
+        let continuation: CheckedContinuation<[[UInt8]], Never>? = state.withLock { state in
+            switch state {
+            case .pending:
+                state = .finished(addresses)
+                return nil
+            case .waiting(let continuation):
+                state = .resumed
+                return continuation
+            case .finished, .resumed:
+                return nil
+            }
+        }
+        continuation?.resume(returning: addresses)
     }
 }

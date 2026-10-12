@@ -147,6 +147,59 @@ struct PageFetcherTests {
         ])
     }
 
+    /// A stalled `getaddrinfo` must not hold Stop or a run deadline hostage:
+    /// cancellation fails the lookup closed right away, and the lookup's late
+    /// answer is dropped without resuming anything twice.
+    @Test func stalledHostLookupReturnsPromptlyWhenCancelled() async throws {
+        let lookupStarted = DispatchSemaphore(value: 0)
+        let unstall = DispatchSemaphore(value: 0)
+        let lookupFinished = DispatchSemaphore(value: 0)
+        let lookup: @Sendable (String) -> [[UInt8]] = { _ in
+            lookupStarted.signal()
+            unstall.wait()
+            defer { lookupFinished.signal() }
+            return [[93, 184, 216, 34]]
+        }
+
+        let resolution = Task { await FetchDestinationPolicy.resolve("stalled.example", blockingLookup: lookup) }
+        await waitOffCooperativePool(lookupStarted)
+        resolution.cancel()
+
+        #expect(await resolution.value.isEmpty)
+
+        // The late answer lands on a waiter that already resumed.
+        unstall.signal()
+        await waitOffCooperativePool(lookupFinished)
+    }
+
+    /// The research deadline cancels its fetch child and then waits for it,
+    /// so a fetch stuck in DNS must end on cancellation, not on DNS.
+    @Test func fetchCancelledDuringAStalledLookupThrowsCancellation() async throws {
+        let lookupStarted = DispatchSemaphore(value: 0)
+        let unstall = DispatchSemaphore(value: 0)
+        defer { unstall.signal() }
+        let fetcher = makeFetcher(
+            statusCode: 200,
+            mimeType: "text/plain",
+            body: Data("never fetched".utf8),
+            resolveHost: { host in
+                await FetchDestinationPolicy.resolve(host) { _ in
+                    lookupStarted.signal()
+                    unstall.wait()
+                    return [[93, 184, 216, 34]]
+                }
+            }
+        )
+        let url = try #require(URL(string: "https://stalled.example/"))
+
+        let fetch = Task { try await fetcher.fetch(url: url, maxBytes: 100) }
+        await waitOffCooperativePool(lookupStarted)
+        fetch.cancel()
+
+        await #expect(throws: CancellationError.self) { try await fetch.value }
+        #expect(StubPageURLProtocol.requestedURLs.value.isEmpty)
+    }
+
     @Test func classifiesAddresses() throws {
         let publicHosts = ["93.184.216.34", "8.8.8.8", "2606:4700::1111", "::ffff:8.8.8.8"]
         let privateHosts = [
@@ -163,6 +216,16 @@ struct PageFetcherTests {
         for host in privateHosts {
             let address = try #require(FetchDestinationPolicy.numericAddress(host))
             #expect(!FetchDestinationPolicy.isPublicAddress(address), "\(host)")
+        }
+    }
+
+    /// Blocks a GCD thread, not a cooperative-pool one, on `semaphore`.
+    private func waitOffCooperativePool(_ semaphore: DispatchSemaphore) async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                semaphore.wait()
+                continuation.resume()
+            }
         }
     }
 
