@@ -100,6 +100,71 @@ struct AppRouterUnreadChatTests {
         #expect(SettingsStorage.loadUnreadChatIDs(userDefaults: fixture.defaults) == [survivingID])
     }
 
+    @Test func repliesToTheSelectedChatCountAsUnreadWhileTheSceneIsInactive() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+
+        let chatID = UUID()
+        let sceneID = UUID()
+        router.selectedNavigationItem = .chats
+        router.selectedChatID = chatID
+        router.sceneActivityDidChange(true, sceneID: sceneID)
+        #expect(router.isViewingChat(chatID))
+
+        router.sceneActivityDidChange(false, sceneID: sceneID)
+        router.noteNewChatMessages(in: chatID)
+
+        #expect(router.isViewingChat(chatID) == false)
+        #expect(router.hasUnreadMessages(in: chatID))
+    }
+
+    @Test func reactivatingTheSceneClearsTheSelectedChatsUnreadState() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+
+        let chatID = UUID()
+        let sceneID = UUID()
+        router.selectedNavigationItem = .chats
+        router.selectedChatID = chatID
+        router.sceneActivityDidChange(false, sceneID: sceneID)
+        router.noteNewChatMessages(in: chatID)
+        #expect(router.hasUnreadMessages(in: chatID))
+
+        router.sceneActivityDidChange(true, sceneID: sceneID)
+
+        #expect(router.hasUnreadMessages(in: chatID) == false)
+    }
+
+    @Test func anyActiveWindowKeepsTheSelectedChatViewed() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+
+        let chatID = UUID()
+        let activeScene = UUID()
+        let backgroundScene = UUID()
+        router.selectedNavigationItem = .chats
+        router.selectedChatID = chatID
+        router.sceneActivityDidChange(true, sceneID: activeScene)
+        router.sceneActivityDidChange(false, sceneID: backgroundScene)
+
+        #expect(router.isViewingChat(chatID))
+
+        router.sceneActivityDidChange(false, sceneID: activeScene)
+        #expect(router.isViewingChat(chatID) == false)
+    }
+
+    @Test func liveSceneReportsAreIgnoredOnceTestsResetTheRouter() throws {
+        let (router, fixture) = try Self.isolatedRouter()
+        defer { Self.restore(router, fixture) }
+
+        let chatID = UUID()
+        router.selectedNavigationItem = .chats
+        router.selectedChatID = chatID
+        router.reportSceneActivity(false, sceneID: UUID())
+
+        #expect(router.isViewingChat(chatID))
+    }
+
     @Test func openingSettingsStoresRequestedSection() {
         let router = AppRouter.shared
         router.resetForTesting()

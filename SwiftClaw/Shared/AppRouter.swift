@@ -35,6 +35,18 @@ final class AppRouter {
     /// Backing store for the settings write in `showResearchSession`.
     /// Swappable in DEBUG for the same reason as `unreadStore`.
     @ObservationIgnored private var settingsStore: UserDefaults = .standard
+    /// Root windows whose scene is currently active (foreground, and on macOS
+    /// the app is frontmost with that window main/key). A selected chat only
+    /// counts as viewed while some window is active.
+    @ObservationIgnored private var activeSceneIDs: Set<UUID> = []
+    /// Until a window reports, treat the app as foreground so launch-time
+    /// routing behaves as before scene tracking existed.
+    @ObservationIgnored private var hasSceneReports = false
+    #if DEBUG
+    /// Set by `resetForTesting`: the unit-test host runs the real app UI,
+    /// whose live scene reports would otherwise race the tests.
+    @ObservationIgnored private var ignoresLiveSceneReports = false
+    #endif
 
     private init() {
         unreadChatIDs = SettingsStorage.loadUnreadChatIDs(userDefaults: unreadStore)
@@ -188,7 +200,40 @@ final class AppRouter {
     /// delegate's willPresent suppression can ask the same question the unread
     /// bookkeeping answers.
     func isViewingChat(_ chatID: UUID) -> Bool {
-        selectedNavigationItem == .chats && selectedChatID == chatID
+        isSceneActive && selectedNavigationItem == .chats && selectedChatID == chatID
+    }
+
+    var isSceneActive: Bool {
+        !hasSceneReports || !activeSceneIDs.isEmpty
+    }
+
+    /// Called by each root window as its scene phase / window activeness
+    /// changes. Becoming active again clears the unread state of the chat
+    /// left selected, since its replies are now actually on screen.
+    func reportSceneActivity(_ isActive: Bool, sceneID: UUID) {
+        #if DEBUG
+        guard !ignoresLiveSceneReports else { return }
+        #endif
+        sceneActivityDidChange(isActive, sceneID: sceneID)
+    }
+
+    func reportSceneRemoved(_ sceneID: UUID) {
+        #if DEBUG
+        guard !ignoresLiveSceneReports else { return }
+        #endif
+        sceneActivityDidChange(false, sceneID: sceneID)
+    }
+
+    /// Internal so tests can drive scene activity past the DEBUG live-report
+    /// guard; production goes through `reportSceneActivity`.
+    func sceneActivityDidChange(_ isActive: Bool, sceneID: UUID) {
+        hasSceneReports = true
+        if isActive {
+            activeSceneIDs.insert(sceneID)
+            clearUnreadChatIfOpened()
+        } else {
+            activeSceneIDs.remove(sceneID)
+        }
     }
 
     /// Drops unread IDs whose chat no longer exists — e.g. after a store
@@ -238,6 +283,9 @@ final class AppRouter {
         pendingCalendarFocus = false
         pendingReminderFocusID = nil
         pendingResearchSessionID = nil
+        activeSceneIDs.removeAll()
+        hasSceneReports = false
+        ignoresLiveSceneReports = true
         self.unreadStore = unreadStore
         self.settingsStore = settingsStore
         syncDockBadge()

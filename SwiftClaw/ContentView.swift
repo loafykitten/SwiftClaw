@@ -45,6 +45,14 @@ enum NavigationItem: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
+    #if os(macOS)
+    /// False when the app isn't frontmost or another window is main — on
+    /// macOS `scenePhase` stays `.active` for any visible window.
+    @Environment(\.appearsActive) private var windowAppearsActive
+    #endif
+    /// This window's identity in the router's scene-activity bookkeeping.
+    @State private var sceneActivityID = UUID()
     @State private var router = AppRouter.shared
     @State private var isNotificationBridgeStarted = false
     @State private var backStack: [NavigationItem] = []
@@ -181,9 +189,14 @@ struct ContentView: View {
             .onAppear {
                 applyLaunchNavigationIfNeeded()
                 startNotificationBridge()
+                router.reportSceneActivity(isSceneActive, sceneID: sceneActivityID)
             }
             .onDisappear {
                 stopNotificationBridge()
+                router.reportSceneRemoved(sceneActivityID)
+            }
+            .onChange(of: isSceneActive, initial: true) { _, isActive in
+                router.reportSceneActivity(isActive, sceneID: sceneActivityID)
             }
             .environment(router)
             .onChange(of: router.selectedNavigationItem) { oldValue, item in
@@ -391,6 +404,17 @@ struct ContentView: View {
         memoryDispatcherState?.writeDispatcher = write
         memoryDispatcherState?.proposalDispatcher = proposal
         return (write, proposal)
+    }
+
+    /// Whether this window is in front of the user: a backgrounded or
+    /// minimized window (or, on macOS, an inactive app) doesn't count as
+    /// viewing its selected chat.
+    private var isSceneActive: Bool {
+        #if os(macOS)
+        scenePhase == .active && windowAppearsActive
+        #else
+        scenePhase == .active
+        #endif
     }
 
     private func startNotificationBridge() {
