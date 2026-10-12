@@ -339,4 +339,93 @@ struct RecurrenceExpanderTests {
             Self.date(2026, 8, 3, 9),
         ])
     }
+
+    // MARK: - BY-part combinations (RFC 5545 §3.3.10)
+
+    @Test func dailyByMonthDayLimitsToThatDay() {
+        let starts = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=DAILY;BYMONTHDAY=1"),
+            eventStart: Self.date(2026, 6, 1, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2026, 6, 1), Self.date(2026, 9, 2)),
+            timeZone: Self.utc
+        )
+        #expect(starts == [
+            Self.date(2026, 6, 1, 9), Self.date(2026, 7, 1, 9),
+            Self.date(2026, 8, 1, 9), Self.date(2026, 9, 1, 9),
+        ])
+    }
+
+    @Test func dailyNegativeByMonthDayCountsFromMonthEnd() {
+        let starts = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=DAILY;BYMONTHDAY=-1"),
+            eventStart: Self.date(2026, 6, 30, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2026, 6, 1), Self.date(2026, 9, 1)),
+            timeZone: Self.utc
+        )
+        #expect(starts == [Self.date(2026, 6, 30, 9), Self.date(2026, 7, 31, 9), Self.date(2026, 8, 31, 9)])
+    }
+
+    /// YEARLY BYDAY without BYMONTH covers the whole year, not DTSTART's month.
+    @Test func yearlyByDayWithoutByMonthSpansTheYear() {
+        // 2026-01-05 is a Monday.
+        let starts = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=YEARLY;BYDAY=MO"),
+            eventStart: Self.date(2026, 1, 5, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2026, 3, 1), Self.date(2026, 4, 1)),
+            timeZone: Self.utc
+        )
+        #expect(starts == [
+            Self.date(2026, 3, 2, 9), Self.date(2026, 3, 9, 9), Self.date(2026, 3, 16, 9),
+            Self.date(2026, 3, 23, 9), Self.date(2026, 3, 30, 9),
+        ])
+    }
+
+    @Test func yearlyByDayOrdinalsCountWithinTheYear() {
+        let twentieth = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=YEARLY;BYDAY=20MO"),
+            eventStart: Self.date(2026, 1, 5, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2026, 1, 6), Self.date(2028, 1, 1)),
+            timeZone: Self.utc
+        )
+        #expect(twentieth == [Self.date(2026, 5, 18, 9), Self.date(2027, 5, 17, 9)])
+
+        let lastFriday = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=YEARLY;BYDAY=-1FR"),
+            eventStart: Self.date(2026, 1, 2, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2026, 1, 3), Self.date(2027, 1, 1)),
+            timeZone: Self.utc
+        )
+        #expect(lastFriday == [Self.date(2026, 12, 25, 9)])
+    }
+
+    @Test func yearlyByMonthDayWithoutByMonthCoversEveryMonth() {
+        let starts = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=YEARLY;BYMONTHDAY=15"),
+            eventStart: Self.date(2026, 1, 15, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2026, 1, 1), Self.date(2026, 4, 1)),
+            timeZone: Self.utc
+        )
+        #expect(starts == [Self.date(2026, 1, 15, 9), Self.date(2026, 2, 15, 9), Self.date(2026, 3, 15, 9)])
+    }
+
+    /// A hand-built rule bypasses the parser's INTERVAL cap; period
+    /// arithmetic must stop instead of trapping on overflow.
+    @Test(arguments: RecurrenceRule.Frequency.allCases)
+    func hugeIntervalEndsExpansionWithoutTrapping(frequency: RecurrenceRule.Frequency) {
+        let start = Self.date(2026, 6, 1, 9)
+        let starts = RecurrenceExpander.occurrenceStarts(
+            rule: RecurrenceRule(frequency: frequency, interval: .max),
+            eventStart: start,
+            duration: 3600,
+            window: Self.window(Self.date(2026, 1, 1), Self.date(2030, 1, 1)),
+            timeZone: Self.utc
+        )
+        #expect(starts == [start])
+    }
 }

@@ -27,13 +27,15 @@ final class CalendarReviewFetchTool: Tool {
     var isEnabled: Bool { true }
 
     private let modelContainer: ModelContainer
-    /// Reports the master event IDs actually handed to the model so the
-    /// service can stamp `lastReviewedAt` after a successful pass.
-    private let onEventsFetched: @MainActor ([UUID]) -> Void
+    /// Reports the event rows actually handed to the model, keyed by ID
+    /// with the `modifiedAt` the model saw, so the service stamps
+    /// `lastReviewedAt` after a successful pass only on rows that haven't
+    /// changed since.
+    private let onEventsFetched: @MainActor ([UUID: Date]) -> Void
 
     init(
         modelContainer: ModelContainer,
-        onEventsFetched: @escaping @MainActor ([UUID]) -> Void = { _ in }
+        onEventsFetched: @escaping @MainActor ([UUID: Date]) -> Void = { _ in }
     ) {
         self.modelContainer = modelContainer
         self.onEventsFetched = onEventsFetched
@@ -62,7 +64,13 @@ final class CalendarReviewFetchTool: Tool {
             occurrences = Array(occurrences.prefix(limit))
 
             let masterIDs = Array(Set(occurrences.map(\.eventID)))
-            onEventsFetched(masterIDs)
+            var eventsByID: [UUID: CalendarEvent] = [:]
+            for event in repository.events(withIDs: masterIDs) {
+                if eventsByID[event.id] == nil {
+                    eventsByID[event.id] = event
+                }
+            }
+            onEventsFetched(eventsByID.mapValues(\.modifiedAt))
 
             guard !occurrences.isEmpty else {
                 return "No events in this window."
@@ -71,12 +79,6 @@ final class CalendarReviewFetchTool: Tool {
             let calendarNames: [UUID: String] = Dictionary(
                 uniqueKeysWithValues: repository.calendars().map { ($0.id, $0.name) }
             )
-            var eventsByID: [UUID: CalendarEvent] = [:]
-            for event in repository.events(withIDs: masterIDs) {
-                if eventsByID[event.id] == nil {
-                    eventsByID[event.id] = event
-                }
-            }
             let lines = occurrences.map { occurrence -> String in
                 let event = eventsByID[occurrence.eventID]
                 var parts = [

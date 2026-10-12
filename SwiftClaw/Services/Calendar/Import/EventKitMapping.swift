@@ -113,6 +113,53 @@ nonisolated enum EventKitMapping {
         return expected.filter { !actualKeys.contains(Int64($0.timeIntervalSinceReferenceDate.rounded())) }
     }
 
+    // MARK: - Windowed re-import reconciliation
+
+    /// Whether an occurrence starting at `start` falls inside a fetch of
+    /// `window` (EventKit's predicate and the expander both test overlap).
+    static func windowCovers(_ start: Date, duration: TimeInterval, window: DateInterval) -> Bool {
+        start < window.end && start.addingTimeInterval(max(0, duration)) > window.start
+    }
+
+    /// The master's EXDATEs after a windowed re-import: the fetched window
+    /// is rebuilt from `missing` + `detachedOriginalStarts`, and every
+    /// existing EXDATE outside it is kept (the fetch says nothing about it).
+    static func reconciledExceptionDates(
+        existing: [Date],
+        missing: [Date],
+        detachedOriginalStarts: [Date],
+        duration: TimeInterval,
+        window: DateInterval
+    ) -> [Date] {
+        let outside = existing.filter { !windowCovers($0, duration: duration, window: window) }
+        var seen = Set<Int64>()
+        return (outside + missing + detachedOriginalStarts)
+            .sorted()
+            .filter { seen.insert(Int64($0.timeIntervalSinceReferenceDate.rounded())).inserted }
+    }
+
+    /// Whether a previously imported override that this fetch didn't return
+    /// is gone from EventKit. Only provable inside the fetched window: its
+    /// original occurrence came back as a plain occurrence (the edit was
+    /// reverted), or the override itself sat in the window and wasn't
+    /// returned (deleted). An override whose original or current slot lies
+    /// outside the window may still exist and is kept.
+    static func isStaleImportedOverride(
+        originalStart: Date,
+        overrideStart: Date,
+        overrideDuration: TimeInterval,
+        masterDuration: TimeInterval,
+        window: DateInterval,
+        actualStarts: [Date]
+    ) -> Bool {
+        guard windowCovers(originalStart, duration: masterDuration, window: window) else { return false }
+        let originalKey = Int64(originalStart.timeIntervalSinceReferenceDate.rounded())
+        if actualStarts.contains(where: { Int64($0.timeIntervalSinceReferenceDate.rounded()) == originalKey }) {
+            return true
+        }
+        return windowCovers(overrideStart, duration: overrideDuration, window: window)
+    }
+
     // MARK: - Colors
 
     static func colorHex(from cgColor: CGColor?) -> String {

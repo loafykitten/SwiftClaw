@@ -66,7 +66,7 @@ nonisolated enum ICSSerializer {
                 calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: event.start)) ?? event.end
             )
             lines.append("DTEND;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: exclusiveEnd, calendar: calendar))")
-        } else if event.rruleString != nil, let zone = event.timeZoneIdentifier {
+        } else if event.rruleString != nil, let zone = event.timeZoneIdentifier, !ICSDateFormat.isUTC(zone) {
             let calendar = ICSDateFormat.calendar(for: zone)
             lines.append("DTSTART;TZID=\(zone):\(ICSDateFormat.localString(from: event.start, calendar: calendar))")
             lines.append("DTEND;TZID=\(zone):\(ICSDateFormat.localString(from: event.end, calendar: calendar))")
@@ -95,7 +95,7 @@ nonisolated enum ICSSerializer {
                 // as DTSTART above).
                 let calendar = ICSDateFormat.calendar(for: TimeZone.current.identifier)
                 lines.append("EXDATE;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: exception, calendar: calendar))")
-            } else if let zone = event.timeZoneIdentifier, event.rruleString != nil {
+            } else if let zone = event.timeZoneIdentifier, event.rruleString != nil, !ICSDateFormat.isUTC(zone) {
                 let calendar = ICSDateFormat.calendar(for: zone)
                 lines.append("EXDATE;TZID=\(zone):\(ICSDateFormat.localString(from: exception, calendar: calendar))")
             } else {
@@ -128,7 +128,7 @@ nonisolated enum ICSSerializer {
                 let calendar = ICSDateFormat.calendar(for: TimeZone.current.identifier)
                 lines.append("DUE;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: due, calendar: calendar))")
             } else if todo.rruleString != nil || todo.afterCompletionRepeat != nil,
-                      let zone = todo.timeZoneIdentifier {
+                      let zone = todo.timeZoneIdentifier, !ICSDateFormat.isUTC(zone) {
                 // Repeating timed to-dos keep their zone so wall-clock
                 // semantics survive DST, matching the VEVENT policy —
                 // after-completion repeats do zone-sensitive month/DST math
@@ -240,6 +240,12 @@ nonisolated enum ICSDateFormat {
             ?? TimeZone(identifier: "UTC")
             ?? .gmt
         return calendar
+    }
+
+    /// UTC zones serialize in the portable "…Z" form rather than as a TZID
+    /// (the parser maps a repeating "…Z" start back to UTC).
+    static func isUTC(_ timeZoneIdentifier: String) -> Bool {
+        ["UTC", "GMT", "Etc/UTC", "Etc/GMT"].contains(timeZoneIdentifier)
     }
 
     static func utcString(from date: Date) -> String {

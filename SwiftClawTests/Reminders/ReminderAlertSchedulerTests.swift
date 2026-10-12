@@ -41,6 +41,8 @@ struct ReminderAlertSchedulerTests {
             fixture = try UserDefaultsFixture()
             // Master + reminder-alert notification settings on.
             fixture.defaults.set(true, forKey: SettingsKeys.notificationsEnabled)
+            // Scheduled alerts also require their feature to be on.
+            fixture.defaults.set(true, forKey: SettingsKeys.remindersEnabled)
 
             spy = NotificationSchedulingSpy()
             service = AppNotificationService()

@@ -40,7 +40,10 @@ pass on remote-change notifications once sync is live.
   upserts by `calendarItemExternalIdentifier`, reconstructs recurring masters,
   maps detached occurrences to overrides, recovers deleted occurrences as
   EXDATEs by diffing expansion against what EventKit returned, and degrades
-  unmappable recurrences to windowed one-offs. Needs the calendars entitlement
+  unmappable recurrences to windowed one-offs. Only the fetched window is
+  reconciled: EXDATEs and overrides outside it survive a re-import, and a
+  series that became a one-off drops its rule, EXDATEs, and overrides
+  (`CalendarRepository.clearRecurrence`). Needs the calendars entitlement
   + `NSCalendarsFullAccessUsageDescription` (an `INFOPLIST_KEY_*` build
   setting; Info.plist is generated).
 - `ICSSerializer` / `ICSParser`: in-house minimal RFC 5545 (VEVENT + VTODO
@@ -51,7 +54,13 @@ pass on remote-change notifications once sync is live.
   serialize as floating local dates (`VALUE=DATE`, including EXDATEs — never
   UTC, which would shift the date in non-UTC zones). `RECURRENCE-ID` VEVENTs
   import as detached override rows keyed `uid@detached@<original-start>`,
-  masters first regardless of file order.
+  masters first regardless of file order. Re-importing a master drops
+  imported overrides the file no longer carries (unless it still EXDATEs
+  them). Native rows export as `swiftclaw-<id>` and import back onto
+  themselves (keeping their calendar), so re-importing your own export
+  never duplicates. A repeating `…Z` start without TZID recurs in UTC.
+- Imports run as one transaction (`performImport`): a failed save throws and
+  the UI reports it instead of a count.
 - First-enable onboarding (`Features/Calendar/Import/CalendarOnboardingSheet`)
   offers Apple import / .ics import / start fresh; everything re-runnable from
   Settings › Calendar.
@@ -66,7 +75,10 @@ popover; week/day (`Grid/CalendarTimelineView`) render frames precomputed by
 the pure `CalendarTimelineLayoutEngine` and support drag-create/move/resize
 (recurring masters and overlay events excluded — edits go through the
 editor's explicit scope prompts). The editor sheet works off a
-`CalendarEventDraft` value; Save is the only write. When the opt-in
+`CalendarEventDraft` value; Save is the only write, one
+`performTransaction` — on a failed save it rolls back and the sheet stays
+open with the draft. The timeline maps frames and gestures through
+wall-clock time, so DST days line up with the 24 hour labels. When the opt-in
 `settings.reminders.showInCalendar` toggle is on, due-dated reminders render
 as chips in the month grid, all-day strip, and agenda — see
 `docs/features/REMINDERS.md`.
@@ -85,7 +97,9 @@ as chips in the month grid, all-day strip, and agenda — see
   Reminder slots.
 - Reconciliation runs after store saves (`.calendarStoreDidChange`), remote
   changes, settings changes, and every 12 hours. Disabling alerts clears booked
-  requests; disabling Calendar calls `clearAllPendingAlerts()`.
+  requests; disabling Calendar calls `clearAllPendingAlerts()`, which first
+  waits for in-flight posts. Scheduled posts re-check the feature toggle
+  after their authorization lookup, so a disable mid-post books nothing.
 - Taps route through `NotificationRoutingPayload.Kind.calendarEvent` to
   `AppRouter.showCalendar()`.
 
@@ -97,7 +111,8 @@ from Settings; 0 = manual only), `CalendarReviewService.runOnce()` builds a
 + `notify_user_about_events` (never on `ToolRegistry.shared`), and the model
 decides whether to create a "Calendar review —" chat with a `.calendar`
 review card (`Features/Chats/ReviewCards/CalendarReviewCardRenderer`).
-Fetched events are stamped `lastReviewedAt` only after a successful pass.
+Fetched events are stamped `lastReviewedAt` only after a successful pass,
+and only if unchanged since the model fetched them.
 Scheduled passes skip when nothing upcoming is new or modified since its
 stamp; when a pass does run, unchanged reviewed events are marked
 "previously reviewed" in the fetch payload so the model doesn't repeat

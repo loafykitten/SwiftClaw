@@ -82,11 +82,20 @@ final class AppNotificationService: NSObject {
     /// Awaits all in-flight `center.add` tasks so tests can assert against
     /// the spy without racing the posting `Task`s.
     func flushPostsForTesting() async {
-        for task in postTasks.values {
+        await waitForInFlightPosts()
+    }
+    #endif
+
+    /// Awaits every post that is still between its gate and `center.add`.
+    /// Alert clearing calls this before listing pending requests, so a post
+    /// already past its gate lands first and is then removed, instead of
+    /// being added after the clear read an empty list.
+    func waitForInFlightPosts() async {
+        // Snapshot: posts started while waiting are gated on the new state.
+        for task in Array(postTasks.values) {
             await task.value
         }
     }
-    #endif
 
     /// Installs the delegate + notification categories. Called from
     /// `SwiftClawApp.init` (preview-guarded) so a notification tap that
@@ -407,10 +416,15 @@ final class AppNotificationService: NSObject {
             return SettingsStorage.areReviewResultNotificationsEnabled(userDefaults: userDefaults)
         case .chatReplies:
             return SettingsStorage.areChatReplyNotificationsEnabled(userDefaults: userDefaults)
+        // Scheduled alerts also require their feature: disabling Calendar or
+        // Reminders clears booked alerts, and a post suspended across that
+        // switch must not re-book one afterwards.
         case .calendarAlerts:
-            return SettingsStorage.areCalendarAlertNotificationsEnabled(userDefaults: userDefaults)
+            return SettingsStorage.isCalendarEnabled(userDefaults: userDefaults)
+                && SettingsStorage.areCalendarAlertNotificationsEnabled(userDefaults: userDefaults)
         case .reminderAlerts:
-            return SettingsStorage.areReminderAlertNotificationsEnabled(userDefaults: userDefaults)
+            return SettingsStorage.isRemindersEnabled(userDefaults: userDefaults)
+                && SettingsStorage.areReminderAlertNotificationsEnabled(userDefaults: userDefaults)
         case .researchComplete:
             return SettingsStorage.areResearchCompleteNotificationsEnabled(userDefaults: userDefaults)
         }

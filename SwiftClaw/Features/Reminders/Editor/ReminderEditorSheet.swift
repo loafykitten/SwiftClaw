@@ -13,6 +13,8 @@ struct ReminderEditorSheet: View {
 
     @State private var draft = ReminderDraft(listID: nil)
     @State private var hasLoaded = false
+    /// Set when Save couldn't commit; the sheet stays open with the draft.
+    @State private var saveErrorMessage: String?
 
     private var repository: ReminderRepository {
         ReminderRepository(modelContext: modelContext)
@@ -130,24 +132,34 @@ struct ReminderEditorSheet: View {
         }
     }
 
+    /// One transaction: the sheet dismisses only once the change is on disk.
+    /// A failed save rolls back and keeps the draft open to retry or cancel.
     private func save() {
+        let repository = repository
         var savedDraft = draft
         // Empty checklist steps are typing debris, not content.
         savedDraft.checklist.removeAll { $0.text.trimmingCharacters(in: .whitespaces).isEmpty }
-        if savedDraft.listID.flatMap({ repository.list(withID: $0) }) == nil {
-            savedDraft.listID = repository.defaultList(
-                preferredID: SettingsStorage.loadRemindersDefaultListID()
-            ).id
-        }
-        switch request {
-        case .new, .quickEntry:
-            let reminder = Reminder()
-            savedDraft.apply(to: reminder, in: repository)
-            repository.insert(reminder)
-        case .edit(let id):
-            if let reminder = repository.reminder(withID: id) {
-                savedDraft.apply(to: reminder, in: repository)
+        do {
+            try repository.performTransaction {
+                if savedDraft.listID.flatMap({ repository.list(withID: $0) }) == nil {
+                    savedDraft.listID = repository.defaultList(
+                        preferredID: SettingsStorage.loadRemindersDefaultListID()
+                    ).id
+                }
+                switch request {
+                case .new, .quickEntry:
+                    let reminder = Reminder()
+                    savedDraft.apply(to: reminder, in: repository)
+                    repository.insert(reminder)
+                case .edit(let id):
+                    if let reminder = repository.reminder(withID: id) {
+                        savedDraft.apply(to: reminder, in: repository)
+                    }
+                }
             }
+        } catch {
+            saveErrorMessage = error.localizedDescription
+            return
         }
         dismiss()
     }

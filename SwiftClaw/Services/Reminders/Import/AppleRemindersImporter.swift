@@ -59,9 +59,10 @@ final class AppleRemindersImporter {
     }
 
     /// Imports the selected source lists (all their to-dos, completed
-    /// included).
+    /// included). Throws `ReminderRepository.ImportSaveError` when saving
+    /// fails, so the caller reports only what was committed.
     @discardableResult
-    func importLists(identifiers: Set<String>, repository: ReminderRepository) async -> Summary {
+    func importLists(identifiers: Set<String>, repository: ReminderRepository) async throws -> Summary {
         var summary = Summary()
         let sourceLists = store.calendars(for: .reminder).filter { identifiers.contains($0.calendarIdentifier) }
         var imports: [SnapshotImport] = []
@@ -72,7 +73,7 @@ final class AppleRemindersImporter {
             summary.listCount += 1
             imports.append(contentsOf: snapshots.map { SnapshotImport(snapshot: $0, target: target) })
         }
-        Self.importSnapshots(imports, repository: repository, summary: &summary)
+        try Self.importSnapshots(imports, repository: repository, summary: &summary)
         Self.logger.info("""
             apple import: \(summary.listCount, privacy: .public) lists, \
             \(summary.reminderCount, privacy: .public) reminders, \
@@ -88,8 +89,8 @@ final class AppleRemindersImporter {
         into target: ReminderList,
         repository: ReminderRepository,
         summary: inout Summary
-    ) {
-        importSnapshots(
+    ) throws {
+        try importSnapshots(
             snapshots.map { SnapshotImport(snapshot: $0, target: target) },
             repository: repository,
             summary: &summary
@@ -100,7 +101,7 @@ final class AppleRemindersImporter {
         _ imports: [SnapshotImport],
         repository: ReminderRepository,
         summary: inout Summary
-    ) {
+    ) throws {
         var prepared: [PreparedImport] = []
         prepared.reserveCapacity(imports.count)
         for item in imports {
@@ -134,7 +135,7 @@ final class AppleRemindersImporter {
         }
 
         var remaining = prepared[...]
-        repository.upsertImportedReminders(
+        try repository.upsertImportedReminders(
             prepared.map(\.identity),
             deduplicateAfterApplying: true
         ) { _, reminder in

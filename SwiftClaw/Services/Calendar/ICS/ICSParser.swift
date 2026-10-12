@@ -66,6 +66,7 @@ nonisolated enum ICSParser {
         var end: Date?
         var isAllDay = false
         var timeZoneIdentifier: String?
+        var startIsUTC = false
         var location: String?
         var notes: String?
         var urlString: String?
@@ -89,6 +90,7 @@ nonisolated enum ICSParser {
                 event.title = title
                 event.isAllDay = isAllDay
                 event.timeZoneIdentifier = timeZoneIdentifier
+                    ?? Self.recurrenceZone(isUTC: startIsUTC, recurs: rruleString != nil)
                 event.location = location
                 event.notes = notes
                 event.urlString = urlString
@@ -133,6 +135,7 @@ nonisolated enum ICSParser {
                 let dateOnly = line.parameters["VALUE"]?.uppercased() == "DATE"
                 isAllDay = dateOnly
                 timeZoneIdentifier = line.parameters["TZID"] ?? timeZoneIdentifier
+                startIsUTC = Self.isUTCValue(line, isDateOnly: dateOnly)
                 start = ICSDateFormat.parse(line.value, timeZoneIdentifier: line.parameters["TZID"], isDateOnly: dateOnly)
             case "DTEND":
                 let dateOnly = line.parameters["VALUE"]?.uppercased() == "DATE"
@@ -172,6 +175,7 @@ nonisolated enum ICSParser {
         var due: Date?
         var isDateOnly = false
         var timeZoneIdentifier: String?
+        var dueIsUTC = false
         var priority = 0
         var isFlagged = false
         var completedAt: Date?
@@ -193,7 +197,12 @@ nonisolated enum ICSParser {
                 todo.urlString = urlString
                 todo.due = due
                 todo.isDateOnly = due != nil && isDateOnly
-                todo.timeZoneIdentifier = isDateOnly ? nil : timeZoneIdentifier
+                todo.timeZoneIdentifier = isDateOnly
+                    ? nil
+                    : timeZoneIdentifier ?? Self.recurrenceZone(
+                        isUTC: dueIsUTC,
+                        recurs: rruleString != nil || afterCompletionRepeat != nil
+                    )
                 todo.priority = priority
                 todo.isFlagged = isFlagged
                 todo.completedAt = completedAt
@@ -221,6 +230,7 @@ nonisolated enum ICSParser {
             case "DUE":
                 isDateOnly = line.parameters["VALUE"]?.uppercased() == "DATE"
                 timeZoneIdentifier = line.parameters["TZID"] ?? timeZoneIdentifier
+                dueIsUTC = Self.isUTCValue(line, isDateOnly: isDateOnly)
                 due = ICSDateFormat.parse(line.value, timeZoneIdentifier: line.parameters["TZID"], isDateOnly: isDateOnly)
             case "PRIORITY":
                 priority = min(max(Int(line.value) ?? 0, 0), 9)
@@ -244,6 +254,23 @@ nonisolated enum ICSParser {
             index += 1
         }
         return (nil, index) // ran out of lines without END:VTODO
+    }
+
+    // MARK: - Time zones
+
+    /// A DATE-TIME written in UTC form ("…T090000Z") with no TZID.
+    private static func isUTCValue(_ line: ContentLine, isDateOnly: Bool) -> Bool {
+        !isDateOnly && line.parameters["TZID"] == nil && line.value.uppercased().hasSuffix("Z")
+    }
+
+    /// The zone a repeating component without TZID recurs in. A UTC start
+    /// recurs in UTC (a weekly 09:00Z meeting stays 09:00Z across the
+    /// viewer's DST change); nil stays reserved for floating local times.
+    /// One-offs keep nil either way: their instant is already exact, and a
+    /// nil zone lets the editor adopt the local zone if the user later adds
+    /// a repeat.
+    private static func recurrenceZone(isUTC: Bool, recurs: Bool) -> String? {
+        isUTC && recurs ? "UTC" : nil
     }
 
     /// "<count> <unit>" (e.g. "2 week") → after-completion repeat.

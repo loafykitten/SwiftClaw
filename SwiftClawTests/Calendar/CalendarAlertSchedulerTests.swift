@@ -34,6 +34,8 @@ struct CalendarAlertSchedulerTests {
             fixture = try UserDefaultsFixture()
             // Master + calendar-alert notification settings on.
             fixture.defaults.set(true, forKey: SettingsKeys.notificationsEnabled)
+            // Scheduled alerts also require their feature to be on.
+            fixture.defaults.set(true, forKey: SettingsKeys.calendarEnabled)
 
             spy = NotificationSchedulingSpy()
             service = AppNotificationService()
@@ -352,5 +354,73 @@ struct CalendarAlertSchedulerTests {
 
         await harness.reconcileAndFlush()
         #expect(harness.spy.addedRequests.isEmpty)
+    }
+
+    // MARK: - Feature shutdown vs. in-flight posts
+
+    /// Polls (yielding) until `condition` holds; posts run in unstructured
+    /// tasks the test can't await directly.
+    private static func waitUntil(_ condition: () -> Bool) async {
+        for _ in 0..<1000 where !condition() {
+            await Task.yield()
+        }
+    }
+
+    @MainActor
+    private static func insertAlarmedEvent(_ harness: Harness) {
+        let event = harness.repository.insert(CalendarEvent(
+            title: "Dentist",
+            startDate: hoursFromNow(30),
+            endDate: hoursFromNow(31),
+            calendar: harness.repository.defaultCalendar()
+        ))
+        event.alarms = [CalendarAlarmPayload(offsetSeconds: -900)]
+        harness.repository.noteUpdated(event)
+    }
+
+    /// A post suspended in its authorization lookup when Calendar is
+    /// switched off must not book the alert once it resumes.
+    @Test func postSuspendedAcrossFeatureShutdownDoesNotBook() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+        Self.insertAlarmedEvent(harness)
+        // Let activation's own lookup finish first, so the only suspended
+        // lookup is the post's.
+        await Self.waitUntil { harness.spy.authorizationLookupCount > 0 }
+        harness.spy.suspendsAuthorizationLookups = true
+
+        await harness.scheduler.reconcile(modelContainer: harness.container)
+        await Self.waitUntil { harness.spy.suspendedLookupCount > 0 }
+        #expect(harness.spy.suspendedLookupCount == 1)
+
+        // Feature off (ContentView's onChange path), then the post resumes.
+        harness.fixture.defaults.set(false, forKey: SettingsKeys.calendarEnabled)
+        harness.scheduler.clearAllPendingAlerts()
+        harness.spy.resumeSuspendedLookups()
+        await harness.service.flushPostsForTesting()
+
+        #expect(harness.spy.addedRequests.isEmpty)
+    }
+
+    /// A post already past its gate (suspended inside `add`) when the clear
+    /// starts lands first and is then removed, instead of surviving it.
+    @Test func clearWaitsForAddsAlreadyInFlight() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+        Self.insertAlarmedEvent(harness)
+        harness.spy.suspendsAdds = true
+
+        await harness.scheduler.reconcile(modelContainer: harness.container)
+        await Self.waitUntil { harness.spy.suspendedAddCount > 0 }
+        #expect(harness.spy.suspendedAddCount == 1)
+
+        harness.fixture.defaults.set(false, forKey: SettingsKeys.calendarEnabled)
+        harness.scheduler.clearAllPendingAlerts()
+        harness.spy.resumeSuspendedAdds()
+        await harness.service.flushPostsForTesting()
+        await Self.waitUntil { !harness.spy.removedPendingIdentifierBatches.isEmpty }
+
+        #expect(harness.spy.addedRequests.isEmpty)
+        #expect(harness.spy.removedPendingIdentifierBatches.flatMap(\.self).count == 1)
     }
 }

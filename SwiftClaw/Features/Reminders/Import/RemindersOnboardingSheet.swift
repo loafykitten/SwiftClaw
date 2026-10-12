@@ -139,9 +139,13 @@ struct RemindersOnboardingSheet: View {
                 return
             }
             let target = repository.defaultList(preferredID: SettingsStorage.loadRemindersDefaultListID())
-            let count = ICSTodoImporter.importTodos(parsed, into: target, repository: repository)
-            icsImportSummary = "Imported \(count) reminder\(count == 1 ? "" : "s")."
-            complete()
+            do {
+                let count = try ICSTodoImporter.importTodos(parsed, into: target, repository: repository)
+                icsImportSummary = "Imported \(count) reminder\(count == 1 ? "" : "s")."
+                complete()
+            } catch {
+                icsImportSummary = error.localizedDescription
+            }
         }
     }
 

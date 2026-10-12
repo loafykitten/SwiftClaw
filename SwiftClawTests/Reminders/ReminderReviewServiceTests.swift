@@ -225,4 +225,72 @@ struct ReminderReviewServiceTests {
         )
         #expect(ReminderReviewFetchTool.isOverdue(yesterday, now: .now))
     }
+
+    // MARK: - Stamp versions and scope
+
+    /// An edit that lands after the model fetched (but before the pass
+    /// finished) was never reviewed: it must not be stamped, or the next
+    /// scheduled pass would skip it. Unchanged rows are still stamped.
+    @Test func editDuringThePassIsNotStampedAsReviewed() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+        let edited = harness.insertPendingReminder(title: "Edited mid-pass")
+        let untouched = harness.insertPendingReminder(title: "Untouched")
+        let editedID = edited.id
+        let container = harness.container
+
+        harness.service.completeProvider = { _, _, _, tools in
+            if let fetch = tools.first(where: { $0.name == "fetch_reminders" }) {
+                _ = try await fetch.execute(arguments: [:])
+            }
+            await MainActor.run {
+                let repository = ReminderRepository(modelContext: ModelContext(container))
+                if let reminder = repository.reminder(withID: editedID) {
+                    reminder.title = "Edited after the fetch"
+                    repository.noteUpdated(reminder)
+                }
+            }
+            return ""
+        }
+        #expect(await harness.service.runOnce(force: true))
+
+        let fresh = ReminderRepository(modelContext: ModelContext(harness.container))
+        #expect(fresh.reminder(withID: edited.id)?.lastReviewedAt == nil)
+        #expect(fresh.reminder(withID: untouched.id)?.lastReviewedAt != nil)
+    }
+
+    /// The "anything changed?" guard spans the whole scope, and the fetch
+    /// admits changed rows first: a change to the 60th pending reminder
+    /// both triggers a pass and reaches the model.
+    @Test func changeBeyondTheFirstPageTriggersAPassAndIsFetched() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+        var reminders: [Reminder] = []
+        for index in 0..<60 {
+            reminders.append(harness.insertPendingReminder(
+                title: "Chore \(index)",
+                dueDate: .now.addingTimeInterval(TimeInterval(index + 1) * 600)
+            ))
+        }
+        let reviewedAt = Date.now
+        for reminder in reminders {
+            reminder.lastReviewedAt = reviewedAt
+        }
+        harness.repository.saveChanges()
+        let last = try #require(reminders.last)
+        last.title = "Chore 59 (changed)"
+        harness.repository.noteUpdated(last)
+
+        let fetchedOutput = LockedValue("")
+        harness.service.completeProvider = { _, _, _, tools in
+            if let fetch = tools.first(where: { $0.name == "fetch_reminders" }) {
+                let output = try await fetch.execute(arguments: [:])
+                fetchedOutput.update { $0 = output }
+            }
+            return ""
+        }
+        #expect(await harness.service.runOnce(force: false))
+        #expect(fetchedOutput.value.contains(last.id.uuidString))
+        #expect(fetchedOutput.value.hasPrefix("50 of 60 reminders"))
+    }
 }

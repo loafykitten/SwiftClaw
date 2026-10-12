@@ -433,4 +433,75 @@ struct ReminderRepositoryTests {
         let survivors = repository.pendingReminders()
         #expect(survivors.map(\.title) == ["Original"])
     }
+
+    // MARK: - Undo after intervening changes
+
+    /// Complete day 1 of a three-day series, skip day 2, then undo day 1:
+    /// the skip left no log row, but rewinding would reinstate day 2 and
+    /// lose day 3. The undo is refused and nothing changes.
+    @Test func undoAfterASkipIsRejected() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let master = repository.insert(Reminder(
+            title: "Daily",
+            dueDate: Self.date(2026, 6, 1, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=DAILY;COUNT=3"
+        ))
+        repository.complete(master, at: Self.date(2026, 6, 1, 10))
+        repository.skipOccurrence(of: master, at: Self.date(2026, 6, 2, 10))
+        #expect(master.dueDate == Self.date(2026, 6, 3, 9))
+        #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=1")
+
+        let log = try #require(repository.completionLog(of: master).first)
+        #expect(!repository.uncomplete(log))
+
+        #expect(master.dueDate == Self.date(2026, 6, 3, 9))
+        #expect(master.recurrenceRuleString == "FREQ=DAILY;COUNT=1")
+        #expect(repository.completionLog(of: master).count == 1)
+    }
+
+    @Test func undoAfterARescheduleIsRejected() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let master = repository.insert(Reminder(
+            title: "Weekly report",
+            dueDate: Self.date(2026, 6, 5, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=WEEKLY;BYDAY=FR"
+        ))
+        repository.complete(master, at: Self.date(2026, 6, 5, 10))
+        master.dueDate = Self.date(2026, 6, 20, 9) // user moved the next one
+        repository.noteUpdated(master)
+
+        let log = try #require(repository.completionLog(of: master).first)
+        #expect(!repository.uncomplete(log))
+        #expect(master.dueDate == Self.date(2026, 6, 20, 9))
+    }
+
+    @Test func afterCompletionUndoRestoresAndRejectsAfterASkip() throws {
+        let repository = try ReminderRepository(modelContext: ModelContext(Self.inMemoryContainer()))
+        let master = repository.insert(Reminder(
+            title: "Water plants",
+            dueDate: Self.date(2026, 6, 5, 9),
+            hasDueTime: true,
+            timeZoneIdentifier: "UTC"
+        ))
+        master.afterCompletionRepeat = ReminderAfterCompletionRepeat(count: 2, unit: .day)
+        repository.saveChanges()
+
+        // Unchanged since completion: undo restores the original due date.
+        repository.complete(master, at: Self.date(2026, 6, 1, 11))
+        var log = try #require(repository.completionLog(of: master).first)
+        #expect(repository.uncomplete(log))
+        #expect(master.dueDate == Self.date(2026, 6, 5, 9))
+        #expect(repository.completionLog(of: master).isEmpty)
+
+        // A skip after completing makes the undo incompatible.
+        repository.complete(master, at: Self.date(2026, 6, 1, 11))
+        repository.skipOccurrence(of: master)
+        log = try #require(repository.completionLog(of: master).first)
+        #expect(!repository.uncomplete(log))
+        #expect(master.dueDate == Self.date(2026, 6, 5, 11))
+    }
 }

@@ -14,6 +14,8 @@ struct CalendarEventEditorSheet: View {
     @State private var draft = CalendarEventDraft(newAt: .now, calendarID: nil)
     @State private var hasLoaded = false
     @State private var allowsRecurrence: Bool
+    /// Set when Save couldn't commit; the sheet stays open with the draft.
+    @State private var saveErrorMessage: String?
 
     init(request: CalendarEditorRequest) {
         self.request = request
@@ -97,6 +99,17 @@ struct CalendarEventEditorSheet: View {
         .frame(minWidth: 420, minHeight: 520)
         #endif
         .onAppear(perform: loadDraft)
+        .alert(
+            "Couldn't Save Event",
+            isPresented: Binding(
+                get: { saveErrorMessage != nil },
+                set: { if !$0 { saveErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveErrorMessage ?? "")
+        }
     }
 
     /// Moving the start keeps the duration pinned (the way every calendar
@@ -142,29 +155,40 @@ struct CalendarEventEditorSheet: View {
             if let master = repository.event(withID: masterID) {
                 var draft = CalendarEventDraft(from: master)
                 draft.start = occurrenceStart
-                draft.end = occurrenceStart.addingTimeInterval(master.duration)
+                draft.end = master.occurrenceEnd(forStart: occurrenceStart)
                 draft.rule = nil
                 self.draft = draft
             }
         }
     }
 
+    /// One transaction: the sheet dismisses only once the change is on disk.
+    /// A failed save rolls back (no half-detached occurrence) and keeps the
+    /// draft open so the user can retry or cancel.
     private func save() {
-        switch request {
-        case .new, .newTimed, .quickEntry:
-            let event = CalendarEvent()
-            event.timeZoneIdentifier = draft.isAllDay ? nil : TimeZone.current.identifier
-            draft.apply(to: event, in: repository)
-            repository.insert(event)
-        case .editEvent(let id):
-            if let event = repository.event(withID: id) {
-                draft.apply(to: event, in: repository)
+        let repository = repository
+        do {
+            try repository.performTransaction {
+                switch request {
+                case .new, .newTimed, .quickEntry:
+                    let event = CalendarEvent()
+                    event.timeZoneIdentifier = draft.isAllDay ? nil : TimeZone.current.identifier
+                    draft.apply(to: event, in: repository)
+                    repository.insert(event)
+                case .editEvent(let id):
+                    if let event = repository.event(withID: id) {
+                        draft.apply(to: event, in: repository)
+                    }
+                case .editOccurrence(let masterID, let occurrenceStart):
+                    if let master = repository.event(withID: masterID) {
+                        let override = repository.detachOccurrence(of: master, at: occurrenceStart)
+                        draft.apply(to: override, in: repository)
+                    }
+                }
             }
-        case .editOccurrence(let masterID, let occurrenceStart):
-            if let master = repository.event(withID: masterID) {
-                let override = repository.detachOccurrence(of: master, at: occurrenceStart)
-                draft.apply(to: override, in: repository)
-            }
+        } catch {
+            saveErrorMessage = error.localizedDescription
+            return
         }
         dismiss()
     }

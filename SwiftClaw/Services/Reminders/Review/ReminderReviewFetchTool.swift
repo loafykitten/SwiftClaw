@@ -27,13 +27,14 @@ final class ReminderReviewFetchTool: Tool {
     var isEnabled: Bool { true }
 
     private let modelContainer: ModelContainer
-    /// Reports the reminder IDs actually handed to the model so the service
-    /// can stamp `lastReviewedAt` after a successful pass.
-    private let onRemindersFetched: @MainActor ([UUID]) -> Void
+    /// Reports the reminders actually handed to the model, keyed by ID with
+    /// the `modifiedAt` the model saw, so the service stamps `lastReviewedAt`
+    /// after a successful pass only on rows that haven't changed since.
+    private let onRemindersFetched: @MainActor ([UUID: Date]) -> Void
 
     init(
         modelContainer: ModelContainer,
-        onRemindersFetched: @escaping @MainActor ([UUID]) -> Void = { _ in }
+        onRemindersFetched: @escaping @MainActor ([UUID: Date]) -> Void = { _ in }
     ) {
         self.modelContainer = modelContainer
         self.onRemindersFetched = onRemindersFetched
@@ -51,13 +52,16 @@ final class ReminderReviewFetchTool: Tool {
             let now = Date.now
             let horizon = now.addingTimeInterval(TimeInterval(dueWithinDays) * 24 * 3600)
             let repository = ReminderRepository(modelContext: ModelContext(modelContainer))
-            let reminders = repository.pendingReminders(
+            let candidates = repository.pendingReminders(
                 dueBefore: horizon,
-                includeUndated: includeUndated,
-                limit: limit
+                includeUndated: includeUndated
             )
+            let reminders = Self.page(candidates, limit: limit)
 
-            onRemindersFetched(reminders.map(\.id))
+            onRemindersFetched(Dictionary(
+                reminders.map { ($0.id, $0.modifiedAt) },
+                uniquingKeysWith: { first, _ in first }
+            ))
 
             guard !reminders.isEmpty else {
                 return "No pending reminders match this window."
@@ -102,13 +106,36 @@ final class ReminderReviewFetchTool: Tool {
                 }
                 // Flag reminders an earlier pass already surfaced (and that
                 // haven't changed since) so the model doesn't repeat itself.
-                if let reviewedAt = reminder.lastReviewedAt, reminder.modifiedAt <= reviewedAt {
+                if !Self.needsReview(reminder) {
                     parts.append("previously reviewed: yes")
                 }
                 return "- " + parts.joined(separator: " | ")
             }
-            return "\(reminders.count) reminders:\n" + lines.joined(separator: "\n")
+            let header = reminders.count < candidates.count
+                ? "\(reminders.count) of \(candidates.count) reminders (new or changed ones first):"
+                : "\(reminders.count) reminders:"
+            return header + "\n" + lines.joined(separator: "\n")
         }
+    }
+
+    /// Whether a reminder is new or changed since its last review stamp.
+    static func needsReview(_ reminder: Reminder) -> Bool {
+        guard let reviewedAt = reminder.lastReviewedAt else { return true }
+        return reminder.modifiedAt > reviewedAt
+    }
+
+    /// The first `limit` candidates in their (due-date) order, except that
+    /// new or changed reminders are admitted ahead of reviewed ones. A
+    /// scheduled pass runs because something changed; if that row sorted
+    /// past a plain prefix the model would never see it, it would never be
+    /// stamped, and every later pass would re-run for nothing.
+    static func page(_ candidates: [Reminder], limit: Int) -> [Reminder] {
+        guard candidates.count > limit else { return candidates }
+        var chosen = Set(candidates.indices.filter { needsReview(candidates[$0]) }.prefix(limit))
+        for index in candidates.indices where chosen.count < limit {
+            chosen.insert(index)
+        }
+        return candidates.indices.filter(chosen.contains).map { candidates[$0] }
     }
 
     static func isOverdue(_ reminder: Reminder, now: Date) -> Bool {

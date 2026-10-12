@@ -25,8 +25,11 @@ template (`docs/features/CALENDAR.md`).
   (`Services/Reminders/Recurrence/ReminderRecurrenceEngine.swift`). COUNT is
   decremented on each advance; an exhausted series keeps its final due date
   with `completedAt` set.
-- Undo removes the log row and restores `dueDate`. There are no EXDATEs or
-  per-occurrence overrides; editing a recurring reminder edits the series.
+- Undo removes the log row and restores `dueDate`. Only the latest log can
+  be undone, and only while the master is still as that completion left it
+  (replayed from the log): a later skip, reschedule, or rule edit makes
+  `uncomplete` refuse. There are no EXDATEs or per-occurrence overrides;
+  editing a recurring reminder edits the series.
 - Date-only vs timed: `hasDueTime: Bool`; date-only reminders store local
   start-of-day with a nil timezone (floating, like the calendar's `isAllDay`).
 - Priority raw values sit on the RFC 5545 / EKReminder scale (0/1/5/9).
@@ -106,8 +109,10 @@ The Calendar Review pattern 1:1: `ReminderWorkflowManager` owns the loop
 (`Features/Chats/ReviewCards/RemindersReviewCardRenderer`). Scope is pending
 masters that are undated, overdue, or due within 7 days. Scheduled passes
 skip when a review is still unread, nothing is pending, or nothing changed
-since its `lastReviewedAt` stamp (set only after a successful pass); manual
-runs bypass all suppression.
+since its `lastReviewedAt` stamp (set only after a successful pass, and only
+on rows unchanged since the fetch); manual runs bypass all suppression. The
+"changed?" check spans the whole scope, and when the fetch is limited it
+admits new or changed reminders first.
 
 ## Calendar chips + Workspace tile
 

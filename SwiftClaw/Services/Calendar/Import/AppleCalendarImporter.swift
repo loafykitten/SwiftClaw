@@ -53,14 +53,15 @@ final class AppleCalendarImporter {
         }
     }
 
-    /// Imports the selected source calendars over `range`.
+    /// Imports the selected source calendars over `range` as one
+    /// transaction: a failed save throws and nothing is reported imported.
     @discardableResult
     func importCalendars(
         identifiers: Set<String>,
         range: DateInterval = AppleCalendarImporter.defaultRange(),
         repository: CalendarRepository
-    ) -> Summary {
-        let summary = repository.performImport {
+    ) throws -> Summary {
+        let summary = try repository.performImport {
             var summary = Summary()
             let sourceCalendars = store.calendars(for: .event).filter {
                 identifiers.contains($0.calendarIdentifier)
@@ -128,7 +129,9 @@ final class AppleCalendarImporter {
         let groups = Dictionary(grouping: occurrences) { $0.calendarItemExternalIdentifier ?? UUID().uuidString }
         for (externalIdentifier, group) in groups {
             guard let sample = group.first else { continue }
-            if sample.hasRecurrenceRules || group.count > 1 {
+            // A detached instance belongs to a series even when it's the
+            // only one in range; the one-off path would flatten the master.
+            if sample.hasRecurrenceRules || sample.isDetached || group.count > 1 {
                 importRecurringSeries(
                     externalIdentifier: externalIdentifier,
                     occurrences: group,
@@ -150,9 +153,12 @@ final class AppleCalendarImporter {
         into target: UserCalendar,
         repository: CalendarRepository
     ) {
-        repository.upsertImportedEvent(externalIdentifier: externalIdentifier) { event in
+        let event = repository.upsertImportedEvent(externalIdentifier: externalIdentifier) { event in
             apply(ekEvent, to: event, calendar: target)
         }
+        // The series may have become a single event in Apple Calendar since
+        // the last import; drop its old rule, EXDATEs, and overrides.
+        repository.clearRecurrence(of: event)
     }
 
     private func importRecurringSeries(
@@ -217,25 +223,37 @@ final class AppleCalendarImporter {
             summary.overrideCount += 1
         }
 
+        let actualStarts: [Date] = occurrences
+            .filter { !$0.isDetached }
+            .compactMap(\.startDate)
+
         // Drop override rows from an earlier import whose detached occurrence
         // no longer exists in EventKit (the edit was reverted or the instance
         // deleted) — otherwise the EXDATE rebuild below un-masks the master
-        // occurrence and the stale override would render alongside it.
+        // occurrence and the stale override would render alongside it. Only
+        // the fetched window is evidence: overrides it can't see stay.
         let currentOverrideIDs = Set(detachedOriginalStarts.map {
             "\(externalIdentifier)@detached@\($0.timeIntervalSinceReferenceDate)"
         })
         for override in repository.overrides(of: masterRow)
         where override.source == .appleImport
             && override.externalIdentifier?.hasPrefix("\(externalIdentifier)@detached@") == true
-            && !currentOverrideIDs.contains(override.externalIdentifier ?? "") {
+            && !currentOverrideIDs.contains(override.externalIdentifier ?? "")
+            && EventKitMapping.isStaleImportedOverride(
+                originalStart: override.originalOccurrenceDate ?? override.startDate,
+                overrideStart: override.startDate,
+                overrideDuration: override.duration,
+                masterDuration: masterRow.duration,
+                window: range,
+                actualStarts: actualStarts
+            ) {
             repository.deleteEventSeries(override)
         }
 
         // Occurrences the user deleted are simply absent from the fetch;
-        // recover them (and mask the detached ones) as EXDATEs.
-        let actualStarts: [Date] = occurrences
-            .filter { !$0.isDetached }
-            .compactMap(\.startDate)
+        // recover them (and mask the detached ones) as EXDATEs. EXDATEs
+        // outside the fetched window are kept — this fetch can't speak for
+        // them, and dropping them would resurrect deleted occurrences.
         let missing = EventKitMapping.missingOccurrenceStarts(
             rule: rule,
             masterStart: masterRow.startDate,
@@ -244,7 +262,20 @@ final class AppleCalendarImporter {
             actualStarts: actualStarts,
             timeZone: masterRow.timeZone
         )
-        masterRow.exceptionDates = Array(Set(missing + detachedOriginalStarts)).sorted()
+        masterRow.exceptionDates = EventKitMapping.reconciledExceptionDates(
+            existing: masterRow.exceptionDates,
+            missing: missing,
+            detachedOriginalStarts: detachedOriginalStarts,
+            duration: masterRow.duration,
+            window: range
+        )
+        // The rebuild can un-mask an occurrence the user detached inside
+        // SwiftClaw (EventKit still reports it); re-mask those native edits.
+        repository.reconcileImportedOverrides(
+            of: masterRow,
+            importedIdentifierPrefix: "\(externalIdentifier)@detached@",
+            keeping: currentOverrideIDs
+        )
         repository.noteUpdated(masterRow)
     }
 

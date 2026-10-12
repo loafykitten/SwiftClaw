@@ -132,7 +132,11 @@ struct CalendarAppleImportSheet: View {
     private func runImport() {
         phase = .importing
         let repository = CalendarRepository(modelContext: modelContext)
-        let summary = importer.importCalendars(identifiers: selectedIdentifiers, repository: repository)
-        phase = .finished(summary)
+        do {
+            let summary = try importer.importCalendars(identifiers: selectedIdentifiers, repository: repository)
+            phase = .finished(summary)
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
     }
 }

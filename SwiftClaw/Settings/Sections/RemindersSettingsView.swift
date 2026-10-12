@@ -155,7 +155,11 @@ struct RemindersSettingsView: View {
             return
         }
         let target = repository.defaultList(preferredID: SettingsStorage.loadRemindersDefaultListID())
-        let count = ICSTodoImporter.importTodos(from: text, into: target, repository: repository)
-        icsStatusMessage = "Imported \(count) reminder\(count == 1 ? "" : "s") into “\(target.name)”."
+        do {
+            let count = try ICSTodoImporter.importTodos(from: text, into: target, repository: repository)
+            icsStatusMessage = "Imported \(count) reminder\(count == 1 ? "" : "s") into “\(target.name)”."
+        } catch {
+            icsStatusMessage = error.localizedDescription
+        }
     }
 }

@@ -12,6 +12,22 @@ import SwiftData
 final class ReminderRepository {
     private static let logger = AppLog.make("reminders.repository")
     private static let importChunkSize = 400
+    /// UID prefix native rows export under (they have no external identity).
+    nonisolated static let nativeExportUIDPrefix = "swiftclaw-"
+
+    /// An import whose save failed partway. Chunks before the failure are
+    /// committed (large files deliberately allow partial progress); the
+    /// failing chunk is rolled back.
+    struct ImportSaveError: LocalizedError {
+        let committedCount: Int
+        let underlying: any Error
+
+        var errorDescription: String? {
+            committedCount == 0
+                ? String(localized: "Couldn't save the imported reminders.")
+                : String(localized: "Saved \(committedCount) reminders, then couldn't save the rest.")
+        }
+    }
 
     struct ImportedReminderIdentity {
         let externalIdentifier: String
@@ -24,6 +40,10 @@ final class ReminderRepository {
     }
 
     let modelContext: ModelContext
+
+    /// Inside `performTransaction`, saves are deferred to one commit at the end.
+    private var isDeferringSaves = false
+    private var deferredSaveNeeded = false
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
@@ -108,6 +128,9 @@ final class ReminderRepository {
     }
 
     func reminder(withExternalIdentifier externalIdentifier: String) -> Reminder? {
+        if let native = nativeReminder(forExportedUID: externalIdentifier) {
+            return native
+        }
         var descriptor = FetchDescriptor<Reminder>(
             predicate: #Predicate { $0.externalIdentifier == externalIdentifier },
             sortBy: [SortDescriptor(\.createdAt)]
@@ -205,6 +228,24 @@ final class ReminderRepository {
         return result
     }
 
+    /// Whether any pending master in the review scope (undated, or due at or
+    /// before `dueBefore`) is new or changed since its last review stamp.
+    /// Counted in the store across the whole scope, so it can't miss a
+    /// change that sorts past a fetch page.
+    func hasUnreviewedPendingReminders(dueBefore: Date) -> Bool {
+        let distantPast = Date.distantPast
+        var descriptor = FetchDescriptor<Reminder>(
+            predicate: #Predicate {
+                $0.completedAt == nil
+                    && $0.parentReminderID == nil
+                    && ($0.dueDate ?? distantPast) <= dueBefore
+                    && ($0.lastReviewedAt ?? distantPast) < $0.modifiedAt
+            }
+        )
+        descriptor.fetchLimit = 1
+        return ((try? modelContext.fetchCount(descriptor)) ?? 1) > 0
+    }
+
     func reminders(in list: ReminderList) -> [Reminder] {
         let listID = list.id
         return allReminders().filter { $0.list?.id == listID && !$0.isCompletionLog }
@@ -239,15 +280,19 @@ final class ReminderRepository {
 
     /// Undoes a completion. For log rows this restores the master's scheduled
     /// occurrence and removes the log; for plain reminders it clears
-    /// `completedAt`.
-    func uncomplete(_ reminder: Reminder) {
+    /// `completedAt`. Returns false (changing nothing) when the log can't be
+    /// undone: it isn't the latest, or the master changed after it (a skip,
+    /// a reschedule, a rule edit) so rewinding would clobber that change.
+    @discardableResult
+    func uncomplete(_ reminder: Reminder) -> Bool {
         if reminder.isCompletionLog {
-            uncompleteLog(reminder)
+            guard uncompleteLog(reminder) else { return false }
         } else {
             reminder.completedAt = nil
             reminder.modifiedAt = .now
         }
         save()
+        return true
     }
 
     /// Advances a recurring master without writing history. Used for an
@@ -338,13 +383,15 @@ final class ReminderRepository {
     }
 
     /// Prefetches import identities once, then saves once per bounded chunk.
-    /// Chunk commits deliberately permit partial progress for very large files.
+    /// Chunk commits deliberately permit partial progress for very large
+    /// files; a failed chunk is rolled back and reported as
+    /// `ImportSaveError` with the count already committed.
     @discardableResult
     func upsertImportedReminders(
         _ identities: [ImportedReminderIdentity],
         deduplicateAfterApplying: Bool = false,
         apply: (ImportedReminderIdentity, Reminder) -> Void
-    ) -> [Reminder] {
+    ) throws -> [Reminder] {
         guard !identities.isEmpty else { return [] }
 
         let requestedIdentifiers = Set(identities.flatMap { identity in
@@ -363,6 +410,14 @@ final class ReminderRepository {
                   remindersByIdentifier[identifier] == nil
             else { continue }
             remindersByIdentifier[identifier] = reminder
+        }
+        // Native rows come back under their exported `swiftclaw-<id>` UID.
+        let nativeIDs = Set(requestedIdentifiers.compactMap(Self.nativeID(fromExportedUID:)))
+        for reminder in reminders(withIDs: nativeIDs) where reminder.externalIdentifier == nil {
+            let uid = "\(Self.nativeExportUIDPrefix)\(reminder.id.uuidString)"
+            if remindersByIdentifier[uid] == nil {
+                remindersByIdentifier[uid] = reminder
+            }
         }
 
         var upserted: [Reminder] = []
@@ -390,9 +445,57 @@ final class ReminderRepository {
                 dedupeReminders()
                 sweepOrphanedCompletionLogs()
             }
-            save()
+            do {
+                try commit()
+            } catch {
+                throw ImportSaveError(committedCount: chunkStart, underlying: error)
+            }
         }
         return upserted
+    }
+
+    // MARK: - Transactions
+
+    /// Runs `body` as one all-or-nothing write: saves inside it are deferred
+    /// to a single commit at the end. A failed commit rolls the context back
+    /// (so in-memory rows match the store again) and throws, so the editor's
+    /// Save can keep its draft and report the failure instead of dismissing
+    /// as if the change had landed. Nested calls join the outer transaction.
+    func performTransaction<Result>(_ body: () throws -> Result) throws -> Result {
+        guard !isDeferringSaves else { return try body() }
+        isDeferringSaves = true
+        deferredSaveNeeded = false
+        let result: Result
+        do {
+            result = try body()
+        } catch {
+            isDeferringSaves = false
+            deferredSaveNeeded = false
+            modelContext.rollback()
+            throw error
+        }
+        isDeferringSaves = false
+        if deferredSaveNeeded {
+            deferredSaveNeeded = false
+            try commit()
+        }
+        return result
+    }
+
+    private static func nativeID(fromExportedUID uid: String) -> UUID? {
+        guard uid.hasPrefix(nativeExportUIDPrefix) else { return nil }
+        return UUID(uuidString: String(uid.dropFirst(nativeExportUIDPrefix.count)))
+    }
+
+    /// A native row (no external identity) addressed by the UID it exports
+    /// under, so importing your own export updates the original instead of
+    /// creating a duplicate beside it.
+    private func nativeReminder(forExportedUID uid: String) -> Reminder? {
+        guard let id = Self.nativeID(fromExportedUID: uid),
+              let reminder = reminder(withID: id),
+              reminder.externalIdentifier == nil
+        else { return nil }
+        return reminder
     }
 
     func listMatching(externalIdentifier: String) -> ReminderList? {
@@ -497,41 +600,94 @@ final class ReminderRepository {
         return log
     }
 
-    private func uncompleteLog(_ log: Reminder) {
+    private func uncompleteLog(_ log: Reminder) -> Bool {
         guard let parentID = log.parentReminderID,
               let master = reminder(withID: parentID)
         else {
             modelContext.delete(log)
-            return
+            return true
         }
 
         // Only the latest log may rewind the master — undoing an older
         // occurrence would drag `dueDate` back behind still-present logs and
         // re-inflate COUNT for an advance that still stands.
         let latest = completionLog(of: master).last
-        guard log.id == latest?.id else { return }
+        guard log.id == latest?.id else { return false }
 
-        let oldDueDate = master.dueDate
-        if let original = log.originalOccurrenceDate {
-            master.dueDate = original
-        }
-        if oldDueDate != log.originalOccurrenceDate {
-            incrementCountRuleIfNeeded(on: master)
-        }
-        if master.completedAt == log.completedAt {
-            master.completedAt = nil
-        }
+        // Being the latest log doesn't mean the master is as the completion
+        // left it: a later skip or edit has no log row. Replay the completion
+        // and undo only when the master still matches the replay.
+        guard let priorRuleString = ruleStringBeforeCompletion(log, of: master) else { return false }
+
+        master.dueDate = log.originalOccurrenceDate
+        master.recurrenceRuleString = priorRuleString
+        refreshRecurrenceEnd(of: master)
+        master.completedAt = nil
         master.modifiedAt = .now
         modelContext.delete(log)
+        return true
     }
 
-    private func incrementCountRuleIfNeeded(on reminder: Reminder) {
-        guard var rule = reminder.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)),
-              case let .occurrenceCount(count) = rule.end
-        else { return }
+    /// The master's recurrence rule from just before `log`'s completion, or
+    /// nil when the master no longer matches what that completion produced.
+    /// The outer optional is the verdict; the inner is the rule itself (nil
+    /// for after-completion repeats).
+    private func ruleStringBeforeCompletion(_ log: Reminder, of master: Reminder) -> String?? {
+        let original = log.originalOccurrenceDate
+
+        if let repeatRule = master.afterCompletionRepeat {
+            guard let completedAt = log.completedAt, master.completedAt == nil else { return nil }
+            let expected = ReminderRecurrenceEngine.nextDueDate(
+                afterCompletion: completedAt,
+                repeat: repeatRule,
+                hasDueTime: master.hasDueTime,
+                calendar: calendar(for: master)
+            )
+            return Self.isSameInstant(master.dueDate, expected) ? .some(master.recurrenceRuleString) : nil
+        }
+
+        guard let ruleString = master.recurrenceRuleString else { return nil }
+        guard let original else {
+            // No scheduled date to advance from: the completion only stamped
+            // the master complete.
+            let unchanged = master.dueDate == nil && Self.isSameInstant(master.completedAt, log.completedAt)
+            return unchanged ? .some(ruleString) : nil
+        }
+
+        // A completion that exhausted the series kept its due date and COUNT
+        // and stamped `completedAt`; any other consumed one COUNT.
+        let exhausted = master.completedAt != nil && Self.isSameInstant(master.completedAt, log.completedAt)
+        let priorRuleString = exhausted ? ruleString : Self.incrementingCount(of: ruleString)
+        let replay = ReminderRecurrenceEngine.nextDueDate(
+            afterScheduled: original,
+            ruleString: priorRuleString,
+            timeZone: timeZone(for: master)
+        )
+        let unchanged = if let next = replay.nextDueDate {
+            !exhausted && Self.isSameInstant(master.dueDate, next)
+        } else {
+            exhausted && Self.isSameInstant(master.dueDate, original)
+        }
+        return unchanged ? .some(priorRuleString) : nil
+    }
+
+    /// The rule with COUNT re-inflated by one (unchanged without COUNT).
+    private static func incrementingCount(of ruleString: String) -> String {
+        guard var rule = RecurrenceRule(rruleString: ruleString),
+              case let .occurrenceCount(count) = rule.end,
+              count < Int.max
+        else { return ruleString }
         rule.end = .occurrenceCount(count + 1)
-        reminder.recurrenceRuleString = rule.rruleString
-        refreshRecurrenceEnd(of: reminder)
+        return rule.rruleString
+    }
+
+    /// Second-granular equality, absorbing storage round-trip drift.
+    private static func isSameInstant(_ lhs: Date?, _ rhs: Date?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): true
+        case let (lhs?, rhs?): abs(lhs.timeIntervalSince(rhs)) < 1
+        default: false
+        }
     }
 
     private func dedupeLists() {
@@ -627,13 +783,31 @@ final class ReminderRepository {
 
     // MARK: - Persistence
 
+    /// Best-effort save for single mutations: failures are logged. Callers
+    /// that must not report success on failure use `performTransaction` or
+    /// the import upserts, whose commit throws.
     private func save() {
+        if isDeferringSaves {
+            deferredSaveNeeded = true
+            return
+        }
         do {
             try modelContext.save()
             NotificationCenter.default.post(name: .reminderStoreDidChange, object: nil)
         } catch {
             Self.logger.error("save failed: \(String(describing: error))")
         }
+    }
+
+    private func commit() throws {
+        do {
+            try modelContext.save()
+        } catch {
+            Self.logger.error("transaction save failed: \(String(describing: error))")
+            modelContext.rollback()
+            throw error
+        }
+        NotificationCenter.default.post(name: .reminderStoreDidChange, object: nil)
     }
 }
 

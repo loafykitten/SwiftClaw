@@ -134,4 +134,68 @@ struct EventKitMappingTests {
         #expect(EventKitMapping.colorHex(from: red) == "#FF0000")
         #expect(EventKitMapping.colorHex(from: nil) == UserCalendar.defaultColorHex)
     }
+
+    // MARK: - Windowed re-import reconciliation
+
+    /// A second import over a later window must not resurrect occurrences
+    /// deleted before that window: only EXDATEs inside the fetched window
+    /// are rebuilt.
+    @Test func reimportKeepsExceptionDatesOutsideTheFetchedWindow() {
+        let earlyDeletion = Self.date(2025, 3, 3, 9)    // before the new window
+        let staleInWindow = Self.date(2026, 6, 8, 9)    // restored in Apple Calendar
+        let laterDeletion = Self.date(2031, 1, 6, 9)    // after the new window
+        let window = DateInterval(start: Self.date(2026, 1, 1), end: Self.date(2027, 1, 1))
+
+        let reconciled = EventKitMapping.reconciledExceptionDates(
+            existing: [earlyDeletion, staleInWindow, laterDeletion],
+            missing: [Self.date(2026, 6, 15, 9)],
+            detachedOriginalStarts: [Self.date(2026, 6, 22, 9), Self.date(2026, 6, 15, 9)],
+            duration: 3600,
+            window: window
+        )
+        #expect(reconciled == [
+            earlyDeletion, Self.date(2026, 6, 15, 9), Self.date(2026, 6, 22, 9), laterDeletion,
+        ])
+    }
+
+    @Test func staleOverrideIsProvableOnlyInsideTheFetchedWindow() {
+        let window = DateInterval(start: Self.date(2026, 1, 1), end: Self.date(2027, 1, 1))
+
+        // Original outside the window: the fetch can't see it, keep.
+        #expect(!EventKitMapping.isStaleImportedOverride(
+            originalStart: Self.date(2025, 6, 2, 9),
+            overrideStart: Self.date(2025, 6, 2, 11),
+            overrideDuration: 3600,
+            masterDuration: 3600,
+            window: window,
+            actualStarts: []
+        ))
+        // Reverted edit: the plain occurrence came back, drop.
+        #expect(EventKitMapping.isStaleImportedOverride(
+            originalStart: Self.date(2026, 6, 1, 9),
+            overrideStart: Self.date(2026, 6, 1, 11),
+            overrideDuration: 3600,
+            masterDuration: 3600,
+            window: window,
+            actualStarts: [Self.date(2026, 6, 1, 9)]
+        ))
+        // Override sat in the window but wasn't returned: deleted, drop.
+        #expect(EventKitMapping.isStaleImportedOverride(
+            originalStart: Self.date(2026, 6, 1, 9),
+            overrideStart: Self.date(2026, 6, 1, 11),
+            overrideDuration: 3600,
+            masterDuration: 3600,
+            window: window,
+            actualStarts: []
+        ))
+        // Moved out of the window: may still exist, keep.
+        #expect(!EventKitMapping.isStaleImportedOverride(
+            originalStart: Self.date(2026, 12, 31, 9),
+            overrideStart: Self.date(2027, 2, 1, 9),
+            overrideDuration: 3600,
+            masterDuration: 3600,
+            window: window,
+            actualStarts: []
+        ))
+    }
 }

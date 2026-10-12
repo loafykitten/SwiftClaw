@@ -165,4 +165,35 @@ struct CalendarReviewServiceTests {
         _ = await harness.service.runOnce(force: true)
         #expect(offeredTools.value == ["fetch_calendar_events", "notify_user_about_events"])
     }
+
+    /// An edit that lands after the model fetched (but before the pass
+    /// finished) was never reviewed: it must not be stamped, or the next
+    /// scheduled pass would skip it. Unchanged rows are still stamped.
+    @Test func editDuringThePassIsNotStampedAsReviewed() async throws {
+        let harness = try Harness()
+        defer { harness.cleanup() }
+        let edited = harness.insertUpcomingEvent(title: "Edited mid-pass")
+        let untouched = harness.insertUpcomingEvent(title: "Untouched")
+        let editedID = edited.id
+        let container = harness.container
+
+        harness.service.completeProvider = { _, _, _, tools in
+            if let fetch = tools.first(where: { $0.name == "fetch_calendar_events" }) {
+                _ = try await fetch.execute(arguments: [:])
+            }
+            await MainActor.run {
+                let repository = CalendarRepository(modelContext: ModelContext(container))
+                if let event = repository.event(withID: editedID) {
+                    event.title = "Edited after the fetch"
+                    repository.noteUpdated(event)
+                }
+            }
+            return ""
+        }
+        #expect(await harness.service.runOnce(force: true))
+
+        let fresh = CalendarRepository(modelContext: ModelContext(harness.container))
+        #expect(fresh.event(withID: edited.id)?.lastReviewedAt == nil)
+        #expect(fresh.event(withID: untouched.id)?.lastReviewedAt != nil)
+    }
 }

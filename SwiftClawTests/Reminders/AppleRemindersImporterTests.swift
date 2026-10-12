@@ -34,14 +34,14 @@ struct AppleRemindersImporterTests {
             Self.snapshot(externalIdentifier: "ek-1", title: "Water plants"),
             Self.snapshot(externalIdentifier: "ek-2", title: "File taxes"),
         ]
-        AppleRemindersImporter.importSnapshots(first, into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots(first, into: list, repository: repository, summary: &summary)
         #expect(repository.reminders(in: list).count == 2)
 
         let second = [
             Self.snapshot(externalIdentifier: "ek-1", title: "Water the plants"),
             Self.snapshot(externalIdentifier: "ek-2", title: "File taxes"),
         ]
-        AppleRemindersImporter.importSnapshots(second, into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots(second, into: list, repository: repository, summary: &summary)
 
         let reminders = repository.reminders(in: list)
         #expect(reminders.count == 2)
@@ -54,7 +54,7 @@ struct AppleRemindersImporterTests {
         let list = repository.createList(name: "Imported")
         var summary = AppleRemindersImporter.Summary()
 
-        AppleRemindersImporter.importSnapshots([
+        try AppleRemindersImporter.importSnapshots([
             Self.snapshot(externalIdentifier: "ek-same", title: "First"),
             Self.snapshot(externalIdentifier: "ek-same", title: "Last"),
         ], into: list, repository: repository, summary: &summary)
@@ -73,7 +73,7 @@ struct AppleRemindersImporterTests {
             Self.snapshot(externalIdentifier: "ek-\($0)", title: "Reminder \($0)")
         }
 
-        AppleRemindersImporter.importSnapshots(
+        try AppleRemindersImporter.importSnapshots(
             snapshots,
             into: list,
             repository: repository,
@@ -95,7 +95,7 @@ struct AppleRemindersImporterTests {
             Self.snapshot(externalIdentifier: "ek-timed", title: "Call bank", due: timed),
             Self.snapshot(externalIdentifier: "ek-day", title: "Trash day", due: DateComponents(year: 2026, month: 8, day: 4)),
         ]
-        AppleRemindersImporter.importSnapshots(snapshots, into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots(snapshots, into: list, repository: repository, summary: &summary)
 
         let timedReminder = try #require(repository.reminder(withExternalIdentifier: "ek-timed"))
         #expect(timedReminder.hasDueTime)
@@ -114,7 +114,7 @@ struct AppleRemindersImporterTests {
 
         var snapshot = Self.snapshot(externalIdentifier: "ek-done", title: "Done thing")
         snapshot.isCompleted = true
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
 
         let reminder = try #require(repository.reminder(withExternalIdentifier: "ek-done"))
         #expect(reminder.isCompleted)
@@ -128,14 +128,14 @@ struct AppleRemindersImporterTests {
 
         var snapshot = Self.snapshot(externalIdentifier: "ek-done-stable", title: "Done thing")
         snapshot.isCompleted = true
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
 
         let reminder = try #require(repository.reminder(withExternalIdentifier: "ek-done-stable"))
         let firstCompletion = try #require(reminder.completedAt)
         reminder.completedAt = firstCompletion.addingTimeInterval(-3600)
         repository.noteUpdated(reminder)
 
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
         #expect(reminder.completedAt == firstCompletion.addingTimeInterval(-3600))
     }
 
@@ -147,9 +147,9 @@ struct AppleRemindersImporterTests {
         var snapshot = ReminderKitMapping.Snapshot(externalIdentifier: nil)
         snapshot.localIdentifier = "ek-local-1"
         snapshot.title = "Local identity"
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
         snapshot.title = "Updated local identity"
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
 
         let reminders = repository.reminders(in: list)
         #expect(reminders.count == 1)
@@ -165,11 +165,11 @@ struct AppleRemindersImporterTests {
         var snapshot = ReminderKitMapping.Snapshot(externalIdentifier: nil)
         snapshot.localIdentifier = "ek-local-transition"
         snapshot.title = "Before external ID"
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
 
         snapshot.externalIdentifier = "ek-external-transition"
         snapshot.title = "After external ID"
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
 
         let reminders = repository.reminders(in: list)
         #expect(reminders.count == 1)
@@ -185,7 +185,7 @@ struct AppleRemindersImporterTests {
 
         var snapshot = Self.snapshot(externalIdentifier: "ek-anchorless", title: "Repeat with no due")
         snapshot.recurrenceRule = RecurrenceRule(rruleString: "FREQ=WEEKLY")
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
 
         let reminder = try #require(repository.reminder(withExternalIdentifier: "ek-anchorless"))
         #expect(reminder.recurrenceRuleString == nil)
@@ -198,7 +198,7 @@ struct AppleRemindersImporterTests {
         var summary = AppleRemindersImporter.Summary()
 
         let initial = Self.snapshot(externalIdentifier: "ek-repeat", title: "Weekly task")
-        AppleRemindersImporter.importSnapshots([initial], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([initial], into: list, repository: repository, summary: &summary)
         let reminder = try #require(repository.reminder(withExternalIdentifier: "ek-repeat"))
         reminder.afterCompletionRepeat = ReminderAfterCompletionRepeat(count: 2, unit: .week)
         repository.noteUpdated(reminder)
@@ -209,7 +209,7 @@ struct AppleRemindersImporterTests {
             due: DateComponents(year: 2026, month: 8, day: 4)
         )
         repeated.recurrenceRule = RecurrenceRule(rruleString: "FREQ=WEEKLY")
-        AppleRemindersImporter.importSnapshots([repeated], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([repeated], into: list, repository: repository, summary: &summary)
 
         #expect(reminder.recurrenceRuleString == "FREQ=WEEKLY")
         #expect(reminder.afterCompletionRepeat == nil)
@@ -225,12 +225,12 @@ struct AppleRemindersImporterTests {
             title: "Water plants",
             due: DateComponents(year: 2026, month: 8, day: 4)
         )
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
         let reminder = try #require(repository.reminder(withExternalIdentifier: "ek-local-repeat"))
         reminder.afterCompletionRepeat = ReminderAfterCompletionRepeat(count: 2, unit: .week)
         repository.noteUpdated(reminder)
 
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
 
         #expect(reminder.recurrenceRuleString == nil)
         #expect(reminder.afterCompletionRepeat == ReminderAfterCompletionRepeat(count: 2, unit: .week))
@@ -247,7 +247,7 @@ struct AppleRemindersImporterTests {
             due: DateComponents(year: 2026, month: 8, day: 4)
         )
         snapshot.hadUnmappableRecurrence = true
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
 
         let reminder = try #require(repository.reminder(withExternalIdentifier: "ek-weird"))
         #expect(reminder.recurrenceRuleString == nil)
@@ -262,13 +262,13 @@ struct AppleRemindersImporterTests {
         var summary = AppleRemindersImporter.Summary()
 
         let snapshot = Self.snapshot(externalIdentifier: "ek-groceries", title: "Groceries")
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
 
         let reminder = try #require(repository.reminder(withExternalIdentifier: "ek-groceries"))
         reminder.checklist = [ReminderChecklistItem(text: "Milk"), ReminderChecklistItem(text: "Eggs", isDone: true)]
         repository.noteUpdated(reminder)
 
-        AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
+        try AppleRemindersImporter.importSnapshots([snapshot], into: list, repository: repository, summary: &summary)
         let reimported = try #require(repository.reminder(withExternalIdentifier: "ek-groceries"))
         #expect(reimported.checklist.map(\.text) == ["Milk", "Eggs"])
     }

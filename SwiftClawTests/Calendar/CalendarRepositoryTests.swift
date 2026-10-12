@@ -344,4 +344,74 @@ struct CalendarRepositoryTests {
         repository.dedupeAfterRemoteMerge()
         #expect(try context.fetch(FetchDescriptor<CalendarEvent>()).isEmpty)
     }
+
+    // MARK: - Review-fix regressions (round 3)
+
+    /// An imported series that became a one-off at its source drops its
+    /// rule, EXDATEs, and overrides — otherwise it keeps expanding.
+    @Test func clearRecurrenceTurnsASeriesIntoAOneOff() throws {
+        let repository = CalendarRepository(modelContext: ModelContext(try Self.inMemoryContainer()))
+        let master = repository.insert(CalendarEvent(
+            title: "Standup",
+            startDate: Self.date(2026, 6, 1, 9),
+            endDate: Self.date(2026, 6, 1, 10),
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=WEEKLY",
+            calendar: repository.defaultCalendar()
+        ))
+        _ = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
+        repository.deleteOccurrence(of: master, at: Self.date(2026, 6, 15, 9))
+
+        repository.clearRecurrence(of: master)
+
+        #expect(master.recurrenceRuleString == nil)
+        #expect(master.recurrenceEndDate == nil)
+        #expect(master.exceptionDates.isEmpty)
+        #expect(repository.overrides(of: master).isEmpty)
+        #expect(repository.occurrences(in: Self.june).map(\.start) == [Self.date(2026, 6, 1, 9)])
+    }
+
+    /// A failing transaction rolls everything inside it back, so a failed
+    /// editor Save leaves no half-detached occurrence behind.
+    @Test func failedTransactionRollsBackEveryWriteInside() throws {
+        struct SimulatedFailure: Error {}
+        let container = try Self.inMemoryContainer()
+        let repository = CalendarRepository(modelContext: ModelContext(container))
+        let master = repository.insert(CalendarEvent(
+            title: "Standup",
+            startDate: Self.date(2026, 6, 1, 9),
+            endDate: Self.date(2026, 6, 1, 10),
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=WEEKLY",
+            calendar: repository.defaultCalendar()
+        ))
+
+        #expect(throws: SimulatedFailure.self) {
+            try repository.performTransaction {
+                let override = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
+                override.title = "Moved"
+                repository.noteUpdated(override)
+                throw SimulatedFailure()
+            }
+        }
+
+        #expect(master.exceptionDates.isEmpty)
+        #expect(repository.overrides(of: master).isEmpty)
+        let stored = try ModelContext(container).fetchCount(FetchDescriptor<CalendarEvent>())
+        #expect(stored == 1)
+    }
+
+    @Test func successfulTransactionCommitsItsWrites() throws {
+        let container = try Self.inMemoryContainer()
+        let repository = CalendarRepository(modelContext: ModelContext(container))
+        let calendar = repository.defaultCalendar()
+
+        try repository.performTransaction {
+            let event = CalendarEvent(title: "New", calendar: calendar)
+            repository.noteUpdated(event)
+            repository.insert(event)
+        }
+
+        #expect(try ModelContext(container).fetchCount(FetchDescriptor<CalendarEvent>()) == 1)
+    }
 }

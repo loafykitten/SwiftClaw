@@ -15,6 +15,8 @@ nonisolated enum RecurrenceExpander {
     static let occurrenceCap = 1000
     /// Hard guard on period iteration (a daily rule spans ~110 years).
     private static let periodIterationCap = 40_000
+    /// Furthest period offset (in days/weeks/months/years) ever computed.
+    private static let maximumPeriodStep = 100_000
 
     /// Occurrence starts whose interval `[start, start + duration)` intersects
     /// `window`, sorted ascending. `cap` bounds the result count; UI callers
@@ -135,7 +137,12 @@ nonisolated enum RecurrenceExpander {
     /// start. Returns nil if calendar math fails (never in practice).
     private static func periodInterval(_ context: ExpansionContext, periodIndex: Int) -> DateInterval? {
         let calendar = context.calendar
-        let step = context.rule.interval * periodIndex
+        // Checked: an absurd INTERVAL (a hand-built rule bypassing the
+        // parser's cap) must end expansion, not trap.
+        // Bounded too: `Calendar` math on astronomically distant dates isn't
+        // something to lean on, and no real series reaches this far.
+        let (step, stepOverflow) = context.rule.interval.multipliedReportingOverflow(by: periodIndex)
+        guard !stepOverflow, step <= maximumPeriodStep else { return nil }
 
         switch context.rule.frequency {
         case .daily:
@@ -144,8 +151,10 @@ nonisolated enum RecurrenceExpander {
             else { return nil }
             return dayStart
         case .weekly:
-            guard let anchorWeek = calendar.dateInterval(of: .weekOfYear, for: context.eventStart),
-                  let weekStart = calendar.date(byAdding: .day, value: 7 * step, to: anchorWeek.start),
+            let (weekDays, weekOverflow) = step.multipliedReportingOverflow(by: 7)
+            guard !weekOverflow,
+                  let anchorWeek = calendar.dateInterval(of: .weekOfYear, for: context.eventStart),
+                  let weekStart = calendar.date(byAdding: .day, value: weekDays, to: anchorWeek.start),
                   let weekEnd = calendar.date(byAdding: .day, value: 7, to: weekStart)
             else { return nil }
             return DateInterval(start: weekStart, end: weekEnd)
@@ -209,6 +218,9 @@ nonisolated enum RecurrenceExpander {
                 let allowed = Set(rule.daysOfWeek.map(\.weekday))
                 candidates = candidates.filter { allowed.contains(weekday(of: $0, calendar: calendar)) }
             }
+            if !rule.daysOfMonth.isEmpty {
+                candidates = candidates.filter { matchesMonthDay($0, rule.daysOfMonth, calendar: calendar) }
+            }
         case .weekly:
             let targets = rule.daysOfWeek.isEmpty
                 ? [weekday(of: context.eventStart, calendar: calendar)]
@@ -219,10 +231,21 @@ nonisolated enum RecurrenceExpander {
                 .compactMap { applyTime(context, toDayContaining: $0) }
         case .monthly:
             candidates = monthCandidates(context, month: period)
+        case .yearly where rule.monthsOfYear.isEmpty && rule.daysOfMonth.isEmpty && !rule.daysOfWeek.isEmpty:
+            // RFC 5545: YEARLY BYDAY without BYMONTH spans the whole year,
+            // and its ordinals count within the year ("20MO" = the year's
+            // 20th Monday), not within DTSTART's month.
+            candidates = yearWeekdayCandidates(context, year: period)
         case .yearly:
-            let months = rule.monthsOfYear.isEmpty
-                ? [calendar.component(.month, from: context.eventStart)]
-                : rule.monthsOfYear
+            // BYMONTHDAY without BYMONTH applies to every month of the year;
+            // with neither, the series repeats on DTSTART's month.
+            let months = if !rule.monthsOfYear.isEmpty {
+                rule.monthsOfYear
+            } else if !rule.daysOfMonth.isEmpty {
+                Array(1...12)
+            } else {
+                [calendar.component(.month, from: context.eventStart)]
+            }
             candidates = []
             for monthNumber in months.sorted() {
                 var components = calendar.dateComponents([.year], from: period.start)
@@ -298,7 +321,36 @@ nonisolated enum RecurrenceExpander {
         return [date(forDay: defaultDay)].compactMap(\.self)
     }
 
+    /// Whole-year BYDAY expansion for YEARLY rules without BYMONTH: every
+    /// matching weekday of the year, ordinals counted from the year's start
+    /// (or end, when negative).
+    private static func yearWeekdayCandidates(_ context: ExpansionContext, year: DateInterval) -> [Date] {
+        let calendar = context.calendar
+        let allDays = daysWithin(year, calendar: calendar)
+        var selected: [Date] = []
+        for entry in context.rule.daysOfWeek {
+            let matches = allDays.filter { weekday(of: $0, calendar: calendar) == entry.weekday }
+            if let ordinal = entry.ordinal {
+                let index = ordinal > 0 ? ordinal - 1 : matches.count + ordinal
+                if matches.indices.contains(index) {
+                    selected.append(matches[index])
+                }
+            } else {
+                selected.append(contentsOf: matches)
+            }
+        }
+        return selected.compactMap { applyTime(context, toDayContaining: $0) }
+    }
+
     // MARK: - Helpers
+
+    /// BYMONTHDAY as a filter (DAILY): positive days count from the month's
+    /// start, negative ones from its end.
+    private static func matchesMonthDay(_ date: Date, _ requested: [Int], calendar: Calendar) -> Bool {
+        let day = calendar.component(.day, from: date)
+        guard let dayCount = calendar.range(of: .day, in: .month, for: date)?.count else { return false }
+        return requested.contains { $0 > 0 ? $0 == day : dayCount + $0 + 1 == day }
+    }
 
     /// BYSETPOS selects 1-based positions (negative = from the end) from the
     /// period's sorted candidate set.

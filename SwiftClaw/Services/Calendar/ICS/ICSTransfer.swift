@@ -9,7 +9,7 @@ extension ICSEventRepresentation {
     @MainActor
     init(event: CalendarEvent) {
         self.init(
-            uid: event.externalIdentifier ?? "swiftclaw-\(event.id.uuidString)",
+            uid: event.externalIdentifier ?? "\(CalendarRepository.nativeExportUIDPrefix)\(event.id.uuidString)",
             start: event.startDate,
             end: event.endDate
         )
@@ -26,8 +26,10 @@ extension ICSEventRepresentation {
 }
 
 /// Applies parsed .ics events to the store. Import is idempotent: rows are
-/// upserted by UID (`externalIdentifier`), so re-importing the same file
-/// updates rather than duplicates.
+/// upserted by UID (`externalIdentifier`, or a native row's exported
+/// `swiftclaw-<id>`), so re-importing the same file — or your own export —
+/// updates rather than duplicates. One transaction: a failed save throws and
+/// imports nothing.
 @MainActor
 enum ICSImporter {
     @discardableResult
@@ -35,8 +37,8 @@ enum ICSImporter {
         from text: String,
         into calendar: UserCalendar,
         repository: CalendarRepository
-    ) -> Int {
-        importEvents(ICSParser.parse(text), into: calendar, repository: repository)
+    ) throws -> Int {
+        try importEvents(ICSParser.parse(text), into: calendar, repository: repository)
     }
 
     @discardableResult
@@ -44,12 +46,18 @@ enum ICSImporter {
         _ parsed: [ICSEventRepresentation],
         into calendar: UserCalendar,
         repository: CalendarRepository
-    ) -> Int {
-        repository.performImport {
+    ) throws -> Int {
+        try repository.performImport {
             apply(parsed, into: calendar, repository: repository)
         }
         return parsed.count
     }
+
+    private static func overrideIdentifier(uid: String, originalStart: Date) -> String {
+        "\(uid)\(overrideIdentifierInfix)\(originalStart.timeIntervalSinceReferenceDate)"
+    }
+
+    private static let overrideIdentifierInfix = "@detached@"
 
     private static func apply(
         _ parsed: [ICSEventRepresentation],
@@ -61,19 +69,32 @@ enum ICSImporter {
         // regardless of file order.
         let masters = parsed.filter { $0.recurrenceID == nil }
         let overrides = parsed.filter { $0.recurrenceID != nil }
+        // Every identity this file carries: standalone events (SwiftClaw
+        // exports overrides that way) and RECURRENCE-ID overrides.
+        let fileIdentifiers = Set(masters.map(\.uid)).union(overrides.compactMap { representation in
+            representation.recurrenceID.map { overrideIdentifier(uid: representation.uid, originalStart: $0) }
+        })
 
         for representation in masters {
-            repository.upsertImportedEvent(externalIdentifier: representation.uid) { event in
+            let master = repository.upsertImportedEvent(externalIdentifier: representation.uid) { event in
                 apply(representation, to: event, calendar: calendar)
                 event.recurrenceRuleString = representation.rruleString
                 event.exceptionDates = representation.exceptionDates
             }
+            // Replacing the master's EXDATEs un-masks occurrences whose
+            // override the file dropped (a reverted move); delete those
+            // overrides so the restored occurrence doesn't render twice.
+            repository.reconcileImportedOverrides(
+                of: master,
+                importedIdentifierPrefix: "\(representation.uid)\(overrideIdentifierInfix)",
+                keeping: fileIdentifiers
+            )
         }
         for representation in overrides {
             guard let originalStart = representation.recurrenceID else { continue }
             // Occurrence-scoped identity (the Apple importer's shape) so the
             // override never collides with its master's UID-keyed row.
-            let overrideID = "\(representation.uid)@detached@\(originalStart.timeIntervalSinceReferenceDate)"
+            let overrideID = overrideIdentifier(uid: representation.uid, originalStart: originalStart)
             let master = repository.event(withExternalIdentifier: representation.uid)
             repository.upsertImportedEvent(externalIdentifier: overrideID) { event in
                 apply(representation, to: event, calendar: calendar)
@@ -103,8 +124,13 @@ enum ICSImporter {
         event.notes = representation.notes
         event.urlString = representation.urlString
         event.alarms = representation.alarmOffsets.map(CalendarAlarmPayload.init(offsetSeconds:))
-        event.source = .icsImport
-        event.calendar = calendar
+        // A native row matched by its exported UID has no external identity:
+        // it's the user's own event coming home, so it keeps its provenance
+        // and calendar. Everything else belongs to the import target.
+        if event.externalIdentifier != nil {
+            event.source = .icsImport
+            event.calendar = calendar
+        }
     }
 
     @MainActor

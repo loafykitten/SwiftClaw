@@ -82,4 +82,41 @@ struct RecurrenceRuleTests {
         #expect(RecurrenceRule.Weekday.monday.foundationWeekday == 2)
         #expect(RecurrenceRule.Weekday.saturday.foundationWeekday == 7)
     }
+
+    // MARK: - Hostile input
+
+    /// Imported values reach the parser unfiltered. `abs(Int.min)` traps, so
+    /// every bound must be a range check, and none of these may crash.
+    @Test(arguments: [
+        "FREQ=MONTHLY;BYMONTHDAY=-9223372036854775808",
+        "FREQ=MONTHLY;BYDAY=-9223372036854775808MO",
+        "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=-9223372036854775808",
+        "FREQ=DAILY;INTERVAL=9223372036854775807",
+        "FREQ=DAILY;INTERVAL=10001",
+        "FREQ=MONTHLY;BYMONTHDAY=32",
+        "FREQ=YEARLY;BYDAY=54MO",
+        "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=367",
+        "FREQ=DAILY;COUNT=-9223372036854775808",
+    ])
+    func rejectsOutOfRangeValues(rrule: String) {
+        #expect(RecurrenceRule(rruleString: rrule) == nil)
+    }
+
+    @Test func acceptsBoundaryValues() {
+        #expect(RecurrenceRule(rruleString: "FREQ=MONTHLY;BYMONTHDAY=-31,31") != nil)
+        #expect(RecurrenceRule(rruleString: "FREQ=YEARLY;BYDAY=-53MO,53FR") != nil)
+        #expect(RecurrenceRule(rruleString: "FREQ=YEARLY;BYDAY=MO;BYSETPOS=-366,366") != nil)
+        #expect(RecurrenceRule(rruleString: "FREQ=DAILY;INTERVAL=\(RecurrenceRule.maximumInterval)") != nil)
+    }
+
+    /// RFC 5545 forbids these; accepting them would expand them silently
+    /// wrong (ordinals ignored, BYMONTHDAY dropped).
+    @Test(arguments: [
+        "FREQ=DAILY;BYDAY=1MO",
+        "FREQ=WEEKLY;BYDAY=2TU",
+        "FREQ=WEEKLY;BYMONTHDAY=1",
+    ])
+    func rejectsForbiddenCombinations(rrule: String) {
+        #expect(RecurrenceRule(rruleString: rrule) == nil)
+    }
 }

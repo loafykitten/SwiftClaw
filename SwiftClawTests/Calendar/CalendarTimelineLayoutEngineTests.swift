@@ -157,4 +157,118 @@ struct CalendarTimelineLayoutEngineTests {
         #expect(frames.count == 1)
         #expect(frames[0].occurrence.title == "In")
     }
+
+    // MARK: - DST days (wall-clock grid)
+
+    private static var newYork: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        return calendar
+    }
+
+    private static func newYorkDate(_ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+        newYork.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute))!
+    }
+
+    private static func newYorkOccurrence(start: Date, end: Date) -> EventOccurrence {
+        EventOccurrence(
+            eventID: UUID(),
+            calendarID: nil,
+            title: "Meeting",
+            start: start,
+            end: end,
+            isAllDay: false,
+            colorHex: "#0A84FF",
+            source: .native,
+            isOverride: false
+        )
+    }
+
+    /// 2026-03-08 has 23 hours in New York; 09:00 must sit on the 09:00 row,
+    /// not the 08:00 row elapsed time would give.
+    @Test func springForwardDayPlacesEventsByWallClock() throws {
+        let calendar = Self.newYork
+        let day = try #require(calendar.dateInterval(of: .day, for: Self.newYorkDate(3, 8, 12)))
+        let frames = CalendarTimelineLayoutEngine.frames(
+            for: [Self.newYorkOccurrence(start: Self.newYorkDate(3, 8, 9), end: Self.newYorkDate(3, 8, 10))],
+            day: day,
+            calendar: calendar
+        )
+        let frame = try #require(frames.first)
+        #expect(frame.startMinute == 540)
+        #expect(frame.endMinute == 600)
+    }
+
+    /// 2026-11-01 has 25 hours; the last hour must still map inside the grid.
+    @Test func fallBackDayKeepsTheLastHourOnTheGrid() throws {
+        let calendar = Self.newYork
+        let day = try #require(calendar.dateInterval(of: .day, for: Self.newYorkDate(11, 1, 12)))
+        let frames = CalendarTimelineLayoutEngine.frames(
+            for: [Self.newYorkOccurrence(start: Self.newYorkDate(11, 1, 23), end: day.end)],
+            day: day,
+            calendar: calendar
+        )
+        let frame = try #require(frames.first)
+        #expect(frame.startMinute == 1380)
+        #expect(frame.endMinute == 1440)
+    }
+
+    @Test func dragCreateMapsGridRowsToWallClockInstants() throws {
+        let calendar = Self.newYork
+        let dayStart = calendar.startOfDay(for: Self.newYorkDate(3, 8, 12))
+        let nine = CalendarTimelineLayoutEngine.date(atWallClockMinute: 9 * 60, onDayStarting: dayStart, calendar: calendar)
+        #expect(nine == Self.newYorkDate(3, 8, 9))
+        let midnight = CalendarTimelineLayoutEngine.date(atWallClockMinute: 24 * 60, onDayStarting: dayStart, calendar: calendar)
+        #expect(midnight == calendar.startOfDay(for: Self.newYorkDate(3, 9, 12)))
+    }
+
+    /// Dragging a 01:00 event down two rows on spring-forward day lands on
+    /// the 03:00 row, not 04:00 (01:00 + two elapsed hours).
+    @Test func dragMoveShiftsByWallClockRows() {
+        let shifted = CalendarTimelineLayoutEngine.shiftingWallClock(
+            Self.newYorkDate(3, 8, 1),
+            byMinutes: 120,
+            calendar: Self.newYork
+        )
+        #expect(shifted == Self.newYorkDate(3, 8, 3))
+    }
+
+    // MARK: - All-day spans across DST
+
+    /// A one-day all-day event spans one calendar day on every occurrence,
+    /// including the 23-hour spring-forward Sunday (seconds-based duration
+    /// would end it at 01:00 Monday, into a second day cell).
+    @MainActor
+    @Test func allDayOccurrenceEndKeepsWholeDaysAcrossDST() {
+        let calendar = Self.newYork
+        let event = CalendarEvent(
+            title: "Holiday",
+            startDate: calendar.startOfDay(for: Self.newYorkDate(3, 1, 12)),
+            endDate: calendar.startOfDay(for: Self.newYorkDate(3, 2, 12)),
+            isAllDay: true
+        )
+        let springForward = calendar.startOfDay(for: Self.newYorkDate(3, 8, 12))
+        #expect(event.occurrenceEnd(forStart: springForward, calendar: calendar)
+            == calendar.startOfDay(for: Self.newYorkDate(3, 9, 12)))
+
+        // Created on the short day itself: still one day elsewhere.
+        let shortDayEvent = CalendarEvent(
+            title: "Holiday",
+            startDate: springForward,
+            endDate: calendar.startOfDay(for: Self.newYorkDate(3, 9, 12)),
+            isAllDay: true
+        )
+        let normalDay = calendar.startOfDay(for: Self.newYorkDate(3, 15, 12))
+        #expect(shortDayEvent.occurrenceEnd(forStart: normalDay, calendar: calendar)
+            == calendar.startOfDay(for: Self.newYorkDate(3, 16, 12)))
+
+        // Timed events keep elapsed duration.
+        let timed = CalendarEvent(
+            title: "Call",
+            startDate: Self.newYorkDate(3, 1, 9),
+            endDate: Self.newYorkDate(3, 1, 10)
+        )
+        #expect(timed.occurrenceEnd(forStart: Self.newYorkDate(3, 8, 9), calendar: calendar)
+            == Self.newYorkDate(3, 8, 10))
+    }
 }

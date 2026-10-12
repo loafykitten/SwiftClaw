@@ -6,7 +6,7 @@ extension ICSTodoRepresentation {
     /// SwiftClaw) dedups instead of duplicating.
     @MainActor
     init(reminder: Reminder) {
-        self.init(uid: reminder.externalIdentifier ?? "swiftclaw-\(reminder.id.uuidString)")
+        self.init(uid: reminder.externalIdentifier ?? "\(ReminderRepository.nativeExportUIDPrefix)\(reminder.id.uuidString)")
         title = reminder.title
         notes = reminder.notes
         urlString = reminder.urlString
@@ -24,9 +24,11 @@ extension ICSTodoRepresentation {
 }
 
 /// Applies parsed VTODOs to the store. Import is idempotent: rows are
-/// upserted by UID (`externalIdentifier`), so re-importing the same file
+/// upserted by UID (`externalIdentifier`, or a native row's exported
+/// `swiftclaw-<id>`), so re-importing the same file — or your own export —
 /// updates rather than duplicates. All .ics to-do usage funnels through here
-/// (the `ICSImporter` pattern) so the backend stays swappable.
+/// (the `ICSImporter` pattern) so the backend stays swappable. A failed save
+/// throws `ReminderRepository.ImportSaveError` with the committed count.
 @MainActor
 enum ICSTodoImporter {
     @discardableResult
@@ -34,8 +36,8 @@ enum ICSTodoImporter {
         from text: String,
         into list: ReminderList,
         repository: ReminderRepository
-    ) -> Int {
-        importTodos(ICSParser.parseTodos(text), into: list, repository: repository)
+    ) throws -> Int {
+        try importTodos(ICSParser.parseTodos(text), into: list, repository: repository)
     }
 
     @discardableResult
@@ -43,12 +45,12 @@ enum ICSTodoImporter {
         _ parsed: [ICSTodoRepresentation],
         into list: ReminderList,
         repository: ReminderRepository
-    ) -> Int {
+    ) throws -> Int {
         var remaining = parsed[...]
         let identities = parsed.map {
             ReminderRepository.ImportedReminderIdentity(externalIdentifier: $0.uid)
         }
-        repository.upsertImportedReminders(identities) { _, reminder in
+        try repository.upsertImportedReminders(identities) { _, reminder in
             apply(remaining.removeFirst(), to: reminder, list: list)
         }
         return parsed.count
@@ -86,8 +88,13 @@ enum ICSTodoImporter {
             reminder.afterCompletionRepeat = nil
         }
 
-        reminder.source = .icsImport
-        reminder.list = list
+        // A native row matched by its exported UID has no external identity:
+        // it's the user's own reminder coming home, so it keeps its
+        // provenance and list.
+        if reminder.externalIdentifier != nil {
+            reminder.source = .icsImport
+            reminder.list = list
+        }
     }
 
     @MainActor

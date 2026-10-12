@@ -31,8 +31,36 @@ final class NotificationSchedulingSpy: NotificationScheduling {
         return grantAuthorization
     }
 
+    /// When set, `authorizationStatus()` / `add(_:)` suspend until resumed,
+    /// so tests can land a settings change while a post is in flight (the
+    /// service checks authorization, then adds, across suspension points).
+    var suspendsAuthorizationLookups = false
+    var suspendsAdds = false
+    private var suspendedLookups: [CheckedContinuation<Void, Never>] = []
+    private var suspendedAdds: [CheckedContinuation<Void, Never>] = []
+    var suspendedLookupCount: Int { suspendedLookups.count }
+    var suspendedAddCount: Int { suspendedAdds.count }
+
+    func resumeSuspendedLookups() {
+        let lookups = suspendedLookups
+        suspendedLookups = []
+        lookups.forEach { $0.resume() }
+    }
+
+    func resumeSuspendedAdds() {
+        let adds = suspendedAdds
+        suspendedAdds = []
+        adds.forEach { $0.resume() }
+    }
+
+    private(set) var authorizationLookupCount = 0
+
     func authorizationStatus() async -> UNAuthorizationStatus {
-        authorizationStatusValue
+        authorizationLookupCount += 1
+        if suspendsAuthorizationLookups {
+            await withCheckedContinuation { suspendedLookups.append($0) }
+        }
+        return authorizationStatusValue
     }
 
     func setNotificationCategories(_ categories: Set<UNNotificationCategory>) {
@@ -44,6 +72,10 @@ final class NotificationSchedulingSpy: NotificationScheduling {
     }
 
     func add(_ request: UNNotificationRequest) async throws {
+        if suspendsAdds {
+            // Not visible as pending until the add completes.
+            await withCheckedContinuation { suspendedAdds.append($0) }
+        }
         addedRequests.append(request)
     }
 

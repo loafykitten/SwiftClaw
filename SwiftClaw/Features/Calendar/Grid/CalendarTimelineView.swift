@@ -274,7 +274,13 @@ struct CalendarTimelineView: View {
 
     private func nowIndicator(day: Date, width: CGFloat) -> some View {
         TimelineView(.periodic(from: .now, by: 60)) { timeline in
-            let minutes = timeline.date.timeIntervalSince(day) / 60
+            let dayInterval = calendar.dateInterval(of: .day, for: day)
+                ?? DateInterval(start: day, duration: 24 * 3600)
+            let minutes = CalendarTimelineLayoutEngine.wallClockMinute(
+                of: timeline.date,
+                in: dayInterval,
+                calendar: calendar
+            )
             HStack(spacing: 0) {
                 Circle().fill(.red).frame(width: 7, height: 7)
                 Rectangle().fill(.red).frame(height: 1)
@@ -346,8 +352,18 @@ struct CalendarTimelineView: View {
                 dragState = nil
                 let startMinute = snappedMinute(fromY: min(value.startLocation.y, value.location.y))
                 let endMinute = snappedMinute(fromY: max(value.startLocation.y, value.location.y))
-                let start = day.addingTimeInterval(startMinute * 60)
-                let end = day.addingTimeInterval(max(endMinute, startMinute + Self.snapMinutes * 2) * 60)
+                // Wall-clock rows, not elapsed seconds since midnight: on a
+                // DST day the two differ by an hour.
+                let start = CalendarTimelineLayoutEngine.date(
+                    atWallClockMinute: startMinute,
+                    onDayStarting: day,
+                    calendar: calendar
+                )
+                let end = CalendarTimelineLayoutEngine.date(
+                    atWallClockMinute: max(endMinute, startMinute + Self.snapMinutes * 2),
+                    onDayStarting: day,
+                    calendar: calendar
+                )
                 onCreate(start, end)
             }
     }
@@ -367,7 +383,11 @@ struct CalendarTimelineView: View {
                 let dayDelta = days.count > 1
                     ? Int((value.translation.width / columnWidth).rounded())
                     : 0
-                var newStart = occurrence.start.addingTimeInterval(minuteDelta * 60)
+                var newStart = CalendarTimelineLayoutEngine.shiftingWallClock(
+                    occurrence.start,
+                    byMinutes: minuteDelta,
+                    calendar: calendar
+                )
                 if dayDelta != 0,
                    let shifted = calendar.date(byAdding: .day, value: dayDelta, to: newStart) {
                     newStart = shifted
@@ -390,7 +410,11 @@ struct CalendarTimelineView: View {
             .onEnded { value in
                 dragState = nil
                 let minuteDelta = snappedMinuteDelta(value.translation.height)
-                let newEnd = occurrence.end.addingTimeInterval(minuteDelta * 60)
+                let newEnd = CalendarTimelineLayoutEngine.shiftingWallClock(
+                    occurrence.end,
+                    byMinutes: minuteDelta,
+                    calendar: calendar
+                )
                 if newEnd > occurrence.start && newEnd != occurrence.end {
                     onResize(occurrence, newEnd)
                 }

@@ -15,7 +15,7 @@ nonisolated enum CalendarTimelineLayoutEngine {
         let occurrence: EventOccurrence
         let columnIndex: Int
         let columnCount: Int
-        /// Minutes from the day's start, clamped to the day (multi-day spills
+        /// Wall-clock minutes on the day's 24-hour grid, clamped to the day (multi-day spills
         /// render as full-height slabs on intermediate days).
         let startMinute: Double
         let endMinute: Double
@@ -29,7 +29,7 @@ nonisolated enum CalendarTimelineLayoutEngine {
         day: DateInterval,
         calendar: Calendar
     ) -> [Frame] {
-        let dayMinutes = day.duration / 60
+        let dayMinutes = Self.gridMinutes
         let timed = occurrences
             .filter { !$0.isAllDay && $0.start < day.end && $0.end > day.start }
             .sorted { ($0.start, $0.end) < ($1.start, $1.end) }
@@ -43,8 +43,8 @@ nonisolated enum CalendarTimelineLayoutEngine {
             let endMinute: Double
         }
         let entries = timed.map { occurrence in
-            let start = max(0, occurrence.start.timeIntervalSince(day.start) / 60)
-            let rawEnd = min(dayMinutes, occurrence.end.timeIntervalSince(day.start) / 60)
+            let start = wallClockMinute(of: occurrence.start, in: day, calendar: calendar)
+            let rawEnd = wallClockMinute(of: occurrence.end, in: day, calendar: calendar)
             let end = min(dayMinutes, max(rawEnd, start + minimumSlotMinutes))
             return Entry(occurrence: occurrence, startMinute: start, endMinute: end)
         }
@@ -88,5 +88,42 @@ nonisolated enum CalendarTimelineLayoutEngine {
         }
         flushCluster()
         return frames
+    }
+
+    // MARK: - Wall-clock mapping
+
+    /// The grid is a fixed 24 labelled hours, so every position maps through
+    /// wall-clock time, never elapsed time: on a 23-hour spring-forward day
+    /// 09:00 is 540 minutes down (not 480), and a 25-hour fall-back day's
+    /// last hour isn't clipped.
+    static let gridMinutes: Double = 24 * 60
+
+    /// Wall-clock minute of `date` on `day`'s grid, clamped to it (an instant
+    /// before the day maps to 0, one at or after its end to `gridMinutes`).
+    static func wallClockMinute(of date: Date, in day: DateInterval, calendar: Calendar) -> Double {
+        guard date > day.start else { return 0 }
+        guard date < day.end else { return gridMinutes }
+        let parts = calendar.dateComponents([.hour, .minute, .second], from: date)
+        let minute = Double(parts.hour ?? 0) * 60 + Double(parts.minute ?? 0) + Double(parts.second ?? 0) / 60
+        return min(gridMinutes, max(0, minute))
+    }
+
+    /// The instant shown at wall-clock `minute` on the day starting at
+    /// `dayStart`. A minute inside a spring-forward gap resolves to the next
+    /// valid instant, like `Calendar` does for any nonexistent local time.
+    static func date(atWallClockMinute minute: Double, onDayStarting dayStart: Date, calendar: Calendar) -> Date {
+        var parts = calendar.dateComponents([.year, .month, .day], from: dayStart)
+        let wholeMinutes = Int(minute.rounded())
+        parts.hour = wholeMinutes / 60
+        parts.minute = wholeMinutes % 60
+        return calendar.date(from: parts) ?? dayStart.addingTimeInterval(minute * 60)
+    }
+
+    /// Moves `date` by `minutes` of wall-clock time (a drag of N grid rows),
+    /// so a move across a DST transition lands on the row it was dropped on.
+    static func shiftingWallClock(_ date: Date, byMinutes minutes: Double, calendar: Calendar) -> Date {
+        var parts = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+        parts.minute = (parts.minute ?? 0) + Int(minutes.rounded())
+        return calendar.date(from: parts) ?? date.addingTimeInterval(minutes * 60)
     }
 }

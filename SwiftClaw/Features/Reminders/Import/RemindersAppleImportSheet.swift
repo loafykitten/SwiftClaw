@@ -133,8 +133,12 @@ struct RemindersAppleImportSheet: View {
         phase = .importing
         let repository = ReminderRepository(modelContext: modelContext)
         Task {
-            let summary = await importer.importLists(identifiers: selectedIdentifiers, repository: repository)
-            phase = .finished(summary)
+            do {
+                let summary = try await importer.importLists(identifiers: selectedIdentifiers, repository: repository)
+                phase = .finished(summary)
+            } catch {
+                phase = .failed(error.localizedDescription)
+            }
         }
     }
 }

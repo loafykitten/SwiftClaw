@@ -119,6 +119,9 @@ final class CalendarAlertScheduler {
     func clearAllPendingAlerts() {
         let service = notificationService
         pendingClear = Task { @MainActor in
+            // Let posts already past their gate land first, or they'd be
+            // added after this read and survive the clear.
+            await service.waitForInFlightPosts()
             let booked = await service.pendingCalendarAlertIdentifiers()
             service.removePendingCalendarAlerts(identifiers: Array(booked))
         }

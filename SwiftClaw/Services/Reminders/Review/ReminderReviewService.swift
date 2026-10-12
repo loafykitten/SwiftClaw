@@ -88,17 +88,16 @@ final class ReminderReviewService {
         // the user opens a review re-sends the same unchanged to-dos and can
         // recreate the same review chat.
         if !force {
-            let scope = reviewScope(repository: repository)
-            if scope.isEmpty {
+            let horizon = Date.now.addingTimeInterval(Self.guardHorizon)
+            if repository.pendingReminders(dueBefore: horizon, includeUndated: true, limit: 1).isEmpty {
                 Self.logger.info("reminders review: nothing pending; skipping")
                 lastStatusMessage = "No pending reminders to review"
                 return false
             }
-            let hasUnreviewedChange = scope.contains { reminder in
-                guard let reviewedAt = reminder.lastReviewedAt else { return true }
-                return reminder.modifiedAt > reviewedAt
-            }
-            if !hasUnreviewedChange {
+            // Across the whole scope, not the fetch tool's first page: a
+            // change past the first 50 must still trigger a pass (and the
+            // fetch tool admits changed rows first so the model sees it).
+            if !repository.hasUnreviewedPendingReminders(dueBefore: horizon) {
                 Self.logger.info("reminders review: nothing new since the last review; skipping")
                 lastStatusMessage = "Nothing new since the last review"
                 return false
@@ -122,7 +121,7 @@ final class ReminderReviewService {
         let reviewChatCapture = MemoryReviewChatCapture()
         let fetchTool = ReminderReviewFetchTool(
             modelContainer: modelContainer,
-            onRemindersFetched: { [collector] ids in collector.add(ids) }
+            onRemindersFetched: { [collector] versions in collector.add(versions) }
         )
         let notifyTool = ReminderReviewNotifyTool(
             modelContainer: modelContainer,
@@ -172,28 +171,24 @@ final class ReminderReviewService {
             modelContainer: modelContainer
         )
 
-        // Stamp only what the model actually pulled, only after success.
-        let fetched = repository.reminders(withIDs: collector.ids)
+        // Stamp only what the model actually pulled, only after success,
+        // and only rows still at the version it saw: an edit that landed
+        // mid-pass was never reviewed and must keep triggering the next one.
+        // A fresh context so the comparison reads committed values, not this
+        // pass's earlier-fetched objects.
+        let stampRepository = ReminderRepository(modelContext: ModelContext(modelContainer))
         let stamp = Date.now
-        for reminder in fetched {
+        var stampedAny = false
+        for reminder in stampRepository.reminders(withIDs: Set(collector.versions.keys)) {
+            guard let seen = collector.versions[reminder.id], reminder.modifiedAt <= seen else { continue }
             reminder.lastReviewedAt = stamp
+            stampedAny = true
         }
-        if !fetched.isEmpty {
-            repository.saveChanges()
+        if stampedAny {
+            stampRepository.saveChanges()
         }
         lastStatusMessage = "Review complete"
         return true
-    }
-
-    /// The reminders a default fetch would return: pending masters that are
-    /// undated or due within the guard horizon (overdue included).
-    private func reviewScope(repository: ReminderRepository) -> [Reminder] {
-        let horizon = Date.now.addingTimeInterval(Self.guardHorizon)
-        return repository.pendingReminders(
-            dueBefore: horizon,
-            includeUndated: true,
-            limit: 50
-        )
     }
 
     private func hasUnreadReviewChat(in context: ModelContext) -> Bool {
@@ -206,12 +201,15 @@ final class ReminderReviewService {
         return chats.contains { !$0.isArchived && $0.isRemindersReviewChat }
     }
 
-    /// Accumulates fetched reminder IDs across the pass (the model may fetch
-    /// more than once).
+    /// Accumulates fetched reminder versions (ID -> `modifiedAt` the model
+    /// saw) across the pass. The model may fetch more than once; the newest
+    /// version it saw wins.
     @MainActor
     private final class FetchedReminderCollector {
-        private(set) var ids: Set<UUID> = []
-        func add(_ newIDs: [UUID]) { ids.formUnion(newIDs) }
+        private(set) var versions: [UUID: Date] = [:]
+        func add(_ newVersions: [UUID: Date]) {
+            versions.merge(newVersions) { max($0, $1) }
+        }
     }
 
     // MARK: - Prompts

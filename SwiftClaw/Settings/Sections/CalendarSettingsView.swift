@@ -154,18 +154,24 @@ struct CalendarSettingsView: View {
         Task {
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            let parsed: [ICSEventRepresentation]
             do {
-                let parsed = try await Task.detached(priority: .userInitiated) {
+                parsed = try await Task.detached(priority: .userInitiated) {
                     let text = try String(contentsOf: url, encoding: .utf8)
                     return ICSParser.parse(text)
                 }.value
+            } catch {
+                icsStatusMessage = "Couldn't read that file."
+                return
+            }
+            do {
                 let target = repository.defaultCalendar(
                     preferredID: SettingsStorage.loadCalendarDefaultCalendarID()
                 )
-                let count = ICSImporter.importEvents(parsed, into: target, repository: repository)
+                let count = try ICSImporter.importEvents(parsed, into: target, repository: repository)
                 icsStatusMessage = "Imported \(count) event\(count == 1 ? "" : "s") into “\(target.name)”."
             } catch {
-                icsStatusMessage = "Couldn't read that file."
+                icsStatusMessage = "Couldn't save the imported events."
             }
         }
     }

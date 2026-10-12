@@ -14,10 +14,16 @@ final class CalendarRepository {
 
     let modelContext: ModelContext
 
-    /// Imports preload external identities once and defer persistence so a
-    /// large calendar produces one fetch, save, and store-change notification.
+    /// UID prefix native rows export under (they have no external identity).
+    nonisolated static let nativeExportUIDPrefix = "swiftclaw-"
+
+    /// Imports preload external identities once so a large calendar produces
+    /// one fetch.
     private var importedEventsByExternalIdentifier: [String: CalendarEvent]?
-    private var importBatchNeedsSave = false
+    /// Inside `performTransaction`, saves are deferred to one commit at the
+    /// end (one save and one store-change notification).
+    private var isDeferringSaves = false
+    private var deferredSaveNeeded = false
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
@@ -103,6 +109,10 @@ final class CalendarRepository {
     func event(withExternalIdentifier externalIdentifier: String) -> CalendarEvent? {
         if let importedEventsByExternalIdentifier {
             return importedEventsByExternalIdentifier[externalIdentifier]
+                ?? nativeEvent(forExportedUID: externalIdentifier)
+        }
+        if let native = nativeEvent(forExportedUID: externalIdentifier) {
+            return native
         }
         var descriptor = FetchDescriptor<CalendarEvent>(
             predicate: #Predicate { $0.externalIdentifier == externalIdentifier },
@@ -178,7 +188,7 @@ final class CalendarRepository {
         let override = CalendarEvent(
             title: master.title,
             startDate: occurrenceStart,
-            endDate: occurrenceStart.addingTimeInterval(master.duration),
+            endDate: master.occurrenceEnd(forStart: occurrenceStart),
             isAllDay: master.isAllDay,
             timeZoneIdentifier: master.timeZoneIdentifier,
             locationText: master.locationText,
@@ -226,10 +236,70 @@ final class CalendarRepository {
     /// Deletes a master plus all of its detached overrides (or a one-off).
     func deleteEventSeries(_ event: CalendarEvent) {
         for override in overrides(of: event) {
-            modelContext.delete(override)
+            deleteRow(override)
+        }
+        deleteRow(event)
+        save()
+    }
+
+    /// Turns a recurring row into a plain one-off: drops its rule, EXDATEs,
+    /// and detached overrides. For an imported series that its source now
+    /// reports as a single event; keeping the rule would go on generating
+    /// (and alerting for) occurrences that no longer exist.
+    func clearRecurrence(of event: CalendarEvent) {
+        guard event.recurrenceRuleString != nil || !event.exceptionDates.isEmpty || !overrides(of: event).isEmpty else {
+            return
+        }
+        for override in overrides(of: event) {
+            deleteRow(override)
+        }
+        event.recurrenceRuleString = nil
+        event.exceptionDates = []
+        refreshRecurrenceEnd(of: event)
+        event.modifiedAt = .now
+        save()
+    }
+
+    /// Reconciles a re-imported series' detached overrides with the file it
+    /// came from, which is authoritative for that series. An imported
+    /// override (keyed `importedIdentifierPrefix…`) the file no longer
+    /// carries is deleted unless its original occurrence is still masked by
+    /// an EXDATE: re-importing reset the master's EXDATEs, so that occurrence
+    /// renders again and the stale override would double it. A file that
+    /// still masks it may simply be partial, so the override stays. Native
+    /// overrides (the user's own edits) always stay, re-masked so they
+    /// don't double-render either.
+    func reconcileImportedOverrides(
+        of master: CalendarEvent,
+        importedIdentifierPrefix: String,
+        keeping currentIdentifiers: Set<String>
+    ) {
+        var changed = false
+        for override in overrides(of: master) {
+            let original = override.originalOccurrenceDate ?? override.startDate
+            let isMasked = RecurrenceExpander.isException(original, exceptionDates: master.exceptionDates)
+            if let identifier = override.externalIdentifier, identifier.hasPrefix(importedIdentifierPrefix) {
+                guard !currentIdentifiers.contains(identifier), !isMasked else { continue }
+                deleteRow(override)
+                changed = true
+            } else if override.externalIdentifier == nil, master.isRecurring, !isMasked {
+                master.exceptionDates.append(original)
+                changed = true
+            }
+        }
+        if changed {
+            save()
+        }
+    }
+
+    /// Deletes one row, keeping the import identity cache in step so a later
+    /// lookup in the same batch can't return the deleted object.
+    private func deleteRow(_ event: CalendarEvent) {
+        if let externalIdentifier = event.externalIdentifier,
+           importedEventsByExternalIdentifier?[externalIdentifier] === event {
+            importedEventsByExternalIdentifier?[externalIdentifier] = nil
         }
         modelContext.delete(event)
-        save()
     }
 
     func overrides(of master: CalendarEvent) -> [CalendarEvent] {
@@ -301,12 +371,43 @@ final class CalendarRepository {
         return changed
     }
 
+    // MARK: - Transactions
+
+    /// Runs `body` as one all-or-nothing write: saves inside it are deferred
+    /// to a single commit at the end. A failed commit rolls the context back
+    /// (so in-memory rows match the store again) and throws, so a caller like
+    /// the editor's Save can keep its draft and report the failure instead
+    /// of dismissing as if the change had landed. Nested calls join the
+    /// outer transaction.
+    func performTransaction<Result>(_ body: () throws -> Result) throws -> Result {
+        guard !isDeferringSaves else { return try body() }
+        isDeferringSaves = true
+        deferredSaveNeeded = false
+        let result: Result
+        do {
+            result = try body()
+        } catch {
+            isDeferringSaves = false
+            deferredSaveNeeded = false
+            modelContext.rollback()
+            throw error
+        }
+        isDeferringSaves = false
+        if deferredSaveNeeded {
+            deferredSaveNeeded = false
+            try commit()
+        }
+        return result
+    }
+
     // MARK: - Import support
 
-    /// Runs an import as one persistence transaction. The cache is invalidated
-    /// when the batch ends; all later lookups return to live SwiftData fetches.
-    func performImport<Result>(_ body: () -> Result) -> Result {
-        guard importedEventsByExternalIdentifier == nil else { return body() }
+    /// Runs an import as one persistence transaction (`performTransaction`):
+    /// nothing is reported as imported unless the whole batch committed. The
+    /// identity cache is invalidated when the batch ends; all later lookups
+    /// return to live SwiftData fetches.
+    func performImport<Result>(_ body: () throws -> Result) throws -> Result {
+        guard importedEventsByExternalIdentifier == nil else { return try body() }
 
         let descriptor = FetchDescriptor<CalendarEvent>(sortBy: [SortDescriptor(\.createdAt)])
         let existing = (try? modelContext.fetch(descriptor)) ?? []
@@ -319,15 +420,8 @@ final class CalendarRepository {
             }
         }
         importedEventsByExternalIdentifier = byExternalIdentifier
-        importBatchNeedsSave = false
-        defer {
-            importedEventsByExternalIdentifier = nil
-            if importBatchNeedsSave {
-                importBatchNeedsSave = false
-                persist()
-            }
-        }
-        return body()
+        defer { importedEventsByExternalIdentifier = nil }
+        return try performTransaction(body)
     }
 
     /// Upsert keyed on `externalIdentifier` — re-imports update in place
@@ -349,6 +443,18 @@ final class CalendarRepository {
         refreshRecurrenceEnd(of: event)
         importedEventsByExternalIdentifier?[externalIdentifier] = event
         save()
+        return event
+    }
+
+    /// A native row (no external identity) addressed by the UID it exports
+    /// under, `swiftclaw-<id>`, so importing your own export updates the
+    /// original instead of creating a duplicate beside it.
+    private func nativeEvent(forExportedUID uid: String) -> CalendarEvent? {
+        guard uid.hasPrefix(Self.nativeExportUIDPrefix),
+              let id = UUID(uuidString: String(uid.dropFirst(Self.nativeExportUIDPrefix.count))),
+              let event = event(withID: id),
+              event.externalIdentifier == nil
+        else { return nil }
         return event
     }
 
@@ -429,21 +535,31 @@ final class CalendarRepository {
 
     // MARK: - Persistence
 
+    /// Best-effort save for single mutations: failures are logged. Callers
+    /// that must not report success on failure wrap their writes in
+    /// `performTransaction` / `performImport`, whose commit throws.
     private func save() {
-        if importedEventsByExternalIdentifier != nil {
-            importBatchNeedsSave = true
+        if isDeferringSaves {
+            deferredSaveNeeded = true
             return
         }
-        persist()
-    }
-
-    private func persist() {
         do {
             try modelContext.save()
             NotificationCenter.default.post(name: .calendarStoreDidChange, object: nil)
         } catch {
             Self.logger.error("save failed: \(String(describing: error))")
         }
+    }
+
+    private func commit() throws {
+        do {
+            try modelContext.save()
+        } catch {
+            Self.logger.error("transaction save failed: \(String(describing: error))")
+            modelContext.rollback()
+            throw error
+        }
+        NotificationCenter.default.post(name: .calendarStoreDidChange, object: nil)
     }
 }
 

@@ -107,6 +107,26 @@ final class CalendarEvent {
         timeZoneIdentifier.flatMap(TimeZone.init(identifier:))
     }
 
+    /// Whole local days an all-day event spans (at least one). Counted by
+    /// calendar days, not seconds: a one-day event created on a 23- or
+    /// 25-hour DST day still spans exactly one day.
+    func allDaySpan(calendar: Calendar = .current) -> Int {
+        let firstDay = calendar.startOfDay(for: startDate)
+        let exclusiveEnd = EventKitMapping.normalizedAllDayEnd(max(endDate, startDate), calendar: calendar)
+        let days = calendar.dateComponents([.day], from: firstDay, to: exclusiveEnd).day ?? 1
+        return max(1, days)
+    }
+
+    /// End of this event's occurrence starting at `start`. Timed events keep
+    /// their elapsed duration; all-day events keep their day count, so an
+    /// occurrence on a DST-transition day still ends at the next local
+    /// midnight instead of an hour into the following day.
+    func occurrenceEnd(forStart start: Date, calendar: Calendar = .current) -> Date {
+        guard isAllDay else { return start.addingTimeInterval(duration) }
+        return calendar.date(byAdding: .day, value: allDaySpan(calendar: calendar), to: start)
+            ?? start.addingTimeInterval(duration)
+    }
+
     var url: URL? {
         urlString.flatMap(URL.init(string:))
     }

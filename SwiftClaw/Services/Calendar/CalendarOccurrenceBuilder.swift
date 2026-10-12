@@ -43,9 +43,12 @@ enum CalendarOccurrenceBuilder {
                 timeZone: event.timeZone
             )
             for start in starts {
-                occurrences.append(
-                    occurrence(for: event, start: start, end: start.addingTimeInterval(event.duration))
-                )
+                // Calendar-day end for all-day series (see `occurrenceEnd`);
+                // the expander's second-based window test can admit a day
+                // that the DST-correct end no longer reaches.
+                let end = event.occurrenceEnd(forStart: start)
+                guard end > window.start else { continue }
+                occurrences.append(occurrence(for: event, start: start, end: end))
             }
         }
         return occurrences.sorted { ($0.start, $0.title) < ($1.start, $1.title) }

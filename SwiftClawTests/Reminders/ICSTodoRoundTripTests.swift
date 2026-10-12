@@ -252,11 +252,11 @@ struct ICSTodoRoundTripTests {
         todo.due = Self.localMidnight(2026, 7, 12)
         todo.isDateOnly = true
         let first = ICSSerializer.serialize(todos: [todo])
-        #expect(ICSTodoImporter.importTodos(from: first, into: list, repository: repository) == 1)
+        #expect(try ICSTodoImporter.importTodos(from: first, into: list, repository: repository) == 1)
 
         todo.title = "Water the plants"
         let second = ICSSerializer.serialize(todos: [todo])
-        #expect(ICSTodoImporter.importTodos(from: second, into: list, repository: repository) == 1)
+        #expect(try ICSTodoImporter.importTodos(from: second, into: list, repository: repository) == 1)
 
         let reminders = repository.reminders(in: list)
         #expect(reminders.count == 1)
@@ -282,13 +282,13 @@ struct ICSTodoRoundTripTests {
             "END:VTODO",
         ].joined(separator: "\r\n")
 
-        ICSTodoImporter.importTodos(from: text, into: list, repository: repository)
+        try ICSTodoImporter.importTodos(from: text, into: list, repository: repository)
         let reminder = try #require(repository.reminder(withExternalIdentifier: "todo-stable-completion"))
         let firstCompletion = try #require(reminder.completedAt)
         reminder.completedAt = firstCompletion.addingTimeInterval(-3600)
         repository.noteUpdated(reminder)
 
-        ICSTodoImporter.importTodos(from: text, into: list, repository: repository)
+        try ICSTodoImporter.importTodos(from: text, into: list, repository: repository)
         #expect(reminder.completedAt == firstCompletion.addingTimeInterval(-3600))
     }
 
@@ -314,7 +314,7 @@ struct ICSTodoRoundTripTests {
             "END:VCALENDAR",
         ].joined(separator: "\r\n")
 
-        #expect(ICSTodoImporter.importTodos(from: text, into: list, repository: repository) == 1)
+        #expect(try ICSTodoImporter.importTodos(from: text, into: list, repository: repository) == 1)
         let reminder = try #require(repository.reminder(withExternalIdentifier: "todo-weird"))
         #expect(reminder.recurrenceRuleString == nil)
         #expect(reminder.dueDate == Self.date(2026, 7, 11, 9))
@@ -348,8 +348,8 @@ struct ICSTodoRoundTripTests {
         let destination = try ModelContainer(for: schema, configurations: [destinationConfiguration])
         let repository = ReminderRepository(modelContext: ModelContext(destination))
         let list = repository.createList(name: "Chores")
-        #expect(ICSTodoImporter.importTodos(from: text, into: list, repository: repository) == 1)
-        #expect(ICSTodoImporter.importTodos(from: text, into: list, repository: repository) == 1)
+        #expect(try ICSTodoImporter.importTodos(from: text, into: list, repository: repository) == 1)
+        #expect(try ICSTodoImporter.importTodos(from: text, into: list, repository: repository) == 1)
 
         let rows = repository.reminders(in: list)
         #expect(rows.count == 1)
@@ -362,5 +362,55 @@ struct ICSTodoRoundTripTests {
         #expect(roundTripped.afterCompletionRepeat == ReminderAfterCompletionRepeat(count: 3, unit: .month))
         #expect(roundTripped.dueDate == Self.localMidnight(2026, 8, 1))
         #expect(!roundTripped.hasDueTime)
+    }
+
+    /// Importing your own export into the same store updates the native rows
+    /// in place (keeping their list) instead of duplicating every reminder.
+    @MainActor
+    @Test func importingYourOwnExportIntoTheSameStoreUpdatesInPlace() throws {
+        let schema = Schema([Reminder.self, ReminderList.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let repository = ReminderRepository(modelContext: ModelContext(container))
+        let chores = repository.createList(name: "Chores")
+        let inbox = repository.createList(name: "Inbox")
+        let reminder = repository.insert(
+            Reminder(title: "Change air filter", dueDate: Self.localMidnight(2026, 8, 1), hasDueTime: false),
+            into: chores
+        )
+
+        let text = ICSTodoImporter.exportText(for: [reminder], listName: chores.name)
+            .replacingOccurrences(of: "SUMMARY:Change air filter", with: "SUMMARY:Change both air filters")
+        #expect(try ICSTodoImporter.importTodos(from: text, into: inbox, repository: repository) == 1)
+
+        let all = try ModelContext(container).fetch(FetchDescriptor<Reminder>())
+        #expect(all.count == 1)
+        #expect(reminder.title == "Change both air filters")
+        #expect(reminder.list?.id == chores.id)
+        #expect(reminder.externalIdentifier == nil)
+        #expect(reminder.source == .native)
+    }
+
+    /// A repeating "…Z" due recurs in UTC rather than floating in the
+    /// viewer's zone.
+    @Test func repeatingUTCDueKeepsTheUTCZone() throws {
+        let text = """
+        BEGIN:VCALENDAR
+        BEGIN:VTODO
+        UID:utc-todo
+        DUE:20260601T090000Z
+        RRULE:FREQ=WEEKLY
+        SUMMARY:Standup notes
+        END:VTODO
+        BEGIN:VTODO
+        UID:utc-once
+        DUE:20260601T090000Z
+        SUMMARY:One-off
+        END:VTODO
+        END:VCALENDAR
+        """
+        let todos = ICSParser.parseTodos(text)
+        #expect(todos.first { $0.uid == "utc-todo" }?.timeZoneIdentifier == "UTC")
+        #expect(todos.first { $0.uid == "utc-once" }?.timeZoneIdentifier == nil)
     }
 }

@@ -119,7 +119,7 @@ final class CalendarReviewService {
         let reviewChatCapture = MemoryReviewChatCapture()
         let fetchTool = CalendarReviewFetchTool(
             modelContainer: modelContainer,
-            onEventsFetched: { [collector] ids in collector.add(ids) }
+            onEventsFetched: { [collector] versions in collector.add(versions) }
         )
         let notifyTool = CalendarReviewNotifyTool(
             modelContainer: modelContainer,
@@ -169,14 +169,21 @@ final class CalendarReviewService {
             modelContainer: modelContainer
         )
 
-        // Stamp only what the model actually pulled, only after success.
-        let fetched = repository.events(withIDs: Array(collector.ids))
+        // Stamp only what the model actually pulled, only after success,
+        // and only rows still at the version it saw: an edit that landed
+        // mid-pass was never reviewed and must keep triggering the next one.
+        // A fresh context so the comparison reads committed values, not this
+        // pass's earlier-fetched objects.
+        let stampRepository = CalendarRepository(modelContext: ModelContext(modelContainer))
         let stamp = Date.now
-        for event in fetched {
+        var stampedAny = false
+        for event in stampRepository.events(withIDs: Array(collector.versions.keys)) {
+            guard let seen = collector.versions[event.id], event.modifiedAt <= seen else { continue }
             event.lastReviewedAt = stamp
+            stampedAny = true
         }
-        if !fetched.isEmpty {
-            repository.saveChanges()
+        if stampedAny {
+            stampRepository.saveChanges()
         }
         lastStatusMessage = "Review complete"
         return true
@@ -192,12 +199,15 @@ final class CalendarReviewService {
         return chats.contains { !$0.isArchived && $0.isCalendarReviewChat }
     }
 
-    /// Accumulates fetched master-event IDs across the pass (the model may
-    /// fetch more than once).
+    /// Accumulates fetched event versions (ID -> `modifiedAt` the model saw)
+    /// across the pass. The model may fetch more than once; the newest
+    /// version it saw wins.
     @MainActor
     private final class FetchedEventCollector {
-        private(set) var ids: Set<UUID> = []
-        func add(_ newIDs: [UUID]) { ids.formUnion(newIDs) }
+        private(set) var versions: [UUID: Date] = [:]
+        func add(_ newVersions: [UUID: Date]) {
+            versions.merge(newVersions) { max($0, $1) }
+        }
     }
 
     // MARK: - Prompts

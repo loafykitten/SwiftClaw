@@ -84,7 +84,8 @@ nonisolated struct RecurrenceRule: Codable, Sendable, Hashable {
             let ordinalPart = rfcToken.dropLast(2)
             if ordinalPart.isEmpty {
                 self.init(weekday)
-            } else if let ordinal = Int(ordinalPart), ordinal != 0, abs(ordinal) <= 53 {
+            } else if let ordinal = Int(ordinalPart), ordinal != 0, (-53...53).contains(ordinal) {
+                // Range check, never `abs`: `abs(Int.min)` traps.
                 self.init(weekday, ordinal: ordinal)
             } else {
                 return nil
@@ -98,6 +99,11 @@ nonisolated struct RecurrenceRule: Codable, Sendable, Hashable {
         /// Total number of occurrences counted from the event start (RRULE COUNT).
         case occurrenceCount(Int)
     }
+
+    /// Largest INTERVAL the parser accepts. RFC 5545 sets no bound, but
+    /// nothing real needs more, and the cap keeps period arithmetic far from
+    /// overflow (the expander also multiplies with overflow checks).
+    static let maximumInterval = 10_000
 
     var frequency: Frequency
     var interval: Int
@@ -200,7 +206,7 @@ nonisolated struct RecurrenceRule: Codable, Sendable, Hashable {
                 guard let parsed = Frequency(rawValue: value.uppercased()) else { return nil }
                 frequency = parsed
             case "INTERVAL":
-                guard let parsed = Int(value), parsed >= 1 else { return nil }
+                guard let parsed = Int(value), (1...Self.maximumInterval).contains(parsed) else { return nil }
                 interval = parsed
             case "BYDAY":
                 for token in value.split(separator: ",") {
@@ -209,7 +215,8 @@ nonisolated struct RecurrenceRule: Codable, Sendable, Hashable {
                 }
             case "BYMONTHDAY":
                 for token in value.split(separator: ",") {
-                    guard let day = Int(token), day != 0, abs(day) <= 31 else { return nil }
+                    // Range checks, never `abs`: `abs(Int.min)` traps.
+                    guard let day = Int(token), day != 0, (-31...31).contains(day) else { return nil }
                     daysOfMonth.append(day)
                 }
             case "BYMONTH":
@@ -219,7 +226,9 @@ nonisolated struct RecurrenceRule: Codable, Sendable, Hashable {
                 }
             case "BYSETPOS":
                 for token in value.split(separator: ",") {
-                    guard let position = Int(token), position != 0, abs(position) <= 366 else { return nil }
+                    guard let position = Int(token), position != 0, (-366...366).contains(position) else {
+                        return nil
+                    }
                     setPositions.append(position)
                 }
             case "UNTIL":
@@ -238,6 +247,16 @@ nonisolated struct RecurrenceRule: Codable, Sendable, Hashable {
         }
 
         guard let frequency else { return nil }
+        // Combinations RFC 5545 forbids, which the expander would otherwise
+        // silently misexpand: BYDAY ordinals outside MONTHLY/YEARLY, and
+        // BYMONTHDAY with WEEKLY.
+        if frequency == .daily || frequency == .weekly,
+           daysOfWeek.contains(where: { $0.ordinal != nil }) {
+            return nil
+        }
+        if frequency == .weekly, !daysOfMonth.isEmpty {
+            return nil
+        }
         self.init(
             frequency: frequency,
             interval: interval,

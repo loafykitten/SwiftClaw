@@ -277,7 +277,7 @@ struct ICSRoundTripTests {
         END:VEVENT
         END:VCALENDAR
         """
-        let count = ICSImporter.importEvents(from: text, into: calendar, repository: repository)
+        let count = try ICSImporter.importEvents(from: text, into: calendar, repository: repository)
         #expect(count == 2)
 
         let master = try #require(repository.event(withExternalIdentifier: "series-1"))
@@ -297,7 +297,7 @@ struct ICSRoundTripTests {
         #expect(override.recurrenceRuleString == nil)
 
         // Re-import is idempotent: still one master + one override.
-        _ = ICSImporter.importEvents(from: text, into: calendar, repository: repository)
+        _ = try ICSImporter.importEvents(from: text, into: calendar, repository: repository)
         #expect(repository.overrides(of: master).count == 1)
         #expect(master.exceptionDates.count == 1)
     }
@@ -331,5 +331,175 @@ struct ICSRoundTripTests {
     ])
     func serializesDurations(_ offset: Double, _ expected: String) {
         #expect(ICSSerializer.durationString(from: offset) == expected)
+    }
+
+    // MARK: - Re-import reconciliation
+
+    @MainActor
+    private static func importHarness() throws -> (ModelContainer, CalendarRepository, UserCalendar) {
+        let schema = Schema([CalendarEvent.self, UserCalendar.self])
+        let container = try ModelContainer(
+            for: schema,
+            configurations: [ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)]
+        )
+        let repository = CalendarRepository(modelContext: ModelContext(container))
+        return (container, repository, repository.defaultCalendar())
+    }
+
+    private static let movedOccurrenceFile = """
+    BEGIN:VCALENDAR
+    VERSION:2.0
+    BEGIN:VEVENT
+    UID:series-1
+    DTSTART:20260601T150000Z
+    DTEND:20260601T160000Z
+    RRULE:FREQ=WEEKLY;COUNT=3
+    SUMMARY:Standup
+    END:VEVENT
+    BEGIN:VEVENT
+    UID:series-1
+    RECURRENCE-ID:20260608T150000Z
+    DTSTART:20260608T170000Z
+    DTEND:20260608T180000Z
+    SUMMARY:Standup (moved)
+    END:VEVENT
+    END:VCALENDAR
+    """
+
+    /// The move was reverted at the source: the file now carries only the
+    /// master. The old override must go, or both it and the restored
+    /// original occurrence render.
+    @MainActor
+    @Test func reimportDropsOverrideTheFileNoLongerCarries() throws {
+        let (_, repository, calendar) = try Self.importHarness()
+        try ICSImporter.importEvents(from: Self.movedOccurrenceFile, into: calendar, repository: repository)
+        let master = try #require(repository.event(withExternalIdentifier: "series-1"))
+        #expect(repository.overrides(of: master).count == 1)
+
+        let reverted = """
+        BEGIN:VCALENDAR
+        VERSION:2.0
+        BEGIN:VEVENT
+        UID:series-1
+        DTSTART:20260601T150000Z
+        DTEND:20260601T160000Z
+        RRULE:FREQ=WEEKLY;COUNT=3
+        SUMMARY:Standup
+        END:VEVENT
+        END:VCALENDAR
+        """
+        try ICSImporter.importEvents(from: reverted, into: calendar, repository: repository)
+
+        #expect(repository.overrides(of: master).isEmpty)
+        let june = DateInterval(start: Self.date(2026, 6, 1), end: Self.date(2026, 7, 1))
+        #expect(repository.occurrences(in: june).map(\.start) == [
+            Self.date(2026, 6, 1, 15), Self.date(2026, 6, 8, 15), Self.date(2026, 6, 15, 15),
+        ])
+    }
+
+    /// A file that still masks the occurrence (EXDATE) without carrying the
+    /// override may just be partial: the override stays.
+    @MainActor
+    @Test func reimportKeepsOverrideWhoseOccurrenceTheFileStillMasks() throws {
+        let (_, repository, calendar) = try Self.importHarness()
+        try ICSImporter.importEvents(from: Self.movedOccurrenceFile, into: calendar, repository: repository)
+        let master = try #require(repository.event(withExternalIdentifier: "series-1"))
+
+        let partial = """
+        BEGIN:VCALENDAR
+        VERSION:2.0
+        BEGIN:VEVENT
+        UID:series-1
+        DTSTART:20260601T150000Z
+        DTEND:20260601T160000Z
+        RRULE:FREQ=WEEKLY;COUNT=3
+        EXDATE:20260608T150000Z
+        SUMMARY:Standup
+        END:VEVENT
+        END:VCALENDAR
+        """
+        try ICSImporter.importEvents(from: partial, into: calendar, repository: repository)
+        #expect(repository.overrides(of: master).count == 1)
+    }
+
+    /// Native rows export as `swiftclaw-<id>` with no external identity;
+    /// importing that export back must update them in place (keeping their
+    /// calendar), not duplicate every event.
+    @MainActor
+    @Test func importingYourOwnExportUpdatesInsteadOfDuplicating() throws {
+        let (container, repository, personal) = try Self.importHarness()
+        let work = repository.createCalendar(name: "Work")
+        let master = repository.insert(CalendarEvent(
+            title: "Standup",
+            startDate: Self.date(2026, 6, 1, 15),
+            endDate: Self.date(2026, 6, 1, 16),
+            timeZoneIdentifier: "UTC",
+            recurrenceRuleString: "FREQ=WEEKLY;COUNT=3",
+            calendar: work
+        ))
+        let override = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 15))
+        override.title = "Standup (moved)"
+        repository.noteUpdated(override)
+        repository.insert(CalendarEvent(
+            title: "Dentist",
+            startDate: Self.date(2026, 6, 10, 15),
+            endDate: Self.date(2026, 6, 10, 16),
+            calendar: work
+        ))
+        let rowCount = { try ModelContext(container).fetchCount(FetchDescriptor<CalendarEvent>()) }
+        let before = try rowCount()
+
+        let exported = ICSImporter.exportText(for: work.events ?? [], calendarName: work.name)
+            .replacingOccurrences(of: "SUMMARY:Dentist", with: "SUMMARY:Dentist (rescheduled)")
+        try ICSImporter.importEvents(from: exported, into: personal, repository: repository)
+
+        #expect(try rowCount() == before)
+        let dentist = try #require((work.events ?? []).first { $0.title.hasPrefix("Dentist") })
+        #expect(dentist.title == "Dentist (rescheduled)")
+        #expect(dentist.calendar?.id == work.id)
+        #expect(dentist.source == .native)
+        #expect(repository.overrides(of: master).count == 1)
+        #expect(RecurrenceExpander.isException(Self.date(2026, 6, 8, 15), exceptionDates: master.exceptionDates))
+    }
+
+    // MARK: - UTC recurrence zone
+
+    /// A repeating "…Z" start recurs in UTC: nil would expand it in the
+    /// viewer's zone and shift its UTC time across their DST change.
+    @Test func repeatingUTCStartsKeepTheUTCZone() throws {
+        func parsed(_ dtstart: String, rrule: String?) throws -> ICSEventRepresentation {
+            let text = """
+            BEGIN:VCALENDAR
+            BEGIN:VEVENT
+            UID:zone-test
+            DTSTART:\(dtstart)
+            DTEND:\(dtstart)
+            \(rrule.map { "RRULE:\($0)" } ?? "X-NONE:1")
+            END:VEVENT
+            END:VCALENDAR
+            """
+            return try #require(ICSParser.parse(text).first)
+        }
+        #expect(try parsed("20260601T090000Z", rrule: "FREQ=WEEKLY").timeZoneIdentifier == "UTC")
+        // One-offs: the instant is exact; nil lets the editor adopt a zone.
+        #expect(try parsed("20260601T090000Z", rrule: nil).timeZoneIdentifier == nil)
+        // Floating local times stay nil.
+        #expect(try parsed("20260601T090000", rrule: "FREQ=WEEKLY").timeZoneIdentifier == nil)
+    }
+
+    @Test func utcRecurringEventsSerializeInZuluForm() throws {
+        var event = ICSEventRepresentation(
+            uid: "utc-series",
+            start: Self.date(2026, 6, 1, 9),
+            end: Self.date(2026, 6, 1, 10)
+        )
+        event.timeZoneIdentifier = "UTC"
+        event.rruleString = "FREQ=WEEKLY"
+        event.exceptionDates = [Self.date(2026, 6, 8, 9)]
+        let text = ICSSerializer.serialize([event])
+        #expect(text.contains("DTSTART:20260601T090000Z"))
+        #expect(text.contains("EXDATE:20260608T090000Z"))
+        #expect(!text.contains("TZID=UTC"))
+        #expect(Self.roundTrip(event)?.timeZoneIdentifier == "UTC")
     }
 }
