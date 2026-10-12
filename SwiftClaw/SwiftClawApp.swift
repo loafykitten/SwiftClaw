@@ -29,6 +29,9 @@ struct SwiftClawApp: App {
     #if os(macOS)
     var body: some Scene {
         appWindow
+            // Without this, a first launch opens at SwiftUI's 900×450
+            // default, too short for the three-column Email and Notes layouts.
+            .defaultSize(width: 1280, height: 820)
             .commands {
                 CommandGroup(replacing: .appSettings) {
                     OpenSettingsButton(windowID: Self.settingsWindowID)
