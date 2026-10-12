@@ -435,7 +435,7 @@ struct ICSRoundTripTests {
             recurrenceRuleString: "FREQ=WEEKLY;COUNT=3",
             calendar: work
         ))
-        let override = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 15))
+        let override = try repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 15))
         override.title = "Standup (moved)"
         repository.noteUpdated(override)
         repository.insert(CalendarEvent(

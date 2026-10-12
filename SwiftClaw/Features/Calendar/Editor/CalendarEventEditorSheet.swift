@@ -182,7 +182,7 @@ struct CalendarEventEditorSheet: View {
                     }
                 case .editOccurrence(let masterID, let occurrenceStart):
                     if let master = repository.event(withID: masterID) {
-                        let override = repository.detachOccurrence(of: master, at: occurrenceStart)
+                        let override = try repository.detachOccurrence(of: master, at: occurrenceStart)
                         draft.apply(to: override, in: repository)
                     }
                 }

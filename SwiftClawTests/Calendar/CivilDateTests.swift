@@ -706,7 +706,7 @@ struct CivilDateTests {
         repository.insert(override)
 
         repository.migrateAllDayDatesToCivilEncodingIfNeeded(calendar: chicago)
-        #expect(override.dateEncodingVersion == nil)
+        #expect(!override.hasCivilOccurrenceKey)
         #expect(override.originalOccurrenceDate == legacyOriginal)
 
         let master = CalendarEvent(
@@ -724,6 +724,175 @@ struct CivilDateTests {
         #expect(override.dateEncodingVersion == CivilDay.encodingVersion)
         #expect(override.originalOccurrenceDate == Self.day(2026, 7, 12).canonicalDate)
         #expect(override.startDate == Self.date(2026, 7, 13, 9, in: chicago))
+    }
+
+    // MARK: - Override keys depend on their master
+
+    /// A legacy override synced ahead of its master: the master-less override.
+    private static func pendingOverride(
+        masterID: UUID,
+        legacyOriginal: Date,
+        in repository: CalendarRepository
+    ) -> CalendarEvent {
+        let override = CalendarEvent(
+            title: "Moved",
+            startDate: legacyOriginal.addingTimeInterval(33 * 3600),
+            endDate: legacyOriginal.addingTimeInterval(34 * 3600),
+            timeZoneIdentifier: "America/Chicago",
+            calendar: repository.defaultCalendar()
+        )
+        override.parentEventID = masterID
+        override.originalOccurrenceDate = legacyOriginal
+        override.dateEncodingVersion = nil
+        repository.insert(override)
+        return override
+    }
+
+    private static func legacyAllDayMaster(
+        id: UUID = UUID(),
+        firstDay: Date,
+        in repository: CalendarRepository
+    ) -> CalendarEvent {
+        let master = CalendarEvent(
+            id: id,
+            title: "Daily",
+            startDate: firstDay,
+            endDate: firstDay.addingTimeInterval(24 * 3600),
+            isAllDay: true,
+            recurrenceRuleString: "FREQ=DAILY",
+            calendar: repository.defaultCalendar()
+        )
+        master.dateEncodingVersion = nil
+        repository.insert(master)
+        return master
+    }
+
+    /// Re-review 1: the orphan sweep in a post-merge dedupe must keep an
+    /// override whose key still waits for its master, across two passes.
+    @Test func mergeSweepKeepsAnOverrideWaitingForItsMaster() throws {
+        let chicago = Self.chicago
+        let repository = try Self.calendarRepository()
+        repository.zoneCalendar = chicago
+        let masterID = UUID()
+        let override = Self.pendingOverride(
+            masterID: masterID,
+            legacyOriginal: Self.date(2026, 7, 12, in: chicago),
+            in: repository
+        )
+
+        repository.dedupeAfterRemoteMerge()
+        #expect(repository.event(withID: override.id) != nil)
+        #expect(!override.hasCivilOccurrenceKey)
+
+        _ = Self.legacyAllDayMaster(id: masterID, firstDay: Self.date(2026, 7, 10, in: chicago), in: repository)
+        repository.dedupeAfterRemoteMerge()
+        #expect(repository.event(withID: override.id) != nil)
+        #expect(override.hasCivilOccurrenceKey)
+        #expect(override.originalOccurrenceDate == Self.day(2026, 7, 12).canonicalDate)
+    }
+
+    /// Re-review 2: switching a legacy timed series to all-day converts its
+    /// legacy override keys against the old (timed) type, re-keys them, and
+    /// stamps them, so no later pass converts them again.
+    @Test func typeSwitchOfALegacySeriesStampsReencodedOverrideKeys() throws {
+        let chicago = Self.chicago
+        let repository = try Self.calendarRepository()
+        repository.zoneCalendar = chicago
+        let master = CalendarEvent(
+            title: "Series",
+            startDate: Self.date(2026, 7, 10, 9, in: chicago),
+            endDate: Self.date(2026, 7, 10, 10, in: chicago),
+            timeZoneIdentifier: "America/Chicago",
+            recurrenceRuleString: "FREQ=DAILY",
+            calendar: repository.defaultCalendar()
+        )
+        master.dateEncodingVersion = nil
+        repository.insert(master)
+        let override = Self.pendingOverride(
+            masterID: master.id,
+            legacyOriginal: Self.date(2026, 7, 12, 9, in: chicago),
+            in: repository
+        )
+
+        var draft = CalendarEventDraft(from: master, calendar: chicago)
+        draft.isAllDay = true
+        draft.apply(to: master, in: repository, calendar: chicago)
+        #expect(override.hasCivilOccurrenceKey)
+        #expect(override.originalOccurrenceDate == Self.day(2026, 7, 12).canonicalDate)
+
+        repository.migrateAllDayDatesToCivilEncodingIfNeeded(calendar: chicago)
+        #expect(override.originalOccurrenceDate == Self.day(2026, 7, 12).canonicalDate)
+    }
+
+    /// Re-review 3: "this and future" compares canonical override keys. In
+    /// London in July, a legacy July 12 key is July 11 23:00Z, which an
+    /// unconverted comparison would keep past a July 12 cutoff.
+    @Test func deleteThisAndFutureConvertsLegacyOverrideKeysFirst() throws {
+        let london = Self.calendar("Europe/London")
+        let repository = try Self.calendarRepository()
+        repository.zoneCalendar = london
+        let master = CalendarEvent(title: "Daily", recurrenceRuleString: "FREQ=DAILY", calendar: repository.defaultCalendar())
+        master.setAllDaySpan(from: Self.day(2026, 7, 10), dayCount: 1)
+        repository.insert(master)
+        let override = CalendarEvent(title: "Moved", calendar: repository.defaultCalendar())
+        override.setAllDaySpan(from: Self.day(2026, 7, 13), dayCount: 1)
+        override.parentEventID = master.id
+        override.originalOccurrenceDate = Self.date(2026, 7, 12, in: london)
+        override.dateEncodingVersion = nil
+        repository.insert(override)
+
+        try repository.deleteThisAndFuture(of: master, from: Self.day(2026, 7, 12).canonicalDate)
+        #expect(repository.event(withID: override.id) == nil)
+    }
+
+    /// Re-review 4: a key captured while the master was legacy still names
+    /// its occurrence after a migration converted the master, and a key
+    /// that names no occurrence is rejected instead of written.
+    @Test func staleOccurrenceKeysAreMappedOrRejected() throws {
+        let tokyo = Self.tokyo
+        let repository = try Self.calendarRepository()
+        repository.zoneCalendar = tokyo
+        let master = Self.legacyAllDayMaster(firstDay: Self.date(2026, 7, 10, in: tokyo), in: repository)
+        let capturedLegacyKey = Self.date(2026, 7, 12, in: tokyo)
+
+        repository.migrateAllDayDatesToCivilEncodingIfNeeded(calendar: tokyo)
+        try repository.deleteOccurrence(of: master, at: capturedLegacyKey)
+        #expect(master.exceptionDates == [Self.day(2026, 7, 12).canonicalDate])
+
+        #expect(throws: CalendarRepository.StaleOccurrenceError.self) {
+            // Before the series starts: no occurrence at all.
+            try repository.deleteOccurrence(of: master, at: Self.date(2026, 7, 5, in: tokyo))
+        }
+        #expect(throws: CalendarRepository.StaleOccurrenceError.self) {
+            // Already deleted: no such occurrence any more.
+            _ = try repository.detachOccurrence(of: master, at: Self.day(2026, 7, 12).canonicalDate)
+        }
+        #expect(master.exceptionDates == [Self.day(2026, 7, 12).canonicalDate])
+    }
+
+    /// Re-review 5: editing a legacy override before its master arrives
+    /// converts only its own fields; its key stays pending (never guessed)
+    /// and converts once the master is there.
+    @Test func editingAnOverrideBeforeItsMasterArrivesKeepsItsKeyPending() throws {
+        let chicago = Self.chicago
+        let repository = try Self.calendarRepository()
+        repository.zoneCalendar = chicago
+        let masterID = UUID()
+        let legacyOriginal = Self.date(2026, 7, 12, in: chicago)
+        let override = Self.pendingOverride(masterID: masterID, legacyOriginal: legacyOriginal, in: repository)
+
+        var draft = CalendarEventDraft(from: override, calendar: chicago)
+        draft.title = "Edited"
+        draft.apply(to: override, in: repository, calendar: chicago)
+        #expect(override.hasCivilOwnDates)
+        #expect(!override.hasCivilOccurrenceKey)
+        #expect(override.originalOccurrenceDate == legacyOriginal)
+
+        _ = Self.legacyAllDayMaster(id: masterID, firstDay: Self.date(2026, 7, 10, in: chicago), in: repository)
+        repository.migrateAllDayDatesToCivilEncodingIfNeeded(calendar: chicago)
+        #expect(override.hasCivilOccurrenceKey)
+        #expect(override.originalOccurrenceDate == Self.day(2026, 7, 12).canonicalDate)
+        #expect(override.title == "Edited")
     }
 
     /// A failed migration rolls back only itself, and never discards work
@@ -901,7 +1070,7 @@ struct CivilDateTests {
         )
         master.exceptionDates = [Self.date(2026, 7, 12, 9, in: chicago)]
         repository.insert(master)
-        let override = repository.detachOccurrence(of: master, at: Self.date(2026, 7, 13, 9, in: chicago))
+        let override = try repository.detachOccurrence(of: master, at: Self.date(2026, 7, 13, 9, in: chicago))
 
         var draft = CalendarEventDraft(from: master, calendar: chicago)
         draft.isAllDay = true
@@ -1001,7 +1170,7 @@ struct CivilDateTests {
         """
         try ICSImporter.importEvents(from: allDay, into: userCalendar, repository: repository)
         let master = try #require(repository.event(withExternalIdentifier: "series-1"))
-        let detached = repository.detachOccurrence(of: master, at: Self.day(2026, 7, 12).canonicalDate)
+        let detached = try repository.detachOccurrence(of: master, at: Self.day(2026, 7, 12).canonicalDate)
         detached.title = "Edited"
         repository.noteUpdated(detached)
 

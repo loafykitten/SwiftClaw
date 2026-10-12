@@ -118,7 +118,7 @@ struct CalendarRepositoryTests {
             calendar: calendar
         ))
 
-        let override = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
+        let override = try repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
         override.title = "Standup (moved)"
         override.startDate = Self.date(2026, 6, 8, 14)
         override.endDate = Self.date(2026, 6, 8, 15)
@@ -159,7 +159,7 @@ struct CalendarRepositoryTests {
             recurrenceRuleString: "FREQ=WEEKLY;BYDAY=MO",
             calendar: repository.defaultCalendar()
         ))
-        _ = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 22, 9))
+        _ = try repository.detachOccurrence(of: master, at: Self.date(2026, 6, 22, 9))
 
         try repository.deleteThisAndFuture(of: master, from: Self.date(2026, 6, 15, 9))
 
@@ -179,7 +179,7 @@ struct CalendarRepositoryTests {
             recurrenceRuleString: "FREQ=WEEKLY;BYDAY=MO",
             calendar: repository.defaultCalendar()
         ))
-        _ = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
+        _ = try repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
         try repository.deleteEventSeries(master)
         #expect(repository.occurrences(in: Self.june).isEmpty)
     }
@@ -363,7 +363,7 @@ struct CalendarRepositoryTests {
             recurrenceRuleString: "FREQ=WEEKLY",
             calendar: repository.defaultCalendar()
         ))
-        _ = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
+        _ = try repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
         try repository.deleteOccurrence(of: master, at: Self.date(2026, 6, 15, 9))
 
         repository.clearRecurrence(of: master)
@@ -392,7 +392,7 @@ struct CalendarRepositoryTests {
 
         #expect(throws: SimulatedFailure.self) {
             try repository.performTransaction {
-                let override = repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
+                let override = try repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
                 override.title = "Moved"
                 repository.noteUpdated(override)
                 throw SimulatedFailure()
@@ -435,7 +435,7 @@ struct CalendarRepositoryTests {
             recurrenceRuleString: "FREQ=WEEKLY",
             calendar: repository.defaultCalendar()
         ))
-        repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
+        try repository.detachOccurrence(of: master, at: Self.date(2026, 6, 8, 9))
 
         saves.outcomes = [false]
         #expect(throws: CalendarRepository.SaveError.self) {

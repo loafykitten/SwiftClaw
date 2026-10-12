@@ -56,9 +56,13 @@ final class CalendarEvent {
     /// Last time a calendar-review pass included this event. Mirrors
     /// `EmailThread.lastReviewedAt` suppression.
     var lastReviewedAt: Date? = nil
-    /// How this row stores all-day values: `CivilDay.encodingVersion` for
-    /// canonical civil dates; nil for a legacy row (local-midnight instants)
-    /// the startup migration hasn't converted yet.
+    /// How this row stores all-day values:
+    /// - nil: legacy (local-midnight instants), nothing converted yet.
+    /// - `CalendarEvent.occurrenceKeyPendingEncoding` (0): the row's own
+    ///   fields are canonical, but it is an override whose
+    ///   `originalOccurrenceDate` is still legacy, because that key is in the
+    ///   *master's* encoding and the master hasn't been resolved yet.
+    /// - `CivilDay.encodingVersion` (1): fully canonical.
     var dateEncodingVersion: Int? = nil
     var calendar: UserCalendar? = nil
 
@@ -132,48 +136,76 @@ final class CalendarEvent {
     }
 
     /// Stores an all-day span: `dayCount` civil days from `firstDay`.
-    /// A legacy row is converted first, so canonical values never land next
-    /// to unconverted fields under a nil marker (a later migration would
-    /// convert them twice).
+    /// A legacy row's own fields are converted first, so canonical values
+    /// never land next to unconverted ones under a nil marker (a later
+    /// migration would convert them twice).
     func setAllDaySpan(from firstDay: CivilDay, dayCount: Int) {
-        convertLegacyCivilDatesIfNeeded()
+        convertLegacyOwnDatesIfNeeded()
         isAllDay = true
         startDate = firstDay.canonicalDate
         endDate = firstDay.adding(days: max(1, dayCount)).canonicalDate
         timeZoneIdentifier = nil
     }
 
-    /// Converts a legacy row (`dateEncodingVersion == nil`) in place and
-    /// stamps it: an all-day row's span, EXDATEs, RRULE UNTIL, and
-    /// "…@<start>" import key, plus an override's `originalOccurrenceDate`
-    /// (and "…@detached@<original>" key) when its master is all-day. The
-    /// original-occurrence key is in the master's encoding, so pass the
-    /// master's state as `masterIsAllDay`; nil falls back to this row's own
-    /// state (a best guess for an override whose master can't be found).
-    /// Legacy instants are read as days in `calendar`'s zone. Callers
-    /// re-derive `recurrenceEndDate`. Returns whether any value changed.
+    // MARK: - Legacy conversion
+
+    /// `dateEncodingVersion` of an override whose own fields are canonical
+    /// but whose original-occurrence key waits for its master.
+    static let occurrenceKeyPendingEncoding = 0
+
+    /// Whether this row's own fields (span, EXDATEs, UNTIL) are canonical.
+    var hasCivilOwnDates: Bool {
+        dateEncodingVersion != nil
+    }
+
+    /// Whether `originalOccurrenceDate` (if any) is in its master's current
+    /// encoding. False only for an override that still needs its master.
+    var hasCivilOccurrenceKey: Bool {
+        dateEncodingVersion == CivilDay.encodingVersion
+    }
+
+    /// Phase 1, row-local: converts a legacy row's own all-day values (span,
+    /// EXDATEs, RRULE UNTIL, "…@<start>" import key) to canonical civil
+    /// dates, reading legacy instants as days in `calendar`'s zone. A plain
+    /// row is then fully converted; an override is stamped
+    /// `occurrenceKeyPendingEncoding` until phase 2 converts its key against
+    /// a resolved master. Callers re-derive `recurrenceEndDate`. Returns
+    /// whether a value changed.
     @discardableResult
-    func convertLegacyCivilDatesIfNeeded(masterIsAllDay: Bool? = nil, calendar: Calendar = .current) -> Bool {
+    func convertLegacyOwnDatesIfNeeded(calendar: Calendar = .current) -> Bool {
         guard dateEncodingVersion == nil else { return false }
         // Stamp first: the span setter below re-enters this check.
-        dateEncodingVersion = CivilDay.encodingVersion
+        dateEncodingVersion = parentEventID == nil ? CivilDay.encodingVersion : Self.occurrenceKeyPendingEncoding
+        guard isAllDay else { return false }
         let civil = { (date: Date) in CivilDay.canonicalDate(forLocal: date, in: calendar) }
-        var changed = false
-        if isAllDay {
-            let legacyStart = startDate
-            setAllDaySpan(localStart: startDate, localEnd: endDate, calendar: calendar)
-            exceptionDates = exceptionDates.map(civil)
-            recurrenceRuleString = recurrenceRuleString.map {
-                RecurrenceRule.civilRuleString(fromImported: $0, readingIn: calendar)
-            }
-            // Degraded one-off occurrences are keyed "<uid>@<start>".
-            externalIdentifier = Self.rekeyed(externalIdentifier, replacing: legacyStart, with: startDate)
-            changed = true
+        let legacyStart = startDate
+        setAllDaySpan(localStart: startDate, localEnd: endDate, calendar: calendar)
+        exceptionDates = exceptionDates.map(civil)
+        recurrenceRuleString = recurrenceRuleString.map {
+            RecurrenceRule.civilRuleString(fromImported: $0, readingIn: calendar)
         }
-        if parentEventID != nil, masterIsAllDay ?? isAllDay, let original = originalOccurrenceDate {
-            originalOccurrenceDate = civil(original)
+        // Degraded one-off occurrences are keyed "<uid>@<start>".
+        externalIdentifier = Self.rekeyed(externalIdentifier, replacing: legacyStart, with: startDate)
+        return true
+    }
+
+    /// Phase 2, needs the master: converts a pending override's legacy
+    /// `originalOccurrenceDate` (and "…@detached@<original>" import key)
+    /// into the encoding of a master that is all-day per `masterIsAllDay`,
+    /// then stamps the row fully converted. Runs phase 1 first if needed.
+    /// The master's type must be the one its stored keys were written in
+    /// (pass the old type when a series is switching). Returns whether a
+    /// value changed.
+    @discardableResult
+    func convertLegacyOccurrenceKeyIfNeeded(masterIsAllDay: Bool, calendar: Calendar = .current) -> Bool {
+        var changed = convertLegacyOwnDatesIfNeeded(calendar: calendar)
+        guard !hasCivilOccurrenceKey else { return changed }
+        dateEncodingVersion = CivilDay.encodingVersion
+        if masterIsAllDay, let original = originalOccurrenceDate {
+            let civil = CivilDay.canonicalDate(forLocal: original, in: calendar)
+            originalOccurrenceDate = civil
             // Imported overrides are keyed "<uid>@detached@<original>".
-            externalIdentifier = Self.rekeyed(externalIdentifier, replacing: original, with: civil(original))
+            externalIdentifier = Self.rekeyed(externalIdentifier, replacing: original, with: civil)
             changed = true
         }
         return changed

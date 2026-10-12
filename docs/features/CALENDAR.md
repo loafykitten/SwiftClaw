@@ -40,11 +40,19 @@ Apple Calendar overlay.
   `AppBootstrap`, and again before every post-merge dedupe so legacy rows
   a sync delivers convert before duplicates collapse), reading each
   instant in the zone current at migration time; the per-row marker keeps
-  it idempotent. It runs as one scoped `performTransaction`, and an
-  override whose master hasn't arrived stays legacy for a later pass.
-  Mutation paths (editor drafts, import upserts, occurrence detach and
-  delete, the span setter) normalize a still-legacy row first, so new
-  canonical values never sit under a nil marker.
+  it idempotent. It runs as one scoped `performTransaction`. Conversion
+  has two phases because an override's `originalOccurrenceDate` is in its
+  *master's* encoding: the row's own fields convert any time, while the
+  key converts only against a resolved master (`dateEncodingVersion` 0
+  marks an override whose key is still pending; the orphan sweep leaves
+  those alone). Every reader of override keys goes through
+  `CalendarRepository.overrides(of:)`, which finishes the conversion, and
+  a series switching between timed and all-day converts legacy keys
+  against its old type before re-keying. Mutation paths (editor drafts,
+  import upserts, the span setter) normalize a still-legacy row first, and
+  occurrence keys from the UI are checked against the current expansion
+  (a legacy key maps onto its civil day; anything else throws
+  `StaleOccurrenceError`).
 - `Services/Calendar/Repository/CalendarRepository.swift` is the single
   mutation boundary and the identity authority (deterministic lookups,
   `dedupeAfterRemoteMerge()` for CloudKit-merge duplicates). User-facing
