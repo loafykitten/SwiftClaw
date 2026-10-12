@@ -66,6 +66,82 @@ struct EmailAccountStoreTests {
         #expect(reload.smtpPassword(for: account) == nil)
     }
 
+    @Test func failedSMTPPasswordWriteRestoresTheIMAPPassword() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let store = EmailAccountStore(userDefaults: fixture.defaults)
+        let account = Self.completeAccount()
+        let imapKey = EmailAccountKeychainKeys.imapPassword(for: account.id)
+        let smtpKey = EmailAccountKeychainKeys.smtpPassword(for: account.id)
+        var keychain = [imapKey: "old-imap", smtpKey: "old-smtp"]
+
+        let result = store.setPasswords(
+            imap: "new-imap",
+            smtp: "new-smtp",
+            for: account,
+            read: { keychain[$0] },
+            write: { value, key in
+                guard key != smtpKey else { return false }
+                keychain[key] = value.isEmpty ? nil : value
+                return true
+            }
+        )
+
+        #expect(result == .failed)
+        #expect(keychain == [imapKey: "old-imap", smtpKey: "old-smtp"], "the old pair is intact")
+    }
+
+    @Test func failedSMTPPasswordWriteOnANewAccountLeavesNoIMAPPassword() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let store = EmailAccountStore(userDefaults: fixture.defaults)
+        let account = Self.completeAccount()
+        let smtpKey = EmailAccountKeychainKeys.smtpPassword(for: account.id)
+        var keychain: [String: String] = [:]
+
+        let result = store.setPasswords(
+            imap: "new-imap",
+            smtp: "new-smtp",
+            for: account,
+            read: { keychain[$0] },
+            write: { value, key in
+                guard key != smtpKey else { return false }
+                keychain[key] = value.isEmpty ? nil : value
+                return true
+            }
+        )
+
+        #expect(result == .failed)
+        #expect(keychain.isEmpty)
+    }
+
+    @Test func failedRollbackIsReported() throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let store = EmailAccountStore(userDefaults: fixture.defaults)
+        let account = Self.completeAccount()
+        let imapKey = EmailAccountKeychainKeys.imapPassword(for: account.id)
+        var keychain = [imapKey: "old-imap"]
+        var writes = 0
+
+        let result = store.setPasswords(
+            imap: "new-imap",
+            smtp: "new-smtp",
+            for: account,
+            read: { keychain[$0] },
+            write: { value, key in
+                writes += 1
+                // Only the first write (new IMAP password) succeeds.
+                guard writes == 1 else { return false }
+                keychain[key] = value
+                return true
+            }
+        )
+
+        #expect(result == .failedLeavingNewIMAPPassword)
+        #expect(keychain[imapKey] == "new-imap")
+    }
+
     @Test func migrateLegacyCreatesAccountFromFlatKeys() throws {
         let fixture = try UserDefaultsFixture()
         defer { fixture.cleanup() }

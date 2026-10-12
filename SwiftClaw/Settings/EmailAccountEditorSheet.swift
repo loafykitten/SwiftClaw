@@ -127,7 +127,8 @@ struct EmailAccountEditorSheet: View {
 
     @State private var testTask: Task<Void, Never>?
     @State private var successfulTestFingerprint: EmailAccountConnectionFingerprint?
-    @State private var showingKeychainSaveError = false
+    /// Set when `confirm()`'s Keychain writes fail; drives the alert.
+    @State private var keychainSaveFailure: EmailAccountStore.PasswordsSaveResult?
 
     /// Values the validated fields held when the sheet opened. A field's
     /// error is only shown once the user changes it, so a pristine form
@@ -204,10 +205,21 @@ struct EmailAccountEditorSheet: View {
             #endif
         }
         .onAppear(perform: hydrate)
-        .alert("Couldn't Save Password", isPresented: $showingKeychainSaveError) {
+        .alert(
+            "Couldn't Save Password",
+            isPresented: Binding(
+                get: { keychainSaveFailure != nil },
+                set: { if !$0 { keychainSaveFailure = nil } }
+            ),
+            presenting: keychainSaveFailure
+        ) { _ in
             Button("OK", role: .cancel) { }
-        } message: {
-            Text("SwiftClaw couldn't store the password in the Keychain, so the account wasn't saved. Try again.")
+        } message: { failure in
+            if failure == .failedLeavingNewIMAPPassword {
+                Text("SwiftClaw couldn't store the SMTP password in the Keychain or restore the previous IMAP password, so the Keychain now holds the IMAP password entered here. Save again to finish, or re-enter the previous IMAP password.")
+            } else {
+                Text("SwiftClaw couldn't store the password in the Keychain, so the account wasn't saved. Try again.")
+            }
         }
         .onChange(of: currentConnectionFingerprint) { _, _ in
             successfulTestFingerprint = nil
@@ -404,9 +416,11 @@ struct EmailAccountEditorSheet: View {
         // Passwords land in the Keychain before the account is saved, so the
         // immediate first sync can authenticate — and a failed Keychain write
         // keeps the sheet open instead of saving an account with no password.
-        guard store.setPassword(imapPassword, kind: .imap, for: account),
-              store.setPassword(smtpPassword, kind: .smtp, for: account) else {
-            showingKeychainSaveError = true
+        // The two writes are staged together, so a failure leaves the
+        // previous passwords in place.
+        let saveResult = store.setPasswords(imap: imapPassword, smtp: smtpPassword, for: account)
+        guard saveResult == .saved else {
+            keychainSaveFailure = saveResult
             return
         }
         switch mode {

@@ -152,6 +152,7 @@ nonisolated enum EmailAccountKeychainKeys {
 @Observable
 final class EmailAccountStore {
     static let shared = EmailAccountStore()
+    private static let logger = AppLog.make("mail.accounts")
 
     private let userDefaults: UserDefaults
     private(set) var accounts: [StoredEmailAccount]
@@ -277,6 +278,41 @@ final class EmailAccountStore {
         case .smtp: key = EmailAccountKeychainKeys.smtpPassword(for: account.id)
         }
         return Keychain.set(password, forKey: key)
+    }
+
+    enum PasswordsSaveResult: Equatable {
+        case saved
+        /// Nothing changed: the Keychain holds the previous passwords.
+        case failed
+        /// The SMTP write failed and the previous IMAP password couldn't be
+        /// put back, so the Keychain now holds the new IMAP password.
+        case failedLeavingNewIMAPPassword
+    }
+
+    /// Writes both passwords or neither: when the SMTP write fails the IMAP
+    /// password is restored to its previous value (removed if there was
+    /// none), so a failed save can't pair the account's old settings with a
+    /// new password. `read`/`write` are seams for tests.
+    func setPasswords(
+        imap: String,
+        smtp: String,
+        for account: StoredEmailAccount,
+        read: (String) -> String? = { Keychain.string(forKey: $0) },
+        write: (String, String) -> Bool = { Keychain.set($0, forKey: $1) }
+    ) -> PasswordsSaveResult {
+        let imapKey = EmailAccountKeychainKeys.imapPassword(for: account.id)
+        let smtpKey = EmailAccountKeychainKeys.smtpPassword(for: account.id)
+        let previousIMAP = read(imapKey) ?? ""
+        guard write(imap, imapKey) else { return .failed }
+        guard write(smtp, smtpKey) else {
+            // `Keychain.set` treats "" as delete, which restores "no password".
+            guard write(previousIMAP, imapKey) else {
+                Self.logger.error("Couldn't restore the IMAP password after a failed SMTP password write")
+                return .failedLeavingNewIMAPPassword
+            }
+            return .failed
+        }
+        return .saved
     }
 
     // MARK: - Legacy migration
