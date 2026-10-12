@@ -120,6 +120,39 @@ struct ResearchSessionCoordinatorTests {
         #expect(stored.isUnviewed)
     }
 
+    @Test func resultSaveFailureKeepsReportInMemoryAndSkipsCompletionNotice() async throws {
+        let container = try Self.inMemoryContainer()
+        var notifications = [(UUID, String, Bool)]()
+        var failSaves = false
+        let coordinator = Self.coordinator(
+            runHandler: { _, _, _, _ in
+                failSaves = true
+                return Self.completedResult()
+            },
+            notificationHandler: { notifications.append(($0, $1, $2)) },
+            saveHandler: { context in
+                if failSaves { throw CoordinatorTestError.saveFailed }
+                try context.save()
+            }
+        )
+        coordinator.configure(modelContainer: container)
+        let session = coordinator.createSession(topic: "Unsaved topic")
+        await coordinator.generatePlan(session: session)
+        let plan = try #require(session.planPayload?.plan)
+
+        coordinator.startRun(session: session, approvedPlan: plan)
+        await coordinator.waitForIdleForTesting()
+
+        #expect(notifications.isEmpty)
+        #expect(session.reportMarkdown == "# Report\n\nFinished.")
+        #expect(session.errorMessage?.contains("couldn't be saved") == true)
+        #expect(coordinator.runningSessionID == nil)
+        // Nothing durable was written for the run's result.
+        let stored = try Self.fetch(session.id, in: container)
+        #expect(stored.status == .running)
+        #expect(stored.reportMarkdown == nil)
+    }
+
     @Test func configureMapsInterruptedRunWithoutReportToCancelledAndResumable() throws {
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)
@@ -148,12 +181,14 @@ struct ResearchSessionCoordinatorTests {
         runHandler: @escaping ResearchSessionCoordinator.RunHandler = { _, _, _, _ in
             Self.completedResult()
         },
-        notificationHandler: @escaping ResearchSessionCoordinator.NotificationHandler = { _, _, _ in }
+        notificationHandler: @escaping ResearchSessionCoordinator.NotificationHandler = { _, _, _ in },
+        saveHandler: @escaping ResearchSessionCoordinator.SaveHandler = { try $0.save() }
     ) -> ResearchSessionCoordinator {
         ResearchSessionCoordinator(
             planHandler: { _, _, _ in Self.planningResult },
             runHandler: runHandler,
             notificationHandler: notificationHandler,
+            saveHandler: saveHandler,
             runBudget: .seconds(1)
         )
     }
@@ -232,8 +267,12 @@ struct ResearchSessionCoordinatorTests {
 
 private nonisolated enum CoordinatorTestError: LocalizedError, Sendable {
     case runFailed
+    case saveFailed
 
     var errorDescription: String? {
-        "Stubbed run failure."
+        switch self {
+        case .runFailed: "Stubbed run failure."
+        case .saveFailed: "Stubbed save failure."
+        }
     }
 }

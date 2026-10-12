@@ -1,5 +1,6 @@
 import Foundation
 import PDFKit
+import Synchronization
 
 /// The bounded, decoded result of fetching one research source.
 nonisolated struct FetchedPage: Sendable, Equatable {
@@ -15,6 +16,7 @@ nonisolated enum PageFetchError: LocalizedError, Sendable, Equatable {
     case timeout
     case invalidResponse
     case invalidPDF
+    case blockedDestination
     case network(String)
 
     var errorDescription: String? {
@@ -31,6 +33,8 @@ nonisolated enum PageFetchError: LocalizedError, Sendable, Equatable {
             "The page returned an invalid response."
         case .invalidPDF:
             "The fetched PDF could not be read."
+        case .blockedDestination:
+            "The page address points to a local or private network, or could not be resolved."
         case .network(let message):
             "The page request failed: \(message)"
         }
@@ -48,15 +52,35 @@ nonisolated struct PageFetcher: Sendable {
         "application/pdf",
     ]
 
-    private let session: URLSession
+    /// Isolated from `URLSession.shared`: no cookies, credentials, or cache
+    /// are shared with the rest of the app or carried between sources.
+    static let isolatedSession: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration)
+    }()
 
-    init(session: URLSession = .shared) {
+    private let session: URLSession
+    private let resolveHost: FetchDestinationPolicy.HostResolver
+
+    init(
+        session: URLSession = PageFetcher.isolatedSession,
+        resolveHost: @escaping FetchDestinationPolicy.HostResolver = FetchDestinationPolicy.systemResolver
+    ) {
         self.session = session
+        self.resolveHost = resolveHost
     }
 
     func fetch(url: URL, maxBytes: Int) async throws -> FetchedPage {
         guard maxBytes > 0 else {
             throw PageFetchError.tooLarge(maxBytes: maxBytes)
+        }
+
+        guard await FetchDestinationPolicy.allows(url, resolveHost: resolveHost) else {
+            throw PageFetchError.blockedDestination
         }
 
         var request = URLRequest(url: url)
@@ -66,14 +90,20 @@ nonisolated struct PageFetcher: Sendable {
             forHTTPHeaderField: "Accept"
         )
 
+        let redirectGuard = RedirectGuard(resolveHost: resolveHost)
         let bytes: URLSession.AsyncBytes
         let response: URLResponse
         do {
-            (bytes, response) = try await session.bytes(for: request)
+            (bytes, response) = try await session.bytes(for: request, delegate: redirectGuard)
         } catch let error as URLError where error.code == .timedOut {
             throw PageFetchError.timeout
         } catch {
             throw PageFetchError.network(error.localizedDescription)
+        }
+
+        // A refused redirect surfaces as the 3xx response itself.
+        guard !redirectGuard.didBlockRedirect else {
+            throw PageFetchError.blockedDestination
         }
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -130,5 +160,40 @@ nonisolated struct PageFetcher: Sendable {
             mimeType: mimeType,
             bodyText: bodyText
         )
+    }
+}
+
+/// Re-applies ``FetchDestinationPolicy`` to every redirect hop, so a public
+/// page can't bounce the fetcher onto a private-network service.
+private nonisolated final class RedirectGuard: NSObject, URLSessionTaskDelegate, Sendable {
+    private let resolveHost: FetchDestinationPolicy.HostResolver
+    private let blocked = Mutex(false)
+
+    init(resolveHost: @escaping FetchDestinationPolicy.HostResolver) {
+        self.resolveHost = resolveHost
+    }
+
+    var didBlockRedirect: Bool {
+        blocked.withLock { $0 }
+    }
+
+    // The completion-handler form, not the async one: Swift 6.4 crashes
+    // emitting the Objective-C thunk for the async variant.
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        Task {
+            guard let url = request.url,
+                  await FetchDestinationPolicy.allows(url, resolveHost: resolveHost) else {
+                blocked.withLock { $0 = true }
+                completionHandler(nil)
+                return
+            }
+            completionHandler(request)
+        }
     }
 }

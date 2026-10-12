@@ -69,17 +69,123 @@ struct PageFetcherTests {
         #expect(Data(page.bodyText.utf8).count == 5)
     }
 
+    @Test func rejectsPrivateLiteralAndNonHTTPDestinationsWithoutRequesting() async throws {
+        let fetcher = makeFetcher(statusCode: 200, mimeType: "text/plain", body: Data("secret".utf8))
+        let blocked = [
+            "http://127.0.0.1/admin",
+            "http://[::1]:8080/",
+            "http://10.0.0.5/",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::ffff:192.168.1.1]/",
+            "file:///etc/hosts",
+            "ftp://example.com/file.txt",
+        ]
+
+        for string in blocked {
+            let url = try #require(URL(string: string))
+            await #expect(throws: PageFetchError.blockedDestination) {
+                try await fetcher.fetch(url: url, maxBytes: 100)
+            }
+        }
+        #expect(StubPageURLProtocol.requestedURLs.value.isEmpty)
+    }
+
+    @Test func rejectsHostsThatResolveToPrivateOrNoAddresses() async throws {
+        let fetcher = makeFetcher(
+            statusCode: 200,
+            mimeType: "text/plain",
+            body: Data("secret".utf8),
+            resolveHost: { host in
+                switch host {
+                case "intranet.example": [[192, 168, 0, 10]]
+                case "mixed.example": [[93, 184, 216, 34], [127, 0, 0, 1]]
+                default: []
+                }
+            }
+        )
+
+        for host in ["intranet.example", "mixed.example", "unresolvable.example"] {
+            let url = try #require(URL(string: "https://\(host)/"))
+            await #expect(throws: PageFetchError.blockedDestination) {
+                try await fetcher.fetch(url: url, maxBytes: 100)
+            }
+        }
+        #expect(StubPageURLProtocol.requestedURLs.value.isEmpty)
+    }
+
+    @Test func refusesRedirectIntoPrivateNetwork() async throws {
+        let fetcher = makeFetcher(
+            statusCode: 200,
+            mimeType: "text/plain",
+            body: Data("internal service".utf8),
+            redirects: ["https://example.com/start": "http://127.0.0.1:8080/internal"]
+        )
+        let url = try #require(URL(string: "https://example.com/start"))
+
+        await #expect(throws: PageFetchError.blockedDestination) {
+            try await fetcher.fetch(url: url, maxBytes: 100)
+        }
+        #expect(StubPageURLProtocol.requestedURLs.value == ["https://example.com/start"])
+    }
+
+    @Test func followsRedirectToPublicDestination() async throws {
+        let fetcher = makeFetcher(
+            statusCode: 200,
+            mimeType: "text/plain",
+            body: Data("moved".utf8),
+            redirects: ["https://example.com/start": "https://example.org/final"]
+        )
+        let url = try #require(URL(string: "https://example.com/start"))
+
+        let page = try await fetcher.fetch(url: url, maxBytes: 100)
+
+        #expect(page.bodyText == "moved")
+        #expect(page.finalURL.absoluteString == "https://example.org/final")
+        #expect(StubPageURLProtocol.requestedURLs.value == [
+            "https://example.com/start",
+            "https://example.org/final",
+        ])
+    }
+
+    @Test func classifiesAddresses() throws {
+        let publicHosts = ["93.184.216.34", "8.8.8.8", "2606:4700::1111", "::ffff:8.8.8.8"]
+        let privateHosts = [
+            "0.0.0.0", "10.1.2.3", "100.64.0.1", "127.0.0.1", "169.254.1.1", "172.16.0.1",
+            "172.31.255.255", "192.168.1.1", "224.0.0.1", "255.255.255.255", "::", "::1",
+            "fc00::1", "fd12:3456::1", "fe80::1", "ff02::1", "::ffff:10.0.0.1",
+            "64:ff9b::7f00:1", "2002:c0a8:0101::1",
+        ]
+
+        for host in publicHosts {
+            let address = try #require(FetchDestinationPolicy.numericAddress(host))
+            #expect(FetchDestinationPolicy.isPublicAddress(address), "\(host)")
+        }
+        for host in privateHosts {
+            let address = try #require(FetchDestinationPolicy.numericAddress(host))
+            #expect(!FetchDestinationPolicy.isPublicAddress(address), "\(host)")
+        }
+    }
+
+    /// Stub DNS: every name resolves to a public address unless overridden,
+    /// so tests never depend on the network.
     private func makeFetcher(
         statusCode: Int,
         mimeType: String,
-        body: Data
+        body: Data,
+        redirects: [String: String] = [:],
+        resolveHost: @escaping FetchDestinationPolicy.HostResolver = { _ in [[93, 184, 216, 34]] }
     ) -> PageFetcher {
         StubPageURLProtocol.response.update {
             $0 = .init(statusCode: statusCode, mimeType: mimeType, body: body)
         }
+        StubPageURLProtocol.redirects.update { $0 = redirects }
+        StubPageURLProtocol.requestedURLs.update { $0 = [] }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubPageURLProtocol.self]
-        return PageFetcher(session: URLSession(configuration: configuration))
+        return PageFetcher(
+            session: URLSession(configuration: configuration),
+            resolveHost: resolveHost
+        )
     }
 }
 
@@ -91,6 +197,9 @@ nonisolated private final class StubPageURLProtocol: URLProtocol, @unchecked Sen
     }
 
     static let response = LockedValue<StubResponse?>(nil)
+    /// Source URL → `Location` for a 302 hop.
+    static let redirects = LockedValue<[String: String]>([:])
+    static let requestedURLs = LockedValue<[String]>([])
 
     override class func canInit(with _: URLRequest) -> Bool {
         true
@@ -101,6 +210,26 @@ nonisolated private final class StubPageURLProtocol: URLProtocol, @unchecked Sen
     }
 
     override func startLoading() {
+        if let url = request.url {
+            Self.requestedURLs.update { $0.append(url.absoluteString) }
+        }
+
+        if let url = request.url,
+           let location = Self.redirects.value[url.absoluteString],
+           let target = URL(string: location),
+           let redirect = HTTPURLResponse(
+               url: url,
+               statusCode: 302,
+               httpVersion: nil,
+               headerFields: ["Location": location]
+           ) {
+            client?.urlProtocol(self, wasRedirectedTo: URLRequest(url: target), redirectResponse: redirect)
+            // When the delegate refuses the hop, the 302 itself completes the task.
+            client?.urlProtocol(self, didReceive: redirect, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+
         guard let stub = Self.response.value,
               let url = request.url,
               let response = HTTPURLResponse(

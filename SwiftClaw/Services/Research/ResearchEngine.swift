@@ -566,7 +566,7 @@ nonisolated struct ResearchEngine: Sendable {
             Self.logger.error("Analysis response was not valid plan JSON; using fallback thread")
         } catch {
             Self.logger.error("""
-                Analysis failed: \(String(describing: error), privacy: .public); \
+                Analysis failed: \(String(describing: error)); \
                 using fallback thread
                 """)
         }
@@ -810,7 +810,12 @@ nonisolated struct ResearchEngine: Sendable {
             }
 
             do {
-                let page = try await pageFetcher.fetch(url: url, maxBytes: maxBytesPerPage)
+                // The fetcher's own timeout is per request; the run deadline
+                // also bounds slow or trickling responses.
+                let pageFetcher = pageFetcher
+                let page = try await withDeadline(deadline) {
+                    try await pageFetcher.fetch(url: url, maxBytes: maxBytesPerPage)
+                }
                 let isHTML = page.mimeType == "text/html"
                     || page.mimeType == "application/xhtml+xml"
                 let extractedText = isHTML
@@ -1281,7 +1286,7 @@ nonisolated struct ResearchEngine: Sendable {
 
     // MARK: - Claim verification (Swift Model)
 
-    private struct CitedClaim: Sendable {
+    struct CitedClaim: Sendable {
         let id: Int
         let text: String
         let sourceIndices: [Int]
@@ -1398,9 +1403,10 @@ nonisolated struct ResearchEngine: Sendable {
         )
     }
 
-    private static func citedClaims(in report: String) -> [CitedClaim] {
+    static func citedClaims(in report: String) -> [CitedClaim] {
         let text = report as NSString
         let citationPattern = try! NSRegularExpression(pattern: #"\[(\d+)\]"#)
+        let leadingCitationsPattern = try! NSRegularExpression(pattern: #"(?:\s*\[\d+\])+"#)
         var claims = [CitedClaim]()
         var lineLocation = 0
 
@@ -1409,52 +1415,44 @@ nonisolated struct ResearchEngine: Sendable {
             let lineEnd = min(NSMaxRange(lineRange), text.length)
             let contentRange = NSRange(location: lineRange.location, length: lineEnd - lineRange.location)
             let line = text.substring(with: contentRange) as NSString
+            var sentenceRanges = [NSRange]()
             var sentenceStart = 0
 
             while sentenceStart < line.length {
                 var sentenceEnd = line.length
-                if sentenceStart < line.length {
-                    for index in sentenceStart..<line.length {
-                        let character = line.character(at: index)
-                        guard character == 46 || character == 33 || character == 63 else {
-                            continue
-                        }
-                        let next = index + 1
-                        if next == line.length
-                            || Self.isWhitespaceUTF16(line.character(at: next)) {
-                            sentenceEnd = next
-                            break
-                        }
+                for index in sentenceStart..<line.length {
+                    let character = line.character(at: index)
+                    guard character == 46 || character == 33 || character == 63 else {
+                        continue
+                    }
+                    let next = index + 1
+                    if next == line.length
+                        || Self.isWhitespaceUTF16(line.character(at: next)) {
+                        sentenceEnd = next
+                        break
                     }
                 }
 
-                let sentenceRange = NSRange(
-                    location: sentenceStart,
-                    length: max(0, sentenceEnd - sentenceStart)
-                )
-                let citations = citationPattern.matches(
-                    in: line as String,
-                    range: sentenceRange
-                )
-                if let lastCitation = citations.last {
-                    let sourceIndices = citations.compactMap { match -> Int? in
-                        guard match.numberOfRanges > 1 else { return nil }
-                        return Int(line.substring(with: match.range(at: 1)))
-                    }
-                    let rawClaim = line.substring(with: sentenceRange)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    let plainClaim = rawClaim.replacingOccurrences(
-                        of: #"^#{1,6}\s+|^[-*]\s+"#,
-                        with: "",
-                        options: .regularExpression
+                // Citations placed after the punctuation ("… in 2020. [1]")
+                // open the next fragment, but they belong to the sentence they
+                // follow — not to whatever comes after them.
+                if let previous = sentenceRanges.last,
+                   let leading = leadingCitationsPattern.firstMatch(
+                       in: line as String,
+                       options: .anchored,
+                       range: NSRange(location: sentenceStart, length: sentenceEnd - sentenceStart)
+                   ) {
+                    sentenceStart = NSMaxRange(leading.range)
+                    sentenceRanges[sentenceRanges.count - 1] = NSRange(
+                        location: previous.location,
+                        length: sentenceStart - previous.location
                     )
-                    let wordCount = plainClaim.split(whereSeparator: { $0.isWhitespace }).count
-                    claims.append(CitedClaim(
-                        id: claims.count + 1,
-                        text: plainClaim,
-                        sourceIndices: Array(Set(sourceIndices)).sorted(),
-                        markerOffset: lineRange.location + NSMaxRange(lastCitation.range),
-                        isSubstantive: wordCount >= 5
+                }
+
+                if sentenceStart < sentenceEnd {
+                    sentenceRanges.append(NSRange(
+                        location: sentenceStart,
+                        length: sentenceEnd - sentenceStart
                     ))
                 }
 
@@ -1463,6 +1461,34 @@ nonisolated struct ResearchEngine: Sendable {
                       Self.isWhitespaceUTF16(line.character(at: sentenceStart)) {
                     sentenceStart += 1
                 }
+            }
+
+            for sentenceRange in sentenceRanges {
+                let citations = citationPattern.matches(
+                    in: line as String,
+                    range: sentenceRange
+                )
+                guard let lastCitation = citations.last else { continue }
+
+                let sourceIndices = citations.compactMap { match -> Int? in
+                    guard match.numberOfRanges > 1 else { return nil }
+                    return Int(line.substring(with: match.range(at: 1)))
+                }
+                let rawClaim = line.substring(with: sentenceRange)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let plainClaim = rawClaim.replacingOccurrences(
+                    of: #"^#{1,6}\s+|^[-*]\s+"#,
+                    with: "",
+                    options: .regularExpression
+                )
+                let wordCount = plainClaim.split(whereSeparator: { $0.isWhitespace }).count
+                claims.append(CitedClaim(
+                    id: claims.count + 1,
+                    text: plainClaim,
+                    sourceIndices: Array(Set(sourceIndices)).sorted(),
+                    markerOffset: lineRange.location + NSMaxRange(lastCitation.range),
+                    isSubstantive: wordCount >= 5
+                ))
             }
 
             lineLocation = lineEnd
@@ -1621,7 +1647,7 @@ nonisolated struct ResearchEngine: Sendable {
             return trimmed.isEmpty ? nil : trimmed
         } catch {
             Self.logger.error("""
-                Synthesis failed: \(String(describing: error), privacy: .public); \
+                Synthesis failed: \(String(describing: error)); \
                 falling back to mechanical report
                 """)
             return nil
@@ -1673,8 +1699,11 @@ nonisolated struct ResearchEngine: Sendable {
             throw DeadlineExceededError()
         }
 
+        let searchProvider = searchProvider
         return try await withRetries(deadline: deadline, label: "search") {
-            try await searchProvider(query, count)
+            try await withDeadline(deadline) {
+                try await searchProvider(query, count)
+            }
         }
     }
 
@@ -1744,7 +1773,7 @@ nonisolated struct ResearchEngine: Sendable {
                 Self.logger.info("""
                     Retrying \(label, privacy: .public) (attempt \
                     \(attempt + 1, privacy: .public)) after error: \
-                    \(String(describing: error), privacy: .public)
+                    \(String(describing: error))
                     """)
 
                 try? await Task.sleep(for: delay)
@@ -1827,9 +1856,11 @@ nonisolated struct ResearchEngine: Sendable {
 
     /// Decodes model-produced JSON, tolerating markdown fences and prose
     /// around the object.
-    private static func decodeJSON<T: Decodable>(_ type: T.Type, from response: String) -> T? {
+    static func decodeJSON<T: Decodable>(_ type: T.Type, from response: String) -> T? {
+        // `start < end` guards replies like "}{", where slicing would trap.
         guard let start = response.firstIndex(of: "{"),
-              let end = response.lastIndex(of: "}") else {
+              let end = response.lastIndex(of: "}"),
+              start < end else {
             return nil
         }
 

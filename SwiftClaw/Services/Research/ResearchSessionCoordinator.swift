@@ -16,6 +16,8 @@ final class ResearchSessionCoordinator {
         @escaping ResearchEngine.ProgressHandler
     ) async throws -> DeepResearchRunResult
     typealias NotificationHandler = @MainActor (UUID, String, Bool) -> Void
+    /// Test seam for failure injection; production always saves the context.
+    typealias SaveHandler = @MainActor (ModelContext) throws -> Void
 
     static let shared = ResearchSessionCoordinator()
 
@@ -25,6 +27,7 @@ final class ResearchSessionCoordinator {
     private let planHandler: PlanHandler
     private let runHandler: RunHandler
     private let notificationHandler: NotificationHandler
+    private let saveHandler: SaveHandler
     private let runBudget: Duration
     private var modelContainer: ModelContainer?
     private var modelContext: ModelContext?
@@ -69,12 +72,14 @@ final class ResearchSessionCoordinator {
                 isPartial: isPartial
             )
         },
+        saveHandler: @escaping SaveHandler = { try $0.save() },
         runBudget: Duration = .seconds(15 * 60)
     ) {
         self.engineFactory = engineFactory
         self.planHandler = planHandler
         self.runHandler = runHandler
         self.notificationHandler = notificationHandler
+        self.saveHandler = saveHandler
         self.runBudget = runBudget
     }
 
@@ -369,15 +374,30 @@ final class ResearchSessionCoordinator {
         checkpoint.canResume = wasCancelled
         session.progress = checkpoint
 
+        let isPartial = result.isPartial || !result.degradationNotes.isEmpty
         if wasCancelled {
             session.status = .cancelled
             session.isUnviewed = !result.reportMarkdown.isEmpty
-            saveModelContext()
         } else {
-            let isPartial = result.isPartial || !result.degradationNotes.isEmpty
             session.status = isPartial ? .completedPartial : .completed
             session.isUnviewed = true
-            saveModelContext()
+        }
+
+        do {
+            try modelContext.map { try saveHandler($0) }
+        } catch {
+            // The result stays on the main context's session, so it's still
+            // readable (and any later successful save persists it). Say so
+            // instead of announcing a completion that isn't durable.
+            Self.logger.error("Could not save research result: \(String(describing: error))")
+            session.errorMessage = """
+                The report couldn't be saved: \(error.localizedDescription) It's shown \
+                here until SwiftClaw quits — use Save to Notes to keep a copy.
+                """
+            return
+        }
+
+        if !wasCancelled {
             notificationHandler(session.id, session.title, isPartial)
         }
     }
@@ -433,7 +453,7 @@ final class ResearchSessionCoordinator {
 
     private func save(_ modelContext: ModelContext) {
         do {
-            try modelContext.save()
+            try saveHandler(modelContext)
         } catch {
             Self.logger.error("Could not save research session: \(String(describing: error))")
         }

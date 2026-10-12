@@ -109,6 +109,15 @@ struct ResearchReportView: View {
     private var banners: some View {
         let notes = session.progress?.degradationNotes ?? []
 
+        // Set when the run finished but couldn't be saved, or was interrupted.
+        if let message = session.errorMessage {
+            Label(message, systemImage: "exclamationmark.octagon")
+                .font(.callout)
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.red.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+        }
+
         if session.status == .cancelled || session.status == .completedPartial {
             VStack(alignment: .leading, spacing: 8) {
                 Label(

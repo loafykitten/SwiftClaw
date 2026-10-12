@@ -204,6 +204,73 @@ struct DeepResearchPipelineTests {
         #expect(result.degradationNotes.contains { $0.contains("stopped before wave 2") })
     }
 
+    /// Before searches ran under `withDeadline`, a slow successful search
+    /// could outlive the whole research budget.
+    @Test func slowSearchIsBoundedByTheRunDeadline() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        fixture.defaults.set("Test Research Model", forKey: SettingsKeys.deepResearchModel)
+        var configuration = testConfiguration()
+        configuration.totalBudget = .milliseconds(500)
+        let engine = ResearchEngine(
+            configuration: configuration,
+            pageFetcher: makeFetcher(routes: standardPages),
+            userDefaults: fixture.defaults,
+            searchProvider: { _, _ in
+                try await Task.sleep(for: .seconds(30))
+                return Self.surfaceResults
+            },
+            completionProvider: { _, _ in throw PipelineStubError.unhandledPrompt }
+        )
+
+        let start = ContinuousClock.now
+        await #expect(throws: (any Error).self) {
+            try await engine.plan(topic: "test topic", focus: nil)
+        }
+        #expect(ContinuousClock.now - start < .seconds(5))
+    }
+
+    /// A page that sends headers and then trickles nothing used to hold the
+    /// run until the per-request timeout, eating the writing reserve.
+    @Test func stalledPageFetchIsBoundedByTheRunDeadline() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        fixture.defaults.set("Test Research Model", forKey: SettingsKeys.deepResearchModel)
+        fixture.defaults.set("Test Swift Model", forKey: SettingsKeys.swiftModel)
+        var configuration = testConfiguration()
+        configuration.reflectionWaves = 0
+        // Threads only start with more than 5 seconds left.
+        configuration.totalBudget = .seconds(6)
+        let engine = ResearchEngine(
+            configuration: configuration,
+            pageFetcher: makeFetcher(routes: [
+                "https://example.com/launch": .init(body: "", hangs: true),
+            ]),
+            userDefaults: fixture.defaults,
+            searchProvider: { _, _ in [Self.surfaceResults[0]] },
+            completionProvider: scriptedCompletion(promptLog: LockedValue([])) { _ in
+                throw PipelineStubError.unhandledPrompt
+            }
+        )
+        let plan = ResearchPlan(
+            overview: "Overview.",
+            threads: [ResearchThreadPlan(question: "When did it launch?", query: "launch query")]
+        )
+        let context = ResearchPlanContext(
+            topic: "test topic",
+            focus: nil,
+            surfaceLines: [],
+            sources: [],
+            searchCallsSpent: 0,
+            degradationNotes: []
+        )
+
+        let start = ContinuousClock.now
+        _ = await engine.run(plan: plan, context: context)
+        // Without the deadline the fetch waits out PageFetcher's 15s timeout.
+        #expect(ContinuousClock.now - start < .seconds(12))
+    }
+
     nonisolated private static let surfaceResults = [
         BraveSearchClient.Result(
             title: "Launch source",
@@ -250,7 +317,10 @@ struct DeepResearchPipelineTests {
         StubDeepResearchURLProtocol.routes.update { $0 = routes }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubDeepResearchURLProtocol.self]
-        return PageFetcher(session: URLSession(configuration: configuration))
+        return PageFetcher(
+            session: URLSession(configuration: configuration),
+            resolveHost: { _ in [[93, 184, 216, 34]] }
+        )
     }
 
     nonisolated private func scriptedCompletion(
@@ -278,6 +348,8 @@ nonisolated private enum PipelineStubError: LocalizedError, Sendable {
 nonisolated private final class StubDeepResearchURLProtocol: URLProtocol, @unchecked Sendable {
     struct StubResponse: Sendable {
         let body: String
+        /// Sends headers, then never delivers the body or finishes.
+        var hangs = false
     }
 
     static let routes = LockedValue<[String: StubResponse]>([:])
@@ -300,6 +372,7 @@ nonisolated private final class StubDeepResearchURLProtocol: URLProtocol, @unche
         }
 
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        guard !stub.hangs else { return }
         client?.urlProtocol(self, didLoad: Data(stub.body.utf8))
         client?.urlProtocolDidFinishLoading(self)
     }
