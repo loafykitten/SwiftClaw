@@ -10,8 +10,8 @@ struct MemoryRepositoryTests {
 
     @Test func ensureInboxCreatesOnceAndIsIdempotent() throws {
         let repository = try Self.makeRepository()
-        let first = repository.ensureInbox()
-        let second = repository.ensureInbox()
+        let first = try repository.ensureInbox()
+        let second = try repository.ensureInbox()
 
         #expect(first.id == second.id)
         #expect(first.isInbox)
@@ -23,7 +23,7 @@ struct MemoryRepositoryTests {
 
     @Test func inboxRefusesDeletionAndScoping() throws {
         let repository = try Self.makeRepository()
-        let inbox = repository.ensureInbox()
+        let inbox = try repository.ensureInbox()
 
         #expect(throws: MemoryError.self) {
             try repository.deleteCollection(inbox, actor: .user)
@@ -38,10 +38,10 @@ struct MemoryRepositoryTests {
 
     @Test func addEntryRecordsActivityEventInSameSave() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Travel preferences", createdBy: .user)
+        let collection = try repository.createCollection(title: "Travel preferences", createdBy: .user)
         let chatID = UUID()
 
-        let entry = repository.addEntry(
+        let entry = try repository.addEntry(
             body: "Prefers window seats on long-haul flights",
             tags: ["flights"],
             to: collection,
@@ -61,10 +61,10 @@ struct MemoryRepositoryTests {
 
     @Test func editEntrySnapshotsPreviousBody() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Preferences", createdBy: .user)
-        let entry = repository.addEntry(body: "Original fact", to: collection, createdBy: .ai)
+        let collection = try repository.createCollection(title: "Preferences", createdBy: .user)
+        let entry = try repository.addEntry(body: "Original fact", to: collection, createdBy: .ai)
 
-        repository.editEntry(entry, body: "Corrected fact", actor: .user)
+        try repository.editEntry(entry, body: "Corrected fact", actor: .user)
 
         #expect(entry.body == "Corrected fact")
         let event = try #require(repository.recentActivity().first { $0.kind == .edited })
@@ -74,11 +74,11 @@ struct MemoryRepositoryTests {
 
     @Test func deleteEntrySnapshotsBodyAndClearsSupersededStamps() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        let old = repository.addEntry(body: "Lives in Portland", to: collection, createdBy: .ai)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let old = try repository.addEntry(body: "Lives in Portland", to: collection, createdBy: .ai)
         let replacement = try repository.supersedeEntry(old, withBody: "Lives in Seattle", createdBy: .ai)
 
-        repository.deleteEntry(replacement, actor: .user)
+        try repository.deleteEntry(replacement, actor: .user)
 
         // The replaced fact becomes current again — no dangling stamp.
         #expect(old.supersededByID == nil)
@@ -88,14 +88,14 @@ struct MemoryRepositoryTests {
 
     @Test func accessLevelChangeRecordsEventAndNoOpsWhenUnchanged() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(
+        let collection = try repository.createCollection(
             title: "Sensitive",
             accessLevel: .asksFirst,
             createdBy: .user
         )
 
-        repository.setAccessLevel(.writesFreely, for: collection)
-        repository.setAccessLevel(.writesFreely, for: collection)
+        try repository.setAccessLevel(.writesFreely, for: collection)
+        try repository.setAccessLevel(.writesFreely, for: collection)
 
         #expect(collection.accessLevel == .writesFreely)
         let events = repository.recentActivity().filter { $0.kind == .accessChanged }
@@ -105,12 +105,12 @@ struct MemoryRepositoryTests {
 
     @Test func moveEntryRecordsMoveAndDisablesUndo() throws {
         let repository = try Self.makeRepository()
-        let source = repository.createCollection(title: "Inbox-ish", createdBy: .user)
-        let target = repository.createCollection(title: "Home", createdBy: .user)
-        let entry = repository.addEntry(body: "A fact", to: source, createdBy: .ai)
+        let source = try repository.createCollection(title: "Inbox-ish", createdBy: .user)
+        let target = try repository.createCollection(title: "Home", createdBy: .user)
+        let entry = try repository.addEntry(body: "A fact", to: source, createdBy: .ai)
         #expect(entry.isUndoableWrite)
 
-        repository.moveEntry(entry, to: target, actor: .user)
+        try repository.moveEntry(entry, to: target, actor: .user)
 
         #expect(entry.collection?.id == target.id)
         #expect(!entry.isUndoableWrite)
@@ -120,12 +120,12 @@ struct MemoryRepositoryTests {
 
     @Test func deleteCollectionUnstampsFactsItsEntriesSuperseded() throws {
         let repository = try Self.makeRepository()
-        let source = repository.createCollection(title: "Source", createdBy: .user)
-        let other = repository.createCollection(title: "Elsewhere", createdBy: .user)
-        let old = repository.addEntry(body: "Original fact", to: other, createdBy: .ai)
+        let source = try repository.createCollection(title: "Source", createdBy: .user)
+        let other = try repository.createCollection(title: "Elsewhere", createdBy: .user)
+        let old = try repository.addEntry(body: "Original fact", to: other, createdBy: .ai)
         let replacement = try repository.supersedeEntry(old, withBody: "Replacement fact", createdBy: .ai)
         // The replacement moves into the collection that's about to die.
-        repository.moveEntry(replacement, to: source, actor: .user)
+        try repository.moveEntry(replacement, to: source, actor: .user)
 
         try repository.deleteCollection(source, actor: .user)
 
@@ -146,7 +146,7 @@ struct MemoryRepositoryTests {
             )
             repository.modelContext.insert(collection)
         }
-        repository.save()
+        try repository.save()
 
         let first = repository.collections().map(\.id)
         let second = repository.collections().map(\.id)
@@ -157,9 +157,9 @@ struct MemoryRepositoryTests {
 
     @Test func deleteCollectionCascadesEntries() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Doomed", createdBy: .user)
-        repository.addEntry(body: "Entry one", to: collection, createdBy: .user)
-        repository.addEntry(body: "Entry two", to: collection, createdBy: .user)
+        let collection = try repository.createCollection(title: "Doomed", createdBy: .user)
+        try repository.addEntry(body: "Entry one", to: collection, createdBy: .user)
+        try repository.addEntry(body: "Entry two", to: collection, createdBy: .user)
 
         try repository.deleteCollection(collection, actor: .user)
 
@@ -172,8 +172,8 @@ struct MemoryRepositoryTests {
 
     @Test func supersedeStampsOldEntryAndExcludesItFromActiveEntries() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        let old = repository.addEntry(body: "Works at Acme", to: collection, createdBy: .ai)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let old = try repository.addEntry(body: "Works at Acme", to: collection, createdBy: .ai)
 
         let replacement = try repository.supersedeEntry(
             old,
@@ -191,8 +191,8 @@ struct MemoryRepositoryTests {
 
     @Test func supersedingAnAlreadySupersededEntryThrows() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        let old = repository.addEntry(body: "Fact v1", to: collection, createdBy: .ai)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let old = try repository.addEntry(body: "Fact v1", to: collection, createdBy: .ai)
         _ = try repository.supersedeEntry(old, withBody: "Fact v2", createdBy: .ai)
 
         #expect(throws: MemoryError.self) {
@@ -204,8 +204,8 @@ struct MemoryRepositoryTests {
 
     @Test func undoDeletesUnmodifiedEntryAndRestoresSupersededFact() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        let old = repository.addEntry(body: "Drinks coffee", to: collection, createdBy: .ai)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let old = try repository.addEntry(body: "Drinks coffee", to: collection, createdBy: .ai)
         let replacement = try repository.supersedeEntry(old, withBody: "Drinks tea", createdBy: .ai)
 
         try repository.undoEntryWrite(replacement)
@@ -219,9 +219,9 @@ struct MemoryRepositoryTests {
 
     @Test func undoRefusedOnceEntryIsEdited() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        let entry = repository.addEntry(body: "A fact", to: collection, createdBy: .ai)
-        repository.editEntry(entry, body: "An edited fact", actor: .user)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let entry = try repository.addEntry(body: "A fact", to: collection, createdBy: .ai)
+        try repository.editEntry(entry, body: "An edited fact", actor: .user)
 
         #expect(!entry.isUndoableWrite)
         #expect(throws: MemoryError.self) {
@@ -232,8 +232,8 @@ struct MemoryRepositoryTests {
 
     @Test func undoRefusedOnceEntryIsSuperseded() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        let entry = repository.addEntry(body: "A fact", to: collection, createdBy: .ai)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let entry = try repository.addEntry(body: "A fact", to: collection, createdBy: .ai)
         _ = try repository.supersedeEntry(entry, withBody: "A newer fact", createdBy: .ai)
 
         #expect(!entry.isUndoableWrite)
@@ -246,8 +246,8 @@ struct MemoryRepositoryTests {
 
     @Test func resolveEntryMatchesEightHexHandle() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        let entry = repository.addEntry(body: "A fact", to: collection, createdBy: .ai)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let entry = try repository.addEntry(body: "A fact", to: collection, createdBy: .ai)
 
         let resolved = try repository.resolveEntry(handle: entry.handle)
         #expect(resolved.id == entry.id)
@@ -259,7 +259,7 @@ struct MemoryRepositoryTests {
 
     @Test func resolveEntryErrorsOnAmbiguityAndMissing() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
         let idA = try #require(UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001"))
         let idB = try #require(UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000002"))
         for id in [idA, idB] {
@@ -267,7 +267,7 @@ struct MemoryRepositoryTests {
             entry.collection = collection
             repository.modelContext.insert(entry)
         }
-        repository.save()
+        try repository.save()
 
         #expect(throws: MemoryError.self) {
             try repository.resolveEntry(handle: "aaaaaaaa")
@@ -288,18 +288,18 @@ struct MemoryRepositoryTests {
 
     @Test func searchMatchesBodyCollectionTitleAndTags() throws {
         let repository = try Self.makeRepository()
-        let travel = repository.createCollection(
+        let travel = try repository.createCollection(
             title: "Travel preferences",
             tags: ["travel"],
             createdBy: .user
         )
-        let dining = repository.createCollection(title: "Dining", createdBy: .user)
-        let seats = repository.addEntry(
+        let dining = try repository.createCollection(title: "Dining", createdBy: .user)
+        let seats = try repository.addEntry(
             body: "Prefers window seats",
             to: travel,
             createdBy: .ai
         )
-        let spice = repository.addEntry(
+        let spice = try repository.addEntry(
             body: "Orders medium spice",
             tags: ["thai"],
             to: dining,
@@ -319,15 +319,15 @@ struct MemoryRepositoryTests {
 
     @Test func searchFiltersApply() throws {
         let repository = try Self.makeRepository()
-        let scoped = repository.createCollection(
+        let scoped = try repository.createCollection(
             title: "Email review preferences",
             accessLevel: .asksFirst,
             scope: .email,
             createdBy: .user
         )
-        let global = repository.createCollection(title: "Identity", createdBy: .user)
-        let aiEntry = repository.addEntry(body: "Deletes newsletters unread", to: scoped, createdBy: .ai)
-        let userEntry = repository.addEntry(body: "Works as a designer", to: global, createdBy: .user)
+        let global = try repository.createCollection(title: "Identity", createdBy: .user)
+        let aiEntry = try repository.addEntry(body: "Deletes newsletters unread", to: scoped, createdBy: .ai)
+        let userEntry = try repository.addEntry(body: "Works as a designer", to: global, createdBy: .user)
 
         let aiOnly = repository.search("", filter: .init(aiCreatedOnly: true))
         #expect(aiOnly.map(\.id) == [aiEntry.id])
@@ -347,8 +347,8 @@ struct MemoryRepositoryTests {
 
     @Test func searchIncludesSupersededEntries() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        let old = repository.addEntry(body: "Lives in Portland", to: collection, createdBy: .ai)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let old = try repository.addEntry(body: "Lives in Portland", to: collection, createdBy: .ai)
         _ = try repository.supersedeEntry(old, withBody: "Lives in Seattle", createdBy: .ai)
 
         // The UI sees everything; only prompt injection excludes superseded.
@@ -357,7 +357,7 @@ struct MemoryRepositoryTests {
 
     @Test func boundedSearchPagesUntilItFindsEnoughMatches() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
         let baseline = Date(timeIntervalSinceReferenceDate: 800_000_000)
         for index in 0..<55 {
             let entry = MemoryEntry(
@@ -377,7 +377,7 @@ struct MemoryRepositoryTests {
         )
         olderMatch.collection = collection
         repository.modelContext.insert(olderMatch)
-        repository.save()
+        try repository.save()
 
         #expect(repository.search("needle", limit: 1).map(\.id) == [olderMatch.id])
         #expect(repository.search("", limit: 3).count == 3)
@@ -388,8 +388,8 @@ struct MemoryRepositoryTests {
 
     @Test func summaryCountsActiveEntriesAndPendingProposals() throws {
         let repository = try Self.makeRepository()
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        let old = repository.addEntry(body: "Fact v1", to: collection, createdBy: .ai)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let old = try repository.addEntry(body: "Fact v1", to: collection, createdBy: .ai)
         _ = try repository.supersedeEntry(old, withBody: "Fact v2", createdBy: .ai)
         repository.modelContext.insert(MemoryProposal(
             entryText: "Proposed fact",
@@ -402,7 +402,7 @@ struct MemoryRepositoryTests {
             status: .rejected,
             source: .chat
         ))
-        repository.save()
+        try repository.save()
 
         let summary = repository.summary()
         #expect(summary.collectionCount == 1)
@@ -414,8 +414,8 @@ struct MemoryRepositoryTests {
     @Test func mutationGenerationBumpsOnEverySave() throws {
         let repository = try Self.makeRepository()
         let before = repository.mutationGeneration
-        let collection = repository.createCollection(title: "Facts", createdBy: .user)
-        repository.addEntry(body: "A fact", to: collection, createdBy: .user)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        try repository.addEntry(body: "A fact", to: collection, createdBy: .user)
 
         #expect(repository.mutationGeneration == before + 2)
     }
@@ -429,17 +429,121 @@ struct MemoryRepositoryTests {
                 didChange()
             }
 
-            _ = repository.createCollection(title: "Facts", createdBy: .user)
+            _ = try? repository.createCollection(title: "Facts", createdBy: .user)
         }
+    }
+
+    // MARK: - Persistence failures
+
+    @Test func failedSaveThrowsRollsBackAndLeavesNoGhostEntry() throws {
+        let failSaves = LockedValue(false)
+        let repository = try Self.makeRepository(failSaves: failSaves)
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let generation = repository.mutationGeneration
+
+        failSaves.update { $0 = true }
+        #expect(throws: MemoryError.saveFailed) {
+            try repository.addEntry(body: "Never persisted", to: collection, createdBy: .ai)
+        }
+
+        #expect(repository.allEntries().isEmpty)
+        #expect(!repository.recentActivity().contains { $0.snapshotText == "Never persisted" })
+        #expect(repository.mutationGeneration == generation)
+    }
+
+    @Test func performBatchCommitsOnceOrRollsBackEverything() throws {
+        let failSaves = LockedValue(false)
+        let repository = try Self.makeRepository(failSaves: failSaves)
+        let generation = repository.mutationGeneration
+
+        try repository.performBatch {
+            let collection = try repository.createCollection(title: "Trip", createdBy: .ai)
+            try repository.addEntry(body: "Seed one", to: collection, createdBy: .ai)
+            try repository.addEntry(body: "Seed two", to: collection, createdBy: .ai)
+        }
+        #expect(repository.mutationGeneration == generation + 1)
+        #expect(repository.allEntries().count == 2)
+
+        failSaves.update { $0 = true }
+        #expect(throws: MemoryError.saveFailed) {
+            try repository.performBatch {
+                let collection = try repository.createCollection(title: "Doomed", createdBy: .ai)
+                try repository.addEntry(body: "Doomed seed", to: collection, createdBy: .ai)
+            }
+        }
+        #expect(!repository.collections().contains { $0.title == "Doomed" })
+        #expect(repository.allEntries().count == 2)
+
+        // A throw from the body itself also discards the batch's mutations.
+        failSaves.update { $0 = false }
+        #expect(throws: MemoryError.alreadySuperseded) {
+            try repository.performBatch {
+                try repository.createCollection(title: "Also doomed", createdBy: .ai)
+                throw MemoryError.alreadySuperseded
+            }
+        }
+        #expect(!repository.collections().contains { $0.title == "Also doomed" })
+    }
+
+    // MARK: - Supersession chains
+
+    /// Deleting the middle of `A → B → C` must re-point A at C, not revive A
+    /// as a current fact beside C.
+    @Test func deletingAnIntermediateSupersessionRedirectsItsPredecessor() throws {
+        let repository = try Self.makeRepository()
+        let collection = try repository.createCollection(title: "Facts", createdBy: .user)
+        let first = try repository.addEntry(body: "Lives in Portland", to: collection, createdBy: .ai)
+        let second = try repository.supersedeEntry(first, withBody: "Lives in Seattle", createdBy: .ai)
+        let third = try repository.supersedeEntry(second, withBody: "Lives in Denver", createdBy: .ai)
+
+        try repository.deleteEntry(second, actor: .user)
+
+        #expect(first.supersededByID == third.id)
+        #expect(third.supersededByID == nil)
+        #expect(repository.allEntries().filter { $0.supersededByID == nil }.map(\.body) == ["Lives in Denver"])
+    }
+
+    @Test func deletingTheWholeTailOfAChainRestoresThePredecessor() throws {
+        let repository = try Self.makeRepository()
+        let kept = try repository.createCollection(title: "Kept", createdBy: .user)
+        let doomed = try repository.createCollection(title: "Doomed", createdBy: .user)
+        let first = try repository.addEntry(body: "Original", to: kept, createdBy: .ai)
+        let second = try repository.supersedeEntry(first, withBody: "Second", createdBy: .ai)
+        let third = try repository.supersedeEntry(second, withBody: "Third", createdBy: .ai)
+        try repository.moveEntry(second, to: doomed, actor: .user)
+        try repository.moveEntry(third, to: doomed, actor: .user)
+
+        try repository.deleteCollection(doomed, actor: .user)
+
+        #expect(first.supersededByID == nil)
+    }
+
+    @Test func collectionDeletionRedirectsPastRemovedLinksToASurvivor() throws {
+        let repository = try Self.makeRepository()
+        let kept = try repository.createCollection(title: "Kept", createdBy: .user)
+        let doomed = try repository.createCollection(title: "Doomed", createdBy: .user)
+        let first = try repository.addEntry(body: "Original", to: kept, createdBy: .ai)
+        let second = try repository.supersedeEntry(first, withBody: "Second", createdBy: .ai)
+        let third = try repository.supersedeEntry(second, withBody: "Third", createdBy: .ai)
+        try repository.moveEntry(second, to: doomed, actor: .user)
+
+        try repository.deleteCollection(doomed, actor: .user)
+
+        #expect(first.supersededByID == third.id)
     }
 
     // MARK: - Helpers
 
-    private static func makeRepository() throws -> MemoryRepository {
+    private struct InjectedSaveFailure: Error {}
+
+    private static func makeRepository(failSaves: LockedValue<Bool>? = nil) throws -> MemoryRepository {
         let container = try ModelContainer(
             for: MemoryCollection.self, MemoryEntry.self, MemoryProposal.self, MemoryActivityEvent.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
-        return MemoryRepository(modelContext: ModelContext(container))
+        return MemoryRepository(modelContext: ModelContext(container)) { context in
+            if failSaves?.value == true { throw InjectedSaveFailure() }
+            try context.save()
+        }
     }
 }

@@ -19,7 +19,12 @@ enabled + configured) to views, tools, and review services.
 `MemoryRepository` (`Services/Memory/`) is the `@MainActor` mutation
 boundary (the `EmailRepository` precedent — pure SwiftData, no vault/actor
 machinery). Every mutation writes a `MemoryActivityEvent` in the same save
-and bumps `mutationGeneration`, the prompt builder's cache key. It owns
+and bumps `mutationGeneration`, the prompt builder's cache key. A failed
+save rolls back and throws `MemoryError.saveFailed` — no caller reports a
+write that didn't persist; `performBatch` makes multi-write operations
+(proposal approval, seeded collection creation) all-or-nothing. Deleting an
+entry re-points its predecessors at a surviving successor (`A → B → C`
+minus B is `A → C`) and only revives a fact when none survives. It owns
 Inbox ensure-exists, supersession, handle resolution, lexical search, and
 the Workspace-tile summary. UI list reads go through `@Query` in views.
 

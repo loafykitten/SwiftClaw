@@ -23,6 +23,7 @@ struct MemoryCollectionEditorSheet: View {
     @State private var isPinned = false
     @State private var hasLoaded = false
     @State private var isConfirmingLoosenedAccess = false
+    @State private var saveError: String?
 
     /// Feature scopes a collection can target: the features whose review
     /// services consume scoped memory. Memory itself is deliberately absent
@@ -89,6 +90,10 @@ struct MemoryCollectionEditorSheet: View {
                 } footer: {
                     Text("Scoped collections ride along into that feature's background reviews. Pinned collections are always in context.")
                 }
+
+                if let saveError {
+                    MemorySaveErrorSection(message: saveError)
+                }
             }
             .formStyle(.grouped)
 
@@ -138,39 +143,50 @@ struct MemoryCollectionEditorSheet: View {
         let trimmedDetails = details.trimmingCharacters(in: .whitespacesAndNewlines)
         let tags = Self.parseTags(tagsText)
 
-        switch mode {
-        case .create:
-            repository.createCollection(
-                title: trimmedTitle,
-                details: trimmedDetails.isEmpty ? nil : trimmedDetails,
-                tags: tags,
-                accessLevel: accessLevel,
-                scope: scope,
-                isPinned: isPinned,
-                createdBy: .user
-            )
-        case .edit(let collection):
-            let newDetails = trimmedDetails.isEmpty ? nil : trimmedDetails
-            // Only record an "Edited collection" event when one of these
-            // fields actually changed — otherwise a pure access-level or
-            // scope switch logs two activity rows for one action.
-            if collection.title != trimmedTitle || collection.details != newDetails
-                || collection.tags != tags || collection.isPinned != isPinned {
-                repository.updateCollection(
-                    collection,
+        do {
+            switch mode {
+            case .create:
+                try repository.createCollection(
                     title: trimmedTitle,
-                    details: newDetails,
+                    details: trimmedDetails.isEmpty ? nil : trimmedDetails,
                     tags: tags,
+                    accessLevel: accessLevel,
+                    scope: scope,
                     isPinned: isPinned,
-                    actor: .user
+                    createdBy: .user
                 )
+            case .edit(let collection):
+                let newDetails = trimmedDetails.isEmpty ? nil : trimmedDetails
+                // One save for the whole edit: a failure leaves the
+                // collection exactly as it was, never half-updated.
+                try repository.performBatch {
+                    // Only record an "Edited collection" event when one of
+                    // these fields actually changed — otherwise a pure
+                    // access-level or scope switch logs two activity rows
+                    // for one action.
+                    if collection.title != trimmedTitle || collection.details != newDetails
+                        || collection.tags != tags || collection.isPinned != isPinned {
+                        try repository.updateCollection(
+                            collection,
+                            title: trimmedTitle,
+                            details: newDetails,
+                            tags: tags,
+                            isPinned: isPinned,
+                            actor: .user
+                        )
+                    }
+                    if collection.accessLevel != accessLevel {
+                        try repository.setAccessLevel(accessLevel, for: collection)
+                    }
+                    if collection.scope != scope {
+                        try repository.setScope(scope, for: collection, actor: .user)
+                    }
+                }
             }
-            if collection.accessLevel != accessLevel {
-                repository.setAccessLevel(accessLevel, for: collection)
-            }
-            if collection.scope != scope {
-                try? repository.setScope(scope, for: collection, actor: .user)
-            }
+        } catch {
+            // Keep the sheet (and the user's input) open on failure.
+            saveError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return
         }
         dismiss()
     }

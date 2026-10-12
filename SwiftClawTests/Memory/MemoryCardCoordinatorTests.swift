@@ -13,7 +13,9 @@ struct MemoryCardCoordinatorTests {
         let chat: Chat
     }
 
-    private static func makeFixture() throws -> Fixture {
+    private struct InjectedSaveFailure: Error {}
+
+    private static func makeFixture(failRepositorySaves: LockedValue<Bool>? = nil) throws -> Fixture {
         let container = try ModelContainer(
             for: Chat.self, ChatMessage.self,
             MemoryCollection.self, MemoryEntry.self, MemoryProposal.self, MemoryActivityEvent.self,
@@ -26,7 +28,10 @@ struct MemoryCardCoordinatorTests {
         return Fixture(
             container: container,
             context: context,
-            repository: MemoryRepository(modelContext: context),
+            repository: MemoryRepository(modelContext: context) { context in
+                if failRepositorySaves?.value == true { throw InjectedSaveFailure() }
+                try context.save()
+            },
             chat: chat
         )
     }
@@ -39,11 +44,11 @@ struct MemoryCardCoordinatorTests {
 
     @Test func drainPostsOneChipPerTurnAndIsIdempotent() throws {
         let fixture = try Self.makeFixture()
-        let travel = fixture.repository.createCollection(title: "Travel", createdBy: .user)
-        let first = fixture.repository.addEntry(
+        let travel = try fixture.repository.createCollection(title: "Travel", createdBy: .user)
+        let first = try fixture.repository.addEntry(
             body: "Fact one", to: travel, createdBy: .ai, sourceChatID: fixture.chat.id
         )
-        let second = fixture.repository.addEntry(
+        let second = try fixture.repository.addEntry(
             body: "Fact two", to: travel, createdBy: .ai, sourceChatID: fixture.chat.id
         )
         fixture.coordinator.enqueueWrite(entryID: first.id, chatID: fixture.chat.id)
@@ -66,11 +71,11 @@ struct MemoryCardCoordinatorTests {
 
     @Test func drainRehydratesUndisclosedWritesTheQueueLost() throws {
         let fixture = try Self.makeFixture()
-        let travel = fixture.repository.createCollection(title: "Travel", createdBy: .user)
+        let travel = try fixture.repository.createCollection(title: "Travel", createdBy: .user)
         // Simulates a write whose completion failed before draining (or a
         // process restart): persisted, AI-authored, bound to this chat,
         // never disclosed — but not in any in-memory queue.
-        fixture.repository.addEntry(
+        try fixture.repository.addEntry(
             body: "Orphaned write", to: travel, createdBy: .ai, sourceChatID: fixture.chat.id
         )
 
@@ -83,9 +88,9 @@ struct MemoryCardCoordinatorTests {
 
     @Test func drainNeverDisclosesUserEntriesOrOtherChatsWrites() throws {
         let fixture = try Self.makeFixture()
-        let travel = fixture.repository.createCollection(title: "Travel", createdBy: .user)
-        fixture.repository.addEntry(body: "User-added", to: travel, createdBy: .user)
-        fixture.repository.addEntry(
+        let travel = try fixture.repository.createCollection(title: "Travel", createdBy: .user)
+        try fixture.repository.addEntry(body: "User-added", to: travel, createdBy: .user)
+        try fixture.repository.addEntry(
             body: "Other chat's write", to: travel, createdBy: .ai, sourceChatID: UUID()
         )
 
@@ -139,7 +144,7 @@ struct MemoryCardCoordinatorTests {
 
     @Test func approveAppliesEntryAndMarksDisclosed() async throws {
         let fixture = try Self.makeFixture()
-        let gated = fixture.repository.createCollection(
+        let gated = try fixture.repository.createCollection(
             title: "Sensitive", accessLevel: .asksFirst, createdBy: .user
         )
         let proposal = MemoryProposal(
@@ -171,6 +176,47 @@ struct MemoryCardCoordinatorTests {
         // Idempotent: a second approve is a no-op.
         await dispatcher.perform(action: .approve, itemID: proposal.id)
         #expect(fixture.repository.allEntries().count == 1)
+    }
+
+    /// A rolled-back repository write must never be recorded as applied:
+    /// the proposal returns to `.pending` (retryable) with nothing written.
+    @Test func approveWhoseWritesFailToSaveStaysPendingAndWritesNothing() async throws {
+        let failSaves = LockedValue(false)
+        let fixture = try Self.makeFixture(failRepositorySaves: failSaves)
+        let proposal = MemoryProposal(
+            entryText: "Seed one\nSeed two",
+            newCollectionTitle: "Health notes",
+            newCollectionAccessLevel: .asksFirst,
+            summary: "Create collection",
+            source: .chat,
+            chatID: fixture.chat.id
+        )
+        fixture.context.insert(proposal)
+        try fixture.context.save()
+
+        failSaves.update { $0 = true }
+        let dispatcher = MemoryProposalDispatcher(
+            modelContainer: fixture.container,
+            repositoryProvider: { fixture.repository }
+        )
+        await dispatcher.perform(action: .approve, itemID: proposal.id)
+
+        let saved = try #require(
+            try ModelContext(fixture.container).fetch(FetchDescriptor<MemoryProposal>()).first
+        )
+        #expect(saved.status == .pending)
+        #expect(fixture.repository.allEntries().isEmpty)
+        #expect(!fixture.repository.collections().contains { $0.title == "Health notes" })
+        #expect(!fixture.repository.recentActivity().contains { $0.kind == .proposalAccepted })
+
+        // Once saves work again the same proposal applies exactly once.
+        failSaves.update { $0 = false }
+        await dispatcher.perform(action: .approve, itemID: proposal.id)
+        #expect(fixture.repository.allEntries().count == 2)
+        let applied = try #require(
+            try ModelContext(fixture.container).fetch(FetchDescriptor<MemoryProposal>()).first
+        )
+        #expect(applied.status == .applied)
     }
 
     @Test func approveWithVanishedTargetRoutesToInbox() async throws {
@@ -222,10 +268,10 @@ struct MemoryCardCoordinatorTests {
 
     @Test func approveSupersessionProposalStampsTheOldEntry() async throws {
         let fixture = try Self.makeFixture()
-        let gated = fixture.repository.createCollection(
+        let gated = try fixture.repository.createCollection(
             title: "Sensitive", accessLevel: .asksFirst, createdBy: .user
         )
-        let old = fixture.repository.addEntry(body: "Old fact", to: gated, createdBy: .user)
+        let old = try fixture.repository.addEntry(body: "Old fact", to: gated, createdBy: .user)
         let proposal = MemoryProposal(
             entryText: "New fact",
             targetCollectionID: gated.id,
@@ -275,8 +321,8 @@ struct MemoryCardCoordinatorTests {
 
     @Test func undoDeletesUnmodifiedWriteAndRespectsGuard() async throws {
         let fixture = try Self.makeFixture()
-        let travel = fixture.repository.createCollection(title: "Travel", createdBy: .user)
-        let entry = fixture.repository.addEntry(
+        let travel = try fixture.repository.createCollection(title: "Travel", createdBy: .user)
+        let entry = try fixture.repository.addEntry(
             body: "Undo me", to: travel, createdBy: .ai, sourceChatID: fixture.chat.id
         )
         let dispatcher = MemoryWriteDispatcher(repositoryProvider: { fixture.repository })
@@ -285,10 +331,10 @@ struct MemoryCardCoordinatorTests {
         #expect(fixture.repository.allEntries().isEmpty)
 
         // An edited entry refuses undo — the write is no longer "unwatched".
-        let kept = fixture.repository.addEntry(
+        let kept = try fixture.repository.addEntry(
             body: "Keep me", to: travel, createdBy: .ai, sourceChatID: fixture.chat.id
         )
-        fixture.repository.editEntry(kept, body: "Keep me, edited", actor: .user)
+        try fixture.repository.editEntry(kept, body: "Keep me, edited", actor: .user)
         await dispatcher.perform(action: .undo, itemID: kept.id)
         #expect(fixture.repository.allEntries().count == 1)
     }

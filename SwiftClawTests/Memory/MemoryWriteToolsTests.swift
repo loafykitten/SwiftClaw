@@ -13,12 +13,17 @@ struct MemoryWriteToolsTests {
         let chatID = UUID()
     }
 
-    private static func makeFixture(available: Bool = true) throws -> Fixture {
+    private struct InjectedSaveFailure: Error {}
+
+    private static func makeFixture(available: Bool = true, failSaves: LockedValue<Bool>? = nil) throws -> Fixture {
         let container = try ModelContainer(
             for: MemoryCollection.self, MemoryEntry.self, MemoryProposal.self, MemoryActivityEvent.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true)
         )
-        let repository = MemoryRepository(modelContext: ModelContext(container))
+        let repository = MemoryRepository(modelContext: ModelContext(container)) { context in
+            if failSaves?.value == true { throw InjectedSaveFailure() }
+            try context.save()
+        }
         return Fixture(
             container: container,
             repository: repository,
@@ -34,7 +39,7 @@ struct MemoryWriteToolsTests {
 
     @Test func addToWritesFreelyCollectionSavesImmediatelyAndQueuesChip() async throws {
         let fixture = try Self.makeFixture()
-        let travel = fixture.repository.createCollection(title: "Travel preferences", createdBy: .user)
+        let travel = try fixture.repository.createCollection(title: "Travel preferences", createdBy: .user)
         let tool = AddMemoryTool(
             modelContainer: fixture.container,
             chatID: fixture.chatID,
@@ -57,9 +62,54 @@ struct MemoryWriteToolsTests {
         #expect(fixture.coordinator.hasQueuedDisclosures(forChatID: fixture.chatID))
     }
 
+    /// A rolled-back save must reach the model as a failure, never "Saved",
+    /// and must not queue a disclosure chip for an entry that doesn't exist.
+    @Test func addMemoryReportsAFailedSaveInsteadOfSaved() async throws {
+        let failSaves = LockedValue(false)
+        let fixture = try Self.makeFixture(failSaves: failSaves)
+        let travel = try fixture.repository.createCollection(title: "Travel preferences", createdBy: .user)
+        let tool = AddMemoryTool(
+            modelContainer: fixture.container,
+            chatID: fixture.chatID,
+            coordinator: fixture.coordinator,
+            dependencies: fixture.dependencies
+        )
+
+        failSaves.update { $0 = true }
+        await #expect(throws: MemoryError.saveFailed) {
+            _ = try await tool.execute(arguments: [
+                "content": .string("Prefers window seats"),
+                "collection": .string(travel.handle),
+            ])
+        }
+        #expect(fixture.repository.allEntries().isEmpty)
+        #expect(!fixture.coordinator.hasQueuedDisclosures(forChatID: fixture.chatID))
+    }
+
+    @Test func createCollectionWithSeedsLeavesNothingBehindWhenTheSaveFails() async throws {
+        let failSaves = LockedValue(true)
+        let fixture = try Self.makeFixture(failSaves: failSaves)
+        let tool = CreateMemoryCollectionTool(
+            modelContainer: fixture.container,
+            chatID: fixture.chatID,
+            coordinator: fixture.coordinator,
+            dependencies: fixture.dependencies
+        )
+
+        await #expect(throws: MemoryError.saveFailed) {
+            _ = try await tool.execute(arguments: [
+                "title": .string("Trip to Lisbon"),
+                "initial_entries": .array([.string("Flying in May"), .string("Staying in Alfama")]),
+            ])
+        }
+        #expect(fixture.repository.collections().isEmpty)
+        #expect(fixture.repository.allEntries().isEmpty)
+        #expect(!fixture.coordinator.hasQueuedDisclosures(forChatID: fixture.chatID))
+    }
+
     @Test func addToAsksFirstCollectionProposesInstead() async throws {
         let fixture = try Self.makeFixture()
-        let gated = fixture.repository.createCollection(
+        let gated = try fixture.repository.createCollection(
             title: "Sensitive",
             accessLevel: .asksFirst,
             createdBy: .user
@@ -138,8 +188,8 @@ struct MemoryWriteToolsTests {
 
     @Test func supersedeInWritesFreelyCollectionAppliesImmediately() async throws {
         let fixture = try Self.makeFixture()
-        let facts = fixture.repository.createCollection(title: "Facts", createdBy: .user)
-        let old = fixture.repository.addEntry(body: "Works at Acme", to: facts, createdBy: .ai)
+        let facts = try fixture.repository.createCollection(title: "Facts", createdBy: .user)
+        let old = try fixture.repository.addEntry(body: "Works at Acme", to: facts, createdBy: .ai)
         let tool = SupersedeMemoryTool(
             modelContainer: fixture.container,
             chatID: fixture.chatID,
@@ -160,12 +210,12 @@ struct MemoryWriteToolsTests {
 
     @Test func supersedeInAsksFirstCollectionProposesWithTarget() async throws {
         let fixture = try Self.makeFixture()
-        let gated = fixture.repository.createCollection(
+        let gated = try fixture.repository.createCollection(
             title: "Sensitive",
             accessLevel: .asksFirst,
             createdBy: .user
         )
-        let old = fixture.repository.addEntry(body: "Old fact", to: gated, createdBy: .user)
+        let old = try fixture.repository.addEntry(body: "Old fact", to: gated, createdBy: .user)
         let tool = SupersedeMemoryTool(
             modelContainer: fixture.container,
             chatID: fixture.chatID,
@@ -258,7 +308,7 @@ struct MemoryWriteToolsTests {
 
     @Test func createRefusesDuplicateTitle() async throws {
         let fixture = try Self.makeFixture()
-        fixture.repository.createCollection(title: "Travel preferences", createdBy: .user)
+        try fixture.repository.createCollection(title: "Travel preferences", createdBy: .user)
         let tool = CreateMemoryCollectionTool(
             modelContainer: fixture.container,
             chatID: fixture.chatID,

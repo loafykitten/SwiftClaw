@@ -96,8 +96,11 @@ struct MemoryEntryDetailView: View {
             titleVisibility: .visible
         ) {
             Button("Delete Memory", role: .destructive) {
-                repository.deleteEntry(entry, actor: .user)
-                dismiss()
+                // A failed save rolls back, so the entry is still there;
+                // stay on it rather than dismissing as if it were gone.
+                if (try? repository.deleteEntry(entry, actor: .user)) != nil {
+                    dismiss()
+                }
             }
         } message: {
             Text("The entry is removed from memory. The activity feed keeps a record of what it said.")
@@ -108,7 +111,7 @@ struct MemoryEntryDetailView: View {
         Menu {
             ForEach(collections.filter { $0.id != entry.collection?.id }) { collection in
                 Button(collection.title) {
-                    repository.moveEntry(entry, to: collection, actor: .user)
+                    try? repository.moveEntry(entry, to: collection, actor: .user)
                 }
             }
         } label: {

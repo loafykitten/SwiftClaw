@@ -110,22 +110,22 @@ struct MemoryReviewIntegrationTests {
 
     @Test func reviewContextIncludesEverythingExceptOtherFeatureScopes() throws {
         let fixture = try Self.makeFixture()
-        let pinnedElsewhere = fixture.repository.createCollection(
+        let pinnedElsewhere = try fixture.repository.createCollection(
             title: "Identity", scope: .calendar, isPinned: true, createdBy: .user
         )
-        fixture.repository.addEntry(body: "Works as a designer", to: pinnedElsewhere, createdBy: .user)
-        let emailScoped = fixture.repository.createCollection(
+        try fixture.repository.addEntry(body: "Works as a designer", to: pinnedElsewhere, createdBy: .user)
+        let emailScoped = try fixture.repository.createCollection(
             title: "Email review preferences", scope: .email, createdBy: .user
         )
-        fixture.repository.addEntry(body: "Deletes newsletters unread", to: emailScoped, createdBy: .ai)
-        let globalUnpinned = fixture.repository.createCollection(title: "Dining", createdBy: .user)
-        fixture.repository.addEntry(body: "Orders medium spice", to: globalUnpinned, createdBy: .user)
-        let inbox = fixture.repository.ensureInbox()
-        fixture.repository.addEntry(body: "Wants shipping notifications deleted", to: inbox, createdBy: .ai)
-        let otherScoped = fixture.repository.createCollection(
+        try fixture.repository.addEntry(body: "Deletes newsletters unread", to: emailScoped, createdBy: .ai)
+        let globalUnpinned = try fixture.repository.createCollection(title: "Dining", createdBy: .user)
+        try fixture.repository.addEntry(body: "Orders medium spice", to: globalUnpinned, createdBy: .user)
+        let inbox = try fixture.repository.ensureInbox()
+        try fixture.repository.addEntry(body: "Wants shipping notifications deleted", to: inbox, createdBy: .ai)
+        let otherScoped = try fixture.repository.createCollection(
             title: "Notes habits", scope: .notes, createdBy: .user
         )
-        fixture.repository.addEntry(body: "Daily notes every morning", to: otherScoped, createdBy: .user)
+        try fixture.repository.addEntry(body: "Daily notes every morning", to: otherScoped, createdBy: .user)
 
         let block = try #require(MemoryReviewContextBuilder.block(
             for: .email, repository: fixture.repository, isEnabled: true

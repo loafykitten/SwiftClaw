@@ -93,7 +93,7 @@ struct MemoryView: View {
             }
             .task {
                 guard !ProcessInfo.processInfo.isRunningInPreview else { return }
-                repository.ensureInbox()
+                _ = try? repository.ensureInbox()
             }
     }
 

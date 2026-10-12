@@ -99,7 +99,7 @@ struct AddMemoryTool: Tool {
 
             switch target.accessLevel {
             case .writesFreely:
-                let entry = repository.addEntry(
+                let entry = try repository.addEntry(
                     body: content,
                     tags: tags,
                     to: target,
@@ -203,7 +203,7 @@ struct SupersedeMemoryTool: Tool {
             } catch let memoryError as MemoryError {
                 throw ToolError.executionFailed(memoryError.errorDescription ?? String(describing: memoryError))
             }
-            let target = old.collection ?? repository.ensureInbox()
+            let target = try old.collection ?? repository.ensureInbox()
 
             switch target.accessLevel {
             case .writesFreely:
@@ -355,23 +355,31 @@ struct CreateMemoryCollectionTool: Tool {
 
             switch accessLevel {
             case .writesFreely:
-                let collection = repository.createCollection(
-                    title: title,
-                    details: details?.isEmpty == true ? nil : details,
-                    tags: tags,
-                    accessLevel: .writesFreely,
-                    scope: scope,
-                    createdBy: .ai,
-                    chatID: chatID
-                )
-                coordinator.enqueueCollectionCreation(collectionID: collection.id, chatID: chatID)
-                for body in initialEntries {
-                    let entry = repository.addEntry(
-                        body: body,
-                        to: collection,
+                // One save for the collection and its seeds: a failure must
+                // not leave a half-seeded collection behind, and nothing is
+                // disclosed until the whole creation persisted.
+                let (collection, entries) = try repository.performBatch {
+                    let collection = try repository.createCollection(
+                        title: title,
+                        details: details?.isEmpty == true ? nil : details,
+                        tags: tags,
+                        accessLevel: .writesFreely,
+                        scope: scope,
                         createdBy: .ai,
-                        sourceChatID: chatID
+                        chatID: chatID
                     )
+                    let entries = try initialEntries.map { body in
+                        try repository.addEntry(
+                            body: body,
+                            to: collection,
+                            createdBy: .ai,
+                            sourceChatID: chatID
+                        )
+                    }
+                    return (collection, entries)
+                }
+                coordinator.enqueueCollectionCreation(collectionID: collection.id, chatID: chatID)
+                for entry in entries {
                     coordinator.enqueueWrite(entryID: entry.id, chatID: chatID)
                 }
                 let seeded = initialEntries.isEmpty ? "" : " with \(initialEntries.count) entries"
@@ -426,7 +434,7 @@ nonisolated enum MemoryToolArguments {
     ) throws -> MemoryCollection {
         guard let reference = reference?.trimmingCharacters(in: .whitespacesAndNewlines),
               !reference.isEmpty else {
-            return repository.ensureInbox()
+            return try repository.ensureInbox()
         }
         do {
             return try OpenMemoryCollectionTool.Dependencies.resolveCollection(

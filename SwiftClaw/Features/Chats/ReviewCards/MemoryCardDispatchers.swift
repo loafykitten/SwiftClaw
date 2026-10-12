@@ -47,6 +47,8 @@ final class MemoryWriteDispatcher: ReviewActionDispatcher {
 final class MemoryProposalDispatcher: ReviewActionDispatcher {
     let reviewType: ReviewType = .memoryProposal
 
+    private static let logger = AppLog.make("memory")
+
     private let modelContainer: ModelContainer
     private let repositoryProvider: @MainActor () -> MemoryRepository?
 
@@ -83,27 +85,38 @@ final class MemoryProposalDispatcher: ReviewActionDispatcher {
         proposal.status = .applying
         guard (try? context.save()) != nil else { return }
 
-        let target = resolveTargetCollection(for: proposal, repository: repository)
-        for text in Self.entryTexts(for: proposal) {
-            writeEntry(
-                text: text,
-                proposal: proposal,
-                target: target,
-                repository: repository
-            )
+        // The target collection, every entry, and the acceptance event land
+        // in one repository save — all or nothing — so a failed save can
+        // never leave a half-applied proposal or a proposal marked applied
+        // whose entries were rolled back.
+        do {
+            try repository.performBatch {
+                let target = try resolveTargetCollection(for: proposal, repository: repository)
+                for text in Self.entryTexts(for: proposal) {
+                    try writeEntry(
+                        text: text,
+                        proposal: proposal,
+                        target: target,
+                        repository: repository
+                    )
+                }
+                try repository.recordProposalResolution(accepted: true, proposal: proposal, collectionID: target.id)
+            }
+        } catch {
+            // Nothing persisted: return the proposal to `.pending` so the
+            // card offers Accept again instead of claiming it saved.
+            Self.logger.error("Memory proposal approval failed: \(String(describing: error))")
+            proposal.status = .pending
+            try? context.save()
+            return
         }
 
         proposal.status = .applied
         proposal.resolvedAt = .now
-        guard (try? context.save()) != nil else {
-            // The writes happened but the terminal status couldn't persist:
-            // leave `.applying` (never re-approvable) rather than pretending
-            // nothing happened. The entries themselves are already saved and
-            // disclosed by this card.
-            repository.recordProposalResolution(accepted: true, proposal: proposal, collectionID: target.id)
-            return
-        }
-        repository.recordProposalResolution(accepted: true, proposal: proposal, collectionID: target.id)
+        // If this save fails the writes still happened: leave `.applying`
+        // (never re-approvable) rather than pretending nothing happened.
+        // The entries are saved and disclosed by this card.
+        try? context.save()
     }
 
     private func reject(_ proposal: MemoryProposal, in context: ModelContext) {
@@ -112,7 +125,7 @@ final class MemoryProposalDispatcher: ReviewActionDispatcher {
         guard (try? context.save()) != nil else { return }
         // Rejected proposals persist — their texts feed review runs'
         // "previously declined" suppression context (Phase 3).
-        repositoryProvider()?.recordProposalResolution(
+        try? repositoryProvider()?.recordProposalResolution(
             accepted: false,
             proposal: proposal,
             collectionID: proposal.targetCollectionID
@@ -122,7 +135,7 @@ final class MemoryProposalDispatcher: ReviewActionDispatcher {
     private func resolveTargetCollection(
         for proposal: MemoryProposal,
         repository: MemoryRepository
-    ) -> MemoryCollection {
+    ) throws -> MemoryCollection {
         if let targetID = proposal.targetCollectionID,
            let existing = repository.collection(id: targetID) {
             return existing
@@ -135,7 +148,7 @@ final class MemoryProposalDispatcher: ReviewActionDispatcher {
             }) {
                 return existing
             }
-            return repository.createCollection(
+            return try repository.createCollection(
                 title: title,
                 details: proposal.newCollectionDetails,
                 tags: proposal.tags,
@@ -147,7 +160,7 @@ final class MemoryProposalDispatcher: ReviewActionDispatcher {
         }
         // Target vanished between proposing and approving — never
         // force-file; the Inbox is the pressure valve.
-        return repository.ensureInbox()
+        return try repository.ensureInbox()
     }
 
     /// Writes carry `disclosedAt` in the same repository save as the entry
@@ -160,7 +173,10 @@ final class MemoryProposalDispatcher: ReviewActionDispatcher {
         proposal: MemoryProposal,
         target: MemoryCollection,
         repository: MemoryRepository
-    ) {
+    ) throws {
+        // Only ever called inside `performBatch`, where saves are deferred:
+        // `supersedeEntry` can then throw only its pre-mutation
+        // `alreadySuperseded` guard, so falling back to a plain add is safe.
         if let supersedesID = proposal.supersedesEntryID,
            let old = repository.entry(id: supersedesID),
            old.supersededByID == nil,
@@ -174,7 +190,7 @@ final class MemoryProposalDispatcher: ReviewActionDispatcher {
            )) != nil {
             return
         }
-        repository.addEntry(
+        try repository.addEntry(
             body: text,
             tags: proposal.tags,
             to: target,

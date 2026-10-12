@@ -18,6 +18,7 @@ struct MemoryEntryEditorSheet: View {
     @State private var tagsText = ""
     @State private var collectionID: UUID?
     @State private var hasLoaded = false
+    @State private var saveError: String?
 
     private var sheetTitle: String {
         switch mode {
@@ -63,6 +64,10 @@ struct MemoryEntryEditorSheet: View {
                         }
                     }
                 }
+
+                if let saveError {
+                    MemorySaveErrorSection(message: saveError)
+                }
             }
             .formStyle(.grouped)
 
@@ -93,14 +98,33 @@ struct MemoryEntryEditorSheet: View {
         let trimmedBody = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
         let tags = MemoryCollectionEditorSheet.parseTags(tagsText)
 
-        switch mode {
-        case .create:
-            guard let collectionID,
-                  let collection = collections.first(where: { $0.id == collectionID }) else { return }
-            repository.addEntry(body: trimmedBody, tags: tags, to: collection, createdBy: .user)
-        case .edit(let entry):
-            repository.editEntry(entry, body: trimmedBody, tags: tags, actor: .user)
+        do {
+            switch mode {
+            case .create:
+                guard let collectionID,
+                      let collection = collections.first(where: { $0.id == collectionID }) else { return }
+                try repository.addEntry(body: trimmedBody, tags: tags, to: collection, createdBy: .user)
+            case .edit(let entry):
+                try repository.editEntry(entry, body: trimmedBody, tags: tags, actor: .user)
+            }
+        } catch {
+            // Keep the sheet (and the typed text) open on failure.
+            saveError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            return
         }
         dismiss()
+    }
+}
+
+/// Inline save-failure notice shared by the Memory editor sheets, which stay
+/// open (keeping the user's input) when a save is rolled back.
+struct MemorySaveErrorSection: View {
+    let message: String
+
+    var body: some View {
+        Section {
+            Label(message, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.red)
+        }
     }
 }

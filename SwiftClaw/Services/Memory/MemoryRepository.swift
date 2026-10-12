@@ -2,7 +2,7 @@ import Foundation
 import Observation
 import SwiftData
 
-nonisolated enum MemoryError: LocalizedError {
+nonisolated enum MemoryError: LocalizedError, Equatable {
     case collectionNotFound
     case cannotDeleteInbox
     case cannotScopeInbox
@@ -10,6 +10,9 @@ nonisolated enum MemoryError: LocalizedError {
     case ambiguousHandle(handle: String, matchCount: Int)
     case alreadySuperseded
     case notUndoable
+    /// The store rejected the save. The context was rolled back, so nothing
+    /// from the attempted mutation persisted.
+    case saveFailed
 
     var errorDescription: String? {
         switch self {
@@ -27,6 +30,8 @@ nonisolated enum MemoryError: LocalizedError {
             "That memory entry was already superseded; supersede the current entry instead."
         case .notUndoable:
             "That memory entry has been edited or superseded since it was added, so the write can no longer be undone."
+        case .saveFailed:
+            "Memory couldn't be saved, so no change was made."
         }
     }
 }
@@ -52,8 +57,20 @@ final class MemoryRepository {
     /// prefix-stability requirement).
     private(set) var mutationGeneration = 0
 
-    init(modelContext: ModelContext) {
+    /// Performs the actual store write. A seam so tests can inject a
+    /// persistence failure; production always calls `ModelContext.save()`.
+    private let persist: @MainActor (ModelContext) throws -> Void
+
+    /// Nonzero while `performBatch` is running: mutation saves are deferred
+    /// to one save when the outermost batch finishes.
+    private var batchDepth = 0
+
+    init(
+        modelContext: ModelContext,
+        persist: @escaping @MainActor (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.modelContext = modelContext
+        self.persist = persist
     }
 
     // MARK: - Inbox
@@ -65,7 +82,7 @@ final class MemoryRepository {
     /// unscopable, and always `writesFreely` (a proposal the user accepted
     /// or a low-confidence AI save must never be blocked from landing).
     @discardableResult
-    func ensureInbox() -> MemoryCollection {
+    func ensureInbox() throws -> MemoryCollection {
         if let inbox = fetchInbox() {
             return inbox
         }
@@ -77,7 +94,7 @@ final class MemoryRepository {
             createdBy: .user
         )
         modelContext.insert(inbox)
-        save()
+        try save()
         return inbox
     }
 
@@ -123,7 +140,7 @@ final class MemoryRepository {
         isPinned: Bool = false,
         createdBy: MemoryActor,
         chatID: UUID? = nil
-    ) -> MemoryCollection {
+    ) throws -> MemoryCollection {
         let collection = MemoryCollection(
             title: title,
             details: details,
@@ -141,7 +158,7 @@ final class MemoryRepository {
             actor: createdBy,
             chatID: chatID
         )
-        save()
+        try save()
         return collection
     }
 
@@ -154,7 +171,7 @@ final class MemoryRepository {
         tags: [String]? = nil,
         isPinned: Bool? = nil,
         actor: MemoryActor
-    ) {
+    ) throws {
         if let title { collection.title = title }
         if let details { collection.details = details }
         if let tags { collection.tags = tags }
@@ -166,7 +183,7 @@ final class MemoryRepository {
             snapshotText: collection.title,
             actor: actor
         )
-        save()
+        try save()
     }
 
     /// Always a user action — the AI never changes a collection's access
@@ -175,7 +192,7 @@ final class MemoryRepository {
     func setAccessLevel(
         _ accessLevel: MemoryCollection.AccessLevel,
         for collection: MemoryCollection
-    ) {
+    ) throws {
         guard collection.accessLevel != accessLevel else { return }
         collection.accessLevel = accessLevel
         collection.updatedAt = .now
@@ -185,7 +202,7 @@ final class MemoryRepository {
             snapshotText: collection.title,
             actor: .user
         )
-        save()
+        try save()
     }
 
     func setScope(
@@ -203,7 +220,7 @@ final class MemoryRepository {
             snapshotText: collection.title,
             actor: actor
         )
-        save()
+        try save()
     }
 
     func deleteCollection(_ collection: MemoryCollection, actor: MemoryActor) throws {
@@ -211,9 +228,10 @@ final class MemoryRepository {
         let title = collection.title
         let collectionID = collection.id
         // Cascade deletion is about to remove these entries; any fact
-        // elsewhere that one of them superseded becomes current again
-        // rather than staying stamped by (and hidden behind) a dead entry.
-        clearSupersededStamps(pointingTo: Set(collection.entries.map(\.id)))
+        // elsewhere that one of them superseded is re-pointed at a surviving
+        // successor, or becomes current again, rather than staying stamped
+        // by (and hidden behind) a dead entry.
+        repairSupersededStamps(removing: Set(collection.entries.map(\.id)))
         modelContext.delete(collection)
         recordEvent(
             kind: .deleted,
@@ -221,7 +239,7 @@ final class MemoryRepository {
             snapshotText: title,
             actor: actor
         )
-        save()
+        try save()
     }
 
     // MARK: - Entries
@@ -239,7 +257,7 @@ final class MemoryRepository {
         createdBy: MemoryActor,
         sourceChatID: UUID? = nil,
         disclosedAt: Date? = nil
-    ) -> MemoryEntry {
+    ) throws -> MemoryEntry {
         let entry = MemoryEntry(
             body: body,
             tags: tags,
@@ -258,7 +276,7 @@ final class MemoryRepository {
             actor: createdBy,
             chatID: sourceChatID
         )
-        save()
+        try save()
         return entry
     }
 
@@ -267,7 +285,7 @@ final class MemoryRepository {
         body: String? = nil,
         tags: [String]? = nil,
         actor: MemoryActor
-    ) {
+    ) throws {
         let previousBody = entry.body
         if let body { entry.body = body }
         if let tags { entry.tags = tags }
@@ -280,14 +298,14 @@ final class MemoryRepository {
             snapshotText: previousBody,
             actor: actor
         )
-        save()
+        try save()
     }
 
     func moveEntry(
         _ entry: MemoryEntry,
         to collection: MemoryCollection,
         actor: MemoryActor
-    ) {
+    ) throws {
         guard entry.collection?.id != collection.id else { return }
         entry.collection?.updatedAt = .now
         entry.collection = collection
@@ -300,7 +318,7 @@ final class MemoryRepository {
             snapshotText: entry.body,
             actor: actor
         )
-        save()
+        try save()
     }
 
     /// The only way an established fact changes: a replacement entry is
@@ -336,15 +354,15 @@ final class MemoryRepository {
             actor: createdBy,
             chatID: sourceChatID
         )
-        save()
+        try save()
         return replacement
     }
 
-    func deleteEntry(_ entry: MemoryEntry, actor: MemoryActor) {
+    func deleteEntry(_ entry: MemoryEntry, actor: MemoryActor) throws {
         let body = entry.body
         let entryID = entry.id
         let collection = entry.collection
-        clearSupersededStamps(pointingTo: entryID)
+        repairSupersededStamps(removing: entryID)
         modelContext.delete(entry)
         collection?.updatedAt = .now
         recordEvent(
@@ -354,7 +372,7 @@ final class MemoryRepository {
             snapshotText: body,
             actor: actor
         )
-        save()
+        try save()
     }
 
     /// The disclosure chip's Undo: the write never happened, so this is a
@@ -367,7 +385,7 @@ final class MemoryRepository {
         let body = entry.body
         let entryID = entry.id
         let collection = entry.collection
-        clearSupersededStamps(pointingTo: entryID)
+        repairSupersededStamps(removing: entryID)
         modelContext.delete(entry)
         collection?.updatedAt = .now
         recordEvent(
@@ -377,27 +395,51 @@ final class MemoryRepository {
             snapshotText: body,
             actor: .user
         )
-        save()
+        try save()
     }
 
     /// Removing an entry (delete or undo) must not leave dangling
-    /// `supersededByID` stamps: the fact it replaced becomes current again.
-    private func clearSupersededStamps(pointingTo entryID: UUID) {
-        clearSupersededStamps(pointingTo: [entryID])
+    /// `supersededByID` stamps. See `repairSupersededStamps(removing:)`.
+    private func repairSupersededStamps(removing entryID: UUID) {
+        repairSupersededStamps(removing: [entryID])
     }
 
-    /// Collection deletion clears every affected stamp from one fetch rather
-    /// than issuing one fetch for every cascaded entry.
-    private func clearSupersededStamps(pointingTo entryIDs: Set<UUID>) {
+    /// Re-points every surviving entry stamped by a removed one. A removed
+    /// entry that was itself superseded hands its predecessors on to its
+    /// own (surviving) successor — deleting B from `A → B → C` leaves
+    /// `A → C`, never a revived A beside C. Only when no successor survives
+    /// does the predecessor become current again. Collection deletion
+    /// repairs every affected stamp from one fetch rather than one fetch
+    /// per cascaded entry.
+    private func repairSupersededStamps(removing entryIDs: Set<UUID>) {
         guard !entryIDs.isEmpty else { return }
         let predicate = #Predicate<MemoryEntry> { $0.supersededByID != nil }
         let stamped = (try? modelContext.fetch(FetchDescriptor(predicate: predicate))) ?? []
+        var successorOfRemoved: [UUID: UUID] = [:]
+        for entry in stamped where entryIDs.contains(entry.id) {
+            successorOfRemoved[entry.id] = entry.supersededByID
+        }
         let restoredAt = Date.now
-        for entry in stamped where entry.supersededByID.map(entryIDs.contains) == true {
-            entry.supersededByID = nil
-            // Exposure fragments are keyed by the owning collection's
-            // timestamp, including when a deletion restores a fact elsewhere.
-            entry.collection?.updatedAt = restoredAt
+        for entry in stamped where !entryIDs.contains(entry.id) {
+            guard var successor = entry.supersededByID, entryIDs.contains(successor) else { continue }
+            // Walk past removed links; `visited` guards a corrupt cycle.
+            var visited: Set<UUID> = []
+            var survivor: UUID?
+            while visited.insert(successor).inserted {
+                guard entryIDs.contains(successor) else {
+                    survivor = successor
+                    break
+                }
+                guard let next = successorOfRemoved[successor] else { break }
+                successor = next
+            }
+            entry.supersededByID = survivor
+            if survivor == nil {
+                // Exposure fragments are keyed by the owning collection's
+                // timestamp, including when a deletion restores a fact
+                // elsewhere.
+                entry.collection?.updatedAt = restoredAt
+            }
         }
     }
 
@@ -584,14 +626,15 @@ final class MemoryRepository {
     }
 
     /// Records the resolution of a memory proposal in the activity feed
-    /// (`MemoryProposalDispatcher` calls this after the terminal status
-    /// save succeeds). Entry/collection writes an acceptance performed have
+    /// (`MemoryProposalDispatcher` records an acceptance in the same batch
+    /// as its writes, and a dismissal after the terminal status save
+    /// succeeds). Entry/collection writes an acceptance performed have
     /// their own events already; this row records the decision itself.
     func recordProposalResolution(
         accepted: Bool,
         proposal: MemoryProposal,
         collectionID: UUID?
-    ) {
+    ) throws {
         recordEvent(
             kind: accepted ? .proposalAccepted : .proposalDismissed,
             collectionID: collectionID,
@@ -599,7 +642,7 @@ final class MemoryRepository {
             actor: .user,
             chatID: proposal.chatID
         )
-        save()
+        try save()
     }
 
     // MARK: - Activity & summary
@@ -656,19 +699,43 @@ final class MemoryRepository {
         ))
     }
 
+    /// Runs several mutations as one save: either all of them persist or
+    /// none do. Mutation saves inside `body` are deferred; a throw from
+    /// `body` rolls the context back, and a failed final save throws
+    /// `MemoryError.saveFailed` (also after rolling back). Used where a
+    /// partial write would be misleading — a proposal approval, or a new
+    /// collection with its seed entries.
+    func performBatch<T>(_ body: () throws -> T) throws -> T {
+        batchDepth += 1
+        let result: T
+        do {
+            result = try body()
+        } catch {
+            batchDepth -= 1
+            if batchDepth == 0 { modelContext.rollback() }
+            throw error
+        }
+        batchDepth -= 1
+        try save()
+        return result
+    }
+
     /// Persists the current context and bumps `mutationGeneration`. Every
     /// mutation method above funnels through this so the activity event and
     /// the mutation land in one save and the prompt cache invalidates once.
-    /// Failures log-and-continue (the `EmailRepository` precedent) but roll
-    /// the context back so unsaved mutations don't linger as ghosts that
-    /// `@Query` UI and the prompt builder would show as if persisted.
-    func save() {
+    /// A failure rolls the context back — so unsaved mutations don't linger
+    /// as ghosts that `@Query` UI and the prompt builder would show as if
+    /// persisted — and throws `MemoryError.saveFailed`, so no caller can
+    /// report a write that didn't happen.
+    func save() throws {
+        guard batchDepth == 0 else { return }
         do {
-            try modelContext.save()
+            try persist(modelContext)
             mutationGeneration += 1
         } catch {
             modelContext.rollback()
             Self.logger.error("MemoryRepository save failed: \(String(describing: error))")
+            throw MemoryError.saveFailed
         }
     }
 }

@@ -100,7 +100,7 @@ struct MemoryEntryListView: View {
             ) {
                 Button("Delete Memory", role: .destructive) {
                     if let entry = entryPendingDeletion {
-                        repository.deleteEntry(entry, actor: .user)
+                        try? repository.deleteEntry(entry, actor: .user)
                     }
                     entryPendingDeletion = nil
                 }
@@ -302,7 +302,7 @@ struct MemoryEntryListView: View {
                 }
             }
             Button {
-                repository.updateCollection(collection, isPinned: !collection.isPinned, actor: .user)
+                try? repository.updateCollection(collection, isPinned: !collection.isPinned, actor: .user)
             } label: {
                 Label(
                     collection.isPinned ? "Unpin" : "Pin",

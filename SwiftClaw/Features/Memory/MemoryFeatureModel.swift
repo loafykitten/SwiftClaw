@@ -47,7 +47,7 @@ final class MemoryFeatureModel {
         // the list the user is about to see (the tile is only rendered when
         // the feature is enabled, so this never creates data for a disabled
         // feature).
-        _ = repository.ensureInbox()
+        _ = try? repository.ensureInbox()
         tileSummary = repository.summary()
     }
 }
