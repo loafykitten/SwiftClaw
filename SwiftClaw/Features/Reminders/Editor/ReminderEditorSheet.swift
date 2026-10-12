@@ -108,6 +108,17 @@ struct ReminderEditorSheet: View {
         .frame(minWidth: 420, minHeight: 540)
         #endif
         .onAppear(perform: loadDraft)
+        .alert(
+            "Couldn't Save Reminder",
+            isPresented: Binding(
+                get: { saveErrorMessage != nil },
+                set: { if !$0 { saveErrorMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveErrorMessage ?? "")
+        }
     }
 
     private func loadDraft() {

@@ -414,6 +414,62 @@ struct RecurrenceExpanderTests {
         #expect(starts == [Self.date(2026, 1, 15, 9), Self.date(2026, 2, 15, 9), Self.date(2026, 3, 15, 9)])
     }
 
+    // MARK: - Overlapping BY-part selectors
+
+    @Test func yearlyOverlappingByDaySelectorsCountEachInstantOnce() {
+        // 2025-12-29 is a Monday; Jan 5 matches both MO and 1MO.
+        let starts = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=YEARLY;BYDAY=MO,1MO;COUNT=3"),
+            eventStart: Self.date(2025, 12, 29, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2025, 12, 1), Self.date(2026, 3, 1)),
+            timeZone: Self.utc
+        )
+        #expect(starts == [Self.date(2025, 12, 29, 9), Self.date(2026, 1, 5, 9), Self.date(2026, 1, 12, 9)])
+    }
+
+    @Test func monthlyOverlappingByDaySelectorsCountEachInstantOnce() {
+        // 2026-06-22 is a Monday; Jul 6 matches both MO and 1MO.
+        let starts = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=MONTHLY;BYDAY=MO,1MO;COUNT=4"),
+            eventStart: Self.date(2026, 6, 22, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2026, 6, 1), Self.date(2026, 9, 1)),
+            timeZone: Self.utc
+        )
+        #expect(starts == [
+            Self.date(2026, 6, 22, 9), Self.date(2026, 6, 29, 9),
+            Self.date(2026, 7, 6, 9), Self.date(2026, 7, 13, 9),
+        ])
+    }
+
+    @Test func monthlyOverlappingByMonthDaySelectorsCountEachInstantOnce() {
+        // In 31-day months, 31 and -1 name the same day.
+        let starts = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=MONTHLY;BYMONTHDAY=31,-1;COUNT=4"),
+            eventStart: Self.date(2026, 1, 31, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2026, 1, 1), Self.date(2026, 6, 1)),
+            timeZone: Self.utc
+        )
+        #expect(starts == [
+            Self.date(2026, 1, 31, 9), Self.date(2026, 2, 28, 9),
+            Self.date(2026, 3, 31, 9), Self.date(2026, 4, 30, 9),
+        ])
+    }
+
+    @Test func overlappingSetPositionsSelectACandidateOnce() {
+        // A lone candidate is both the first and the last.
+        let starts = RecurrenceExpander.occurrenceStarts(
+            rule: Self.rule("FREQ=MONTHLY;BYMONTHDAY=31;BYSETPOS=1,-1;COUNT=3"),
+            eventStart: Self.date(2026, 1, 31, 9),
+            duration: 3600,
+            window: Self.window(Self.date(2026, 1, 1), Self.date(2026, 7, 1)),
+            timeZone: Self.utc
+        )
+        #expect(starts == [Self.date(2026, 1, 31, 9), Self.date(2026, 3, 31, 9), Self.date(2026, 5, 31, 9)])
+    }
+
     /// A hand-built rule bypasses the parser's INTERVAL cap; period
     /// arithmetic must stop instead of trapping on overflow.
     @Test(arguments: RecurrenceRule.Frequency.allCases)

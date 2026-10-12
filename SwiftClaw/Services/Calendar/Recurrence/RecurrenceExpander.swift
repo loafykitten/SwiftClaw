@@ -262,7 +262,9 @@ nonisolated enum RecurrenceExpander {
             let allowed = Set(rule.monthsOfYear)
             candidates = candidates.filter { allowed.contains(calendar.component(.month, from: $0)) }
         }
-        return candidates.sorted()
+        // BY-part entries can overlap ("BYDAY=MO,1MO", "BYMONTHDAY=31,-1");
+        // the period's set holds each instant once, before BYSETPOS and COUNT.
+        return Set(candidates).sorted()
     }
 
     /// Expands one month's candidates: BYMONTHDAY days, BYDAY weekday matches
@@ -353,14 +355,15 @@ nonisolated enum RecurrenceExpander {
     }
 
     /// BYSETPOS selects 1-based positions (negative = from the end) from the
-    /// period's sorted candidate set.
+    /// period's sorted candidate set. Positions that land on the same
+    /// candidate ("BYSETPOS=1,-1" over a single match) select it once.
     private static func applySetPositions(_ positions: [Int], to candidates: [Date]) -> [Date] {
         let sorted = candidates.sorted()
-        var selected: [Date] = []
+        var selected: Set<Date> = []
         for position in positions {
             let index = position > 0 ? position - 1 : sorted.count + position
             if sorted.indices.contains(index) {
-                selected.append(sorted[index])
+                selected.insert(sorted[index])
             }
         }
         return selected.sorted()
