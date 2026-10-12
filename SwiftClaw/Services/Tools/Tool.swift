@@ -55,8 +55,11 @@ nonisolated enum JSONValue: Codable, Sendable, Hashable {
         return nil
     }
 
+    /// The number as an `Int`, or `nil` when it isn't a whole number that
+    /// fits. Model-supplied arguments like `1e100` would otherwise trap in
+    /// `Int.init(_: Double)` before a tool gets a chance to clamp them.
     var intValue: Int? {
-        numberValue.map(Int.init)
+        numberValue.flatMap { Int(exactly: $0) }
     }
 
     var boolValue: Bool? {

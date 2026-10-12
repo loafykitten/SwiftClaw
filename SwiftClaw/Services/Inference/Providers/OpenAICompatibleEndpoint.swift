@@ -128,24 +128,23 @@ struct OpenAICompatibleClient: Sendable {
                 OpenAI-compatible response decode failed for provider \
                 \(providerID.rawValue, privacy: .public) model \(query.model, privacy: .public), \
                 but no HTTP response body was captured. Error: \
-                \(Self.describe(error), privacy: .public)
+                \(Self.describe(error))
                 """)
             return
         }
 
+        // Headers, the body, and the full URL are deliberately not logged:
+        // they can carry session cookies, user content, and private hosts.
         Self.logger.error("""
             OpenAI-compatible response decode failed for provider \
             \(providerID.rawValue, privacy: .public) model \(query.model, privacy: .public). \
-            Error: \(Self.describe(error), privacy: .public). \
+            Error: \(Self.describe(error)). \
             HTTP \(response.statusDescription, privacy: .public) \
-            \(response.method, privacy: .public) \(response.url, privacy: .public). \
+            \(response.method, privacy: .public) \(response.path). \
             content-type: \(response.contentType ?? "nil", privacy: .public); \
             bytes: \(response.bodyByteCount, privacy: .public); \
-            response id: \(response.responseID ?? "nil", privacy: .public); \
             response model: \(response.responseModel ?? "nil", privacy: .public); \
-            raw service_tier: \(response.serviceTier ?? "nil", privacy: .public); \
-            headers: \(response.headersSummary, privacy: .public); \
-            body preview: \(response.bodyPreview, privacy: .public)
+            raw service_tier: \(response.serviceTier ?? "nil", privacy: .public)
             """)
     }
 
@@ -217,32 +216,24 @@ private struct OpenAICompatibleResponseCaptureMiddleware: OpenAIMiddleware {
 }
 
 private nonisolated struct OpenAICompatibleCapturedResponse: Sendable {
-    private static let previewLimit = 4_096
-
     let method: String
-    let url: String
+    let path: String
     let statusCode: Int?
     let contentType: String?
-    let headersSummary: String
     let bodyByteCount: Int
-    let bodyPreview: String
-    let responseID: String?
     let responseModel: String?
     let serviceTier: String?
 
     init(response: URLResponse?, request: URLRequest, data: Data?) {
         let httpResponse = response as? HTTPURLResponse
         self.method = request.httpMethod ?? "UNKNOWN"
-        self.url = request.url?.absoluteString ?? "nil"
+        self.path = request.url?.path ?? "nil"
         self.statusCode = httpResponse?.statusCode
         self.contentType = httpResponse?.value(forHTTPHeaderField: "Content-Type")
             ?? response?.mimeType
-        self.headersSummary = Self.headerSummary(from: httpResponse)
         self.bodyByteCount = data?.count ?? 0
-        self.bodyPreview = Self.bodyPreview(from: data)
 
         let fields = Self.fields(from: data)
-        self.responseID = fields["id"]
         self.responseModel = fields["model"]
         self.serviceTier = fields["service_tier"]
     }
@@ -252,26 +243,6 @@ private nonisolated struct OpenAICompatibleCapturedResponse: Sendable {
         return "\(statusCode)"
     }
 
-    private static func headerSummary(from response: HTTPURLResponse?) -> String {
-        guard let response else { return "nil" }
-
-        return response.allHeaderFields
-            .map { key, value in "\(key): \(value)" }
-            .sorted()
-            .joined(separator: "; ")
-    }
-
-    private static func bodyPreview(from data: Data?) -> String {
-        guard let data, !data.isEmpty else { return "<empty>" }
-
-        let prefix = Data(data.prefix(previewLimit))
-        let decoded = String(data: prefix, encoding: .utf8)
-            ?? "<non-UTF-8 body prefix: \(prefix.count) bytes>"
-
-        guard data.count > previewLimit else { return decoded }
-        return "\(decoded)... <truncated \(data.count - previewLimit) bytes>"
-    }
-
     private static func fields(from data: Data?) -> [String: String] {
         guard let data,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -279,7 +250,7 @@ private nonisolated struct OpenAICompatibleCapturedResponse: Sendable {
         }
 
         var fields: [String: String] = [:]
-        for key in ["id", "model", "service_tier"] {
+        for key in ["model", "service_tier"] {
             if let value = object[key] {
                 fields[key] = String(describing: value)
             }

@@ -217,6 +217,7 @@ struct InferenceService: Sendable {
         let maxRounds = 8
 
         for _ in 0..<maxRounds {
+            try Task.checkCancellation()
             let query = Self.makeChatQuery(
                 messages: chatMessages,
                 modelID: resolved.modelID,
@@ -257,14 +258,7 @@ struct InferenceService: Sendable {
                     toolCalls: toolCalls
                 )))
 
-                for call in toolCalls {
-                    let output = await Self.executeToolCall(call, tools: tools)
-                    chatMessages.append(.tool(.init(
-                        content: .textContent(output),
-                        toolCallId: call.id
-                    )))
-                }
-
+                chatMessages += try await Self.toolResultMessages(for: toolCalls, tools: tools)
                 continue
             }
 
@@ -290,12 +284,33 @@ struct InferenceService: Sendable {
         throw InferenceError.toolLoopLimitReached(maxRounds)
     }
 
+    /// Executes one response's tool calls in order and returns their result
+    /// messages. Cancellation ends the round: once the completion is
+    /// cancelled, no later call in the batch may run (and mutate memory,
+    /// proposals, or other state).
+    static func toolResultMessages(
+        for calls: [ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam],
+        tools: [any Tool]
+    ) async throws -> [ChatQuery.ChatCompletionMessageParam] {
+        var messages = [ChatQuery.ChatCompletionMessageParam]()
+        for call in calls {
+            try Task.checkCancellation()
+            let output = try await executeToolCall(call, tools: tools)
+            messages.append(.tool(.init(
+                content: .textContent(output),
+                toolCallId: call.id
+            )))
+        }
+        return messages
+    }
+
     /// Executes a single model-requested tool call, returning the output or
-    /// an error description for the model to react to.
+    /// an error description for the model to react to. Cancellation is
+    /// rethrown rather than reported to the model.
     private static func executeToolCall(
         _ call: ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam,
         tools: [any Tool]
-    ) async -> String {
+    ) async throws -> String {
         let toolName = call.function.name
 
         guard let tool = tools.first(where: { $0.name == toolName }) else {
@@ -313,6 +328,10 @@ struct InferenceService: Sendable {
                 """)
             return output
         } catch {
+            if error is CancellationError || Task.isCancelled {
+                logger.info("Tool \(toolName, privacy: .public) cancelled")
+                throw CancellationError()
+            }
             logger.error("""
                 Tool \(toolName, privacy: .public) failed: \
                 \(String(describing: error))
@@ -482,14 +501,14 @@ struct InferenceService: Sendable {
             return content
         }
 
-        let formattedPrompt = systemPrompts.isEmpty
-            ? "(none)"
-            : systemPrompts.joined(separator: "\n\n")
+        // Only the size is logged: the prompt carries persona text, injected
+        // memories, and email/calendar context that must not reach the logs.
+        let characterCount = systemPrompts.reduce(0) { $0 + $1.count }
 
         logger.info("""
-            Formatted system prompt sent via \(providerID.rawValue, privacy: .public) \
-            model \(modelID, privacy: .public):
-            \(formattedPrompt, privacy: .public)
+            System prompt sent via \(providerID.rawValue, privacy: .public) \
+            model \(modelID, privacy: .public): \
+            \(systemPrompts.count) parts, \(characterCount) characters
             """)
     }
 
