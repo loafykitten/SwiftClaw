@@ -356,6 +356,93 @@ struct EmailReviewServiceTests {
     }
 
     @Test
+    func messageRestoredDuringInferenceLeavesItsThreadUnstamped() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let accountID = UUID()
+        repository.upsertMessages([
+            EmailRepositoryTests.simpleMessage(
+                uid: 1, messageID: "<restore-root@example.com>", subject: "Restore",
+                date: .now.addingTimeInterval(-600)
+            ),
+            EmailRepositoryTests.simpleMessage(
+                uid: 2, messageID: "<restore-reply@example.com>", subject: "Re: Restore",
+                date: .now.addingTimeInterval(-300),
+                inReplyTo: "<restore-root@example.com>", references: ["<restore-root@example.com>"]
+            ),
+        ], mailbox: "INBOX", accountID: accountID)
+        repository.resolveThreads()
+        let reply = try #require(try context.fetch(FetchDescriptor<Email>()).first {
+            $0.messageID == "<restore-reply@example.com>"
+        })
+        // Trashed, so the scheduled fetch leaves it out of the payload.
+        repository.delete(messageID: reply.id)
+
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
+        let capture = FetchResultCapture()
+        service.completeProvider = { _, _, _, tools in
+            if let fetchTool = tools.first(where: { $0.name == "fetch_inbox_emails" }) {
+                await capture.record((try? await fetchTool.execute(arguments: [:])) ?? "")
+            }
+            // Restored (e.g. reconciled back from Trash) before completion:
+            // same row ID, but the model never saw it.
+            await MainActor.run {
+                let lateContext = ModelContext(container)
+                let restored = try? lateContext.fetch(FetchDescriptor<Email>()).first {
+                    $0.messageID == "<restore-reply@example.com>"
+                }
+                restored?.isDeleted = false
+                try? lateContext.save()
+            }
+            return ""
+        }
+
+        #expect(await service.runOnce() == true)
+
+        #expect(await capture.result?.hasPrefix("1 thread ") == true, "the pass fetched the thread")
+        let thread = try #require(try ModelContext(container).fetch(FetchDescriptor<EmailThread>()).first)
+        #expect(thread.messages.count == 2)
+        #expect(thread.lastReviewedAt == nil, "the restored reply was never presented")
+    }
+
+    @Test
+    func messageOutsideTheReviewScopeDoesNotBlockStamping() async throws {
+        let container = try Self.inMemoryContainer()
+        let context = ModelContext(container)
+        let repository = EmailRepository(modelContext: context)
+        let accountID = UUID()
+        repository.upsertMessages([
+            EmailRepositoryTests.simpleMessage(
+                uid: 1, messageID: "<scoped-root@example.com>", subject: "Scoped",
+                date: .now.addingTimeInterval(-600)
+            ),
+        ], mailbox: "INBOX", accountID: accountID)
+        // A reply filed in a custom folder that isn't opted into review.
+        repository.upsertMessages([
+            EmailRepositoryTests.simpleMessage(
+                uid: 7, messageID: "<scoped-reply@example.com>", subject: "Re: Scoped",
+                date: .now.addingTimeInterval(-300),
+                inReplyTo: "<scoped-root@example.com>", references: ["<scoped-root@example.com>"]
+            ),
+        ], mailbox: "Work", accountID: accountID, role: .custom)
+        repository.resolveThreads()
+
+        let fixture = try Self.fixtureWithClawModel()
+        defer { fixture.cleanup() }
+        let service = EmailReviewService(modelContainer: container, userDefaults: fixture.defaults)
+        service.completeProvider = Self.fetchingProvider()
+
+        #expect(await service.runOnce() == true)
+
+        let thread = try #require(try ModelContext(container).fetch(FetchDescriptor<EmailThread>()).first)
+        #expect(thread.messages.count == 2)
+        #expect(thread.lastReviewedAt != nil, "an out-of-scope message is not unseen mail")
+    }
+
+    @Test
     func reviewPromptOmitsArchivedMessagesFromMixedThread() async throws {
         let container = try Self.inMemoryContainer()
         let context = ModelContext(container)

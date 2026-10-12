@@ -288,20 +288,27 @@ final class EmailReviewService {
     @MainActor
     private final class FetchedThreadCollector {
         private var seenMessageIDs: [UUID: Set<UUID>] = [:]
+        private var fetchFilters: [UUID: [EmailReviewFetchFilter]] = [:]
 
         var ids: Set<UUID> { Set(seenMessageIDs.keys) }
 
         func add(_ threads: [EmailReviewFetchedThread]) {
             for thread in threads {
                 seenMessageIDs[thread.threadID, default: []].formUnion(thread.messageIDs)
+                fetchFilters[thread.threadID, default: []].append(thread.filter)
             }
         }
 
-        /// False when the thread now holds a reviewable message that wasn't
-        /// in any fetch the model received — mail that arrived mid-pass.
+        /// False when, under any filter the thread was fetched with, it now
+        /// holds an in-scope message the model never received: mail that
+        /// arrived mid-pass, or one that became eligible (e.g. restored from
+        /// Trash) after the payload left it out.
         func isFullySeen(_ thread: EmailThread) -> Bool {
             let seen = seenMessageIDs[thread.id] ?? []
-            return thread.reviewableMessages.allSatisfy { seen.contains($0.id) }
+            return (fetchFilters[thread.id] ?? []).allSatisfy { filter in
+                EmailRepository.consideredMessages(of: thread, filter: filter)
+                    .allSatisfy { seen.contains($0.id) }
+            }
         }
     }
 

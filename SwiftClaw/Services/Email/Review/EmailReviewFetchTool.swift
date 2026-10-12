@@ -11,11 +11,14 @@ import os
 /// Returns the selected threads as JSON (the same `EmailReviewThreadDescriptor`
 /// payload that used to be inlined). The model is expected to call this first,
 /// review the result, then call `notify_user_about_emails`.
-/// One thread a `fetch_inbox_emails` call returned, with the IDs of every
-/// message it held at fetch time — the boundary of what the model saw.
-nonisolated struct EmailReviewFetchedThread: Sendable, Hashable {
+/// One thread a `fetch_inbox_emails` call returned, with the IDs of the
+/// messages its payload serialized — the boundary of what the model saw —
+/// and the filter that selected them, so completion can re-derive that
+/// scope (`EmailRepository.consideredMessages`) before stamping.
+nonisolated struct EmailReviewFetchedThread: Sendable {
     let threadID: UUID
     let messageIDs: Set<UUID>
+    let filter: EmailReviewFetchFilter
 }
 
 final class EmailReviewFetchTool: Tool {
@@ -38,8 +41,8 @@ final class EmailReviewFetchTool: Tool {
     /// Defaults used when the model omits optional arguments. The model can
     /// still override any of them when the user's message steers a pass.
     private let defaults: EmailReviewFetchDefaults
-    /// Reports the threads returned by each fetch call — with the message IDs
-    /// each held at fetch time — so the service can stamp exactly what was
+    /// Reports the threads returned by each fetch call — with the IDs of the
+    /// messages serialized for each — so the service can stamp exactly what was
     /// reviewed (the union across calls in a pass) and skip threads that
     /// gained mail the model never saw.
     private let onThreadsFetched: (@MainActor ([EmailReviewFetchedThread]) -> Void)?
@@ -84,14 +87,21 @@ final class EmailReviewFetchTool: Tool {
             let context = ModelContext(modelContainer)
             let repository = EmailRepository(modelContext: context)
             let threads = repository.fetchThreadsForReview(filter: filterToFetch)
-            onThreadsFetched?(threads.map { thread in
-                EmailReviewFetchedThread(threadID: thread.id, messageIDs: Set(thread.messages.map(\.id)))
-            })
-            let descriptors = threads.map { thread in
-                EmailReviewThreadDescriptor.make(
-                    for: thread,
-                    messages: EmailRepository.consideredMessages(of: thread, filter: filterToFetch)
+            // Report exactly the messages the payload serializes: a message
+            // the selection left out (e.g. a trashed one) was never shown to
+            // the model and mustn't count as seen if it becomes reviewable.
+            let selections = threads.map { thread in
+                (thread, EmailRepository.consideredMessages(of: thread, filter: filterToFetch))
+            }
+            onThreadsFetched?(selections.map { thread, messages in
+                EmailReviewFetchedThread(
+                    threadID: thread.id,
+                    messageIDs: Set(messages.map(\.id)),
+                    filter: filterToFetch
                 )
+            })
+            let descriptors = selections.map { thread, messages in
+                EmailReviewThreadDescriptor.make(for: thread, messages: messages)
             }
             return (descriptors, threads.count)
         }
