@@ -150,11 +150,12 @@ final class Email {
     var attachments: [EmailAttachment]
     var uid: Int
 
-    /// True for rows `upsertSentMessage` seeds locally to echo a just-sent
-    /// reply before the Sent-folder sync picks it up. Carries a client-side
-    /// synthetic uid + is promoted to the real server row when the matching
-    /// `messageID` arrives via `upsertMessages`. See
-    /// `EmailRepository.upsertSentMessage` for the full lifecycle.
+    /// True while `uid` is a client-side placeholder rather than this
+    /// message's UID in `mailbox`: a just-sent reply echoed before the Sent
+    /// sync (`upsertSentMessage`), or a message refiled under Trash before
+    /// its destination UID is known (`EmailRepository.delete`). The row is
+    /// promoted to its real server UID when the matching `messageID` arrives
+    /// via `upsertMessages`; until then `Email.serverUID` is `nil`.
     var isLocallySynthetic: Bool = false
 
     /// True when a local `isRead`/`isFlagged` change hasn't yet been confirmed

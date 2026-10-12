@@ -45,7 +45,8 @@ struct EmailSentReconciliationTests {
         }
         #expect(seededRow.isLocallySynthetic == true, "seeded row is synthetic")
         let syntheticUID = seededRow.uid
-        #expect(syntheticUID > 0)
+        #expect(syntheticUID < 0, "placeholder sits outside the IMAP UID space")
+        #expect(seededRow.serverUID == nil, "no server action can target the echo")
 
         // Later, a Sent-folder sync fetches the just-delivered message back
         // — same Message-ID, but with the real server-assigned uid. The

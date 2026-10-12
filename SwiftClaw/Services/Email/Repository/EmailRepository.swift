@@ -7,6 +7,10 @@ import os
 /// (e.g. into new-mail notifications) without touching `Email` models.
 nonisolated struct EmailUpsertOutcome: Sendable {
     let inserted: [InsertedEmailSummary]
+    /// False when the SwiftData save failed and the batch was rolled back.
+    /// `MailSyncWorker` must not advance the mailbox high-water mark past
+    /// messages that never reached the store.
+    var persisted: Bool = true
 
     var insertedCount: Int {
         inserted.count
@@ -24,6 +28,28 @@ nonisolated struct InsertedEmailSummary: Sendable {
 nonisolated struct MailboxReconciliationOutcome: Sendable {
     let removedCount: Int
     let changedFlagCount: Int
+}
+
+/// A local read/flag change still waiting for server confirmation, as a
+/// Sendable snapshot `MailSyncWorker` can retry off the MainActor.
+nonisolated struct PendingFlagSync: Sendable, Hashable {
+    let emailID: UUID
+    let uid: Int
+    let isRead: Bool
+    let isFlagged: Bool
+}
+
+extension Email {
+    /// The IMAP UID this row can be addressed by on the server, or `nil` when
+    /// its `uid` is a client-side placeholder: a just-sent echo awaiting the
+    /// Sent sync, a message moved to Trash whose destination UID isn't known
+    /// yet, or a row whose UID was invalidated by a UIDVALIDITY reset. Server
+    /// mutations must go through this so they never address an unrelated
+    /// message that happens to own the placeholder number.
+    var serverUID: Int? {
+        guard !isLocallySynthetic, uid > 0, uid <= Int(UInt32.max) else { return nil }
+        return uid
+    }
 }
 
 /// Single mutation boundary for all Email/SwiftData writes. The first
@@ -92,14 +118,25 @@ final class EmailRepository {
         )
     }
 
+    /// `invalidatingExistingUIDs` is for a UIDVALIDITY reset: every UID the
+    /// store holds for this folder is dead, so a recycled number must not tie
+    /// old content to a different server message. All rows get placeholder
+    /// UIDs first; fetched messages then re-key rows by Message-ID or insert,
+    /// and rows left unmatched keep a placeholder that the reconcile pass
+    /// treats as absent from the server.
     @discardableResult
     func upsertPreparedMessages(
         _ prepared: [PreparedFetchedMessage],
         mailbox: String,
         accountID: UUID,
-        role: MailFolderRole = .inbox
+        role: MailFolderRole = .inbox,
+        invalidatingExistingUIDs: Bool = false
     ) -> EmailUpsertOutcome {
-        guard !prepared.isEmpty else { return EmailUpsertOutcome(inserted: []) }
+        if invalidatingExistingUIDs {
+            invalidateUIDs(mailbox: mailbox, accountID: accountID)
+        } else if prepared.isEmpty {
+            return EmailUpsertOutcome(inserted: [])
+        }
         let fetched = prepared.map(\.message)
         var inserted: [InsertedEmailSummary] = []
         let existing = fetchExistingMailboxIndex(uids: fetched.map(\.uid), mailbox: mailbox, accountID: accountID)
@@ -138,32 +175,35 @@ final class EmailRepository {
             )
             : [:]
 
+        // A row matches at most one fetched message: rows already matched by
+        // UID are off-limits to Message-ID matching, so two server copies
+        // sharing a Message-ID don't collapse into one row.
+        var matchedRowIDs = Set(existing.values.map(\.id))
         for preparedMessage in prepared {
             let message = preparedMessage.message
             if let existingEmail = existing[message.uid] {
-                // If the matched row is a locally-synthetic Sent echo whose
-                // messageID also matches this fetched server message, promote it
-                // first — otherwise the synthetic stays mis-flagged forever (the
-                // UID collision case: e.g. the very first reply to an empty Sent
-                // folder lands both the synthetic and the real server message on
-                // uid=1). The flag reconcile runs the same way for both.
-                if let mid = message.messageID, !mid.isEmpty,
-                   existingEmail.isLocallySynthetic,
-                   existingByMessageID[mid]?.id == existingEmail.id {
-                    existingEmail.uid = message.uid
-                    existingEmail.isLocallySynthetic = false
-                }
                 existingEmail.role = role
                 reconcileFlags(existing: existingEmail, fetched: message)
             } else if let mid = message.messageID, !mid.isEmpty,
-                      let synthetic = existingByMessageID[mid] {
-                // Real Sent-folder sync arrived for a row we synthed locally.
-                // Promote it: rewrite the synthetic uid to the real server
-                // uid + clear `isLocallySynthetic` (see `upsertSentMessage`).
-                synthetic.uid = message.uid
-                synthetic.isLocallySynthetic = false
-                synthetic.role = role
-                reconcileFlags(existing: synthetic, fetched: message)
+                      let matched = existingByMessageID[mid],
+                      matchedRowIDs.insert(matched.id).inserted {
+                // The same message under a UID this row doesn't carry yet:
+                // a just-sent echo or a pending move to Trash receiving its
+                // real server UID (see `upsertSentMessage` / `delete`), a row
+                // re-keyed after a UIDVALIDITY reset, or a message another
+                // client moved out of this folder and back. For real rows the
+                // server just confirmed membership here, so folder state
+                // follows the folder (a reconcile soft-delete must not leave a
+                // restored message stuck in Trash). Placeholder rows keep their
+                // local state: it reflects the user's own pending action.
+                if !matched.isLocallySynthetic, matched.uid != message.uid {
+                    matched.isArchived = role == .archive
+                    matched.isDeleted = role == .trash
+                }
+                matched.uid = message.uid
+                matched.isLocallySynthetic = false
+                matched.role = role
+                reconcileFlags(existing: matched, fetched: message)
             } else if let mid = message.messageID, !mid.isEmpty,
                       let reclaimed = reclaimable[mid] {
                 // Server-side archive of a message we still hold under INBOX
@@ -198,10 +238,40 @@ final class EmailRepository {
             Self.logger.error("upsertMessages save failed: \(String(describing: error))")
             attachmentStore.deletePreparedMessages(prepared)
             modelContext.rollback()
-            inserted.removeAll()
+            return EmailUpsertOutcome(inserted: [], persisted: false)
         }
 
         return EmailUpsertOutcome(inserted: inserted)
+    }
+
+    /// Replaces every UID held for `(mailbox, accountID)` with a placeholder
+    /// (see `upsertPreparedMessages(invalidatingExistingUIDs:)`). Rows that
+    /// already carry a placeholder keep it.
+    private func invalidateUIDs(mailbox: String, accountID: UUID) {
+        let descriptor = FetchDescriptor<Email>(
+            predicate: #Predicate { email in
+                email.mailbox == mailbox && email.accountID == accountID
+            }
+        )
+        guard let rows = try? modelContext.fetch(descriptor) else { return }
+        var placeholder = min(0, rows.map(\.uid).min() ?? 0)
+        for row in rows where row.uid > 0 {
+            placeholder -= 1
+            row.uid = placeholder
+        }
+    }
+
+    /// Next placeholder UID for `(mailbox, accountID)`. Placeholders are
+    /// negative, so they sit outside the IMAP UID space (1...2^32-1) and can
+    /// never collide with a message another client puts in the folder.
+    private func nextPlaceholderUID(mailbox: String, accountID: UUID) -> Int {
+        let descriptor = FetchDescriptor<Email>(
+            predicate: #Predicate { email in
+                email.mailbox == mailbox && email.accountID == accountID
+            }
+        )
+        let lowest = (try? modelContext.fetch(descriptor))?.map(\.uid).min() ?? 0
+        return min(0, lowest) - 1
     }
 
     // MARK: - Flags / archive / delete
@@ -212,12 +282,19 @@ final class EmailRepository {
         save()
     }
 
+    /// Soft-deletes the row. With `movedToMailbox`, it also refiles the row
+    /// under that folder ahead of the server move; the row's UID belonged
+    /// to the source folder, so it becomes a placeholder until the
+    /// destination sync re-keys the row by Message-ID. Until then
+    /// `serverUID` is `nil` and no server action can target it.
     func delete(messageID: UUID, movedToMailbox mailbox: String? = nil) {
         guard let email = fetchEmail(by: messageID) else { return }
         let previousMailbox = email.mailbox
         let previousDeleted = email.isDeleted
         email.isDeleted = true
-        if let mailbox, !mailbox.isEmpty {
+        if let mailbox, !mailbox.isEmpty, mailbox != email.mailbox {
+            email.uid = nextPlaceholderUID(mailbox: mailbox, accountID: email.accountID)
+            email.isLocallySynthetic = true
             email.mailbox = mailbox
         }
         Self.logger.info("""
@@ -230,6 +307,17 @@ final class EmailRepository {
         save()
     }
 
+    /// Undoes `delete(messageID:movedToMailbox:)`'s refile after the server
+    /// move failed: the message is still in `mailbox` under `uid`, so the
+    /// row gets that real identity back (it stays soft-deleted locally).
+    func revertPendingMove(messageID: UUID, toMailbox mailbox: String, uid: Int) {
+        guard let email = fetchEmail(by: messageID), email.isLocallySynthetic else { return }
+        email.mailbox = mailbox
+        email.uid = uid
+        email.isLocallySynthetic = false
+        save()
+    }
+
     /// Irrecoverable delete: actually removes the row + its `EmailNote`s
     /// (via the cascade rule) + the on-disk attachment bytes from
     /// `EmailAttachmentStore`. Only the Trash mailbox "Delete Permanently"
@@ -239,12 +327,10 @@ final class EmailRepository {
     func deletePermanently(messageID: UUID) {
         guard let email = fetchEmail(by: messageID) else { return }
         let emailID = email.id
-        // Clean the on-disk attachment bytes BEFORE the row goes away (the
-        // SwiftData cascade rule only deletes the `EmailAttachment` rows,
-        // not the files in `~/Library/Application Support/SwiftClaw/EmailAttachments/`).
-        EmailAttachmentStore.shared.deleteAttachments(forEmailID: emailID)
+        // The SwiftData cascade rule only deletes the `EmailAttachment` rows,
+        // not the files in `~/Library/Application Support/SwiftClaw/EmailAttachments/`.
         modelContext.delete(email)
-        save()
+        saveThenDeleteAttachments(forEmailIDs: [emailID])
     }
 
     /// Sets the read state on a message. Used by `EmailThreadDetailView`
@@ -283,14 +369,40 @@ final class EmailRepository {
         return email.isFlagged
     }
 
-    /// Clears the pending-flag-sync marker once `EmailServerAction` has
-    /// confirmed the local `isRead`/`isFlagged` change landed on the server.
-    /// After this the row is fair game for `reconcileFlagsFromSnapshot` again.
-    func clearFlagSyncPending(messageID: UUID) {
+    /// Clears the pending-flag-sync marker once the server has confirmed
+    /// `acknowledged`. Only clears when every acknowledged value still matches
+    /// the row: if the user changed it again while the request was in flight,
+    /// that newer change is still pending. After this the row is fair game
+    /// for `reconcileFlagsFromSnapshot` again.
+    func clearFlagSyncPending(messageID: UUID, acknowledging acknowledged: MailFlagUpdate) {
         guard let email = fetchEmail(by: messageID) else { return }
         guard email.needsFlagSync else { return }
+        if let isRead = acknowledged.isRead, isRead != email.isRead { return }
+        if let isFlagged = acknowledged.isFlagged, isFlagged != email.isFlagged { return }
         email.needsFlagSync = false
         save()
+    }
+
+    /// Rows in `(mailbox, accountID)` whose local read/flag state hasn't been
+    /// confirmed by the server, for `MailSyncWorker`'s retry pass. Rows
+    /// without a server UID are skipped until their identity is known.
+    func pendingFlagSyncs(mailbox: String, accountID: UUID) -> [PendingFlagSync] {
+        let descriptor = FetchDescriptor<Email>(
+            predicate: #Predicate { email in
+                email.mailbox == mailbox
+                    && email.accountID == accountID
+                    && email.needsFlagSync
+            }
+        )
+        return ((try? modelContext.fetch(descriptor)) ?? []).compactMap { email in
+            guard let uid = email.serverUID else { return nil }
+            return PendingFlagSync(
+                emailID: email.id,
+                uid: uid,
+                isRead: email.isRead,
+                isFlagged: email.isFlagged
+            )
+        }
     }
 
     // MARK: - Notes
@@ -554,11 +666,11 @@ final class EmailRepository {
     /// thread detail (and threads via `In-Reply-To`/`References`) without
     /// waiting for the next Sent-folder sync.
     ///
-    /// The row gets a *local-only* uid synthesized as `max(existing uid in
-    /// this mailbox+account) + 1` (clamped below `Int.max - 1`). That's
-    /// collision-free among locally-sent messages and stays out of the real
-    /// IMAP UID range. The
-    /// `isLocallySynthetic` flag marks the row as client-seeded.
+    /// The row gets a *local-only* negative placeholder uid, outside the
+    /// real IMAP UID range, so a message another client appends to Sent can
+    /// never be mistaken for it. The `isLocallySynthetic` flag marks the row
+    /// as client-seeded; `serverUID` is `nil` until promotion, so no server
+    /// action can target it.
     ///
     /// When a real Sent-folder sync lands the matching message (deduped by
     /// `messageID` in `upsertMessages`), the synthetic row is *promoted* —
@@ -590,14 +702,7 @@ final class EmailRepository {
             }
         }
 
-        let maxExistingUID = (try? modelContext.fetch(
-            FetchDescriptor<Email>(
-                predicate: #Predicate { email in
-                    email.mailbox == sentMailbox && email.accountID == account.id
-                }
-            )
-        ))?.map(\.uid).max() ?? 0
-        let syntheticUID = min(maxExistingUID + 1, Int.max - 1)
+        let syntheticUID = nextPlaceholderUID(mailbox: sentMailbox, accountID: account.id)
 
         let sent = Email(
             messageID: outgoing.messageID,
@@ -673,7 +778,9 @@ final class EmailRepository {
             return 0
         }
         var removed = 0
-        for email in locals where !serverUIDs.contains(UInt32(email.uid)) {
+        var hardDeletedIDs: [UUID] = []
+        for email in locals {
+            if let uid = email.serverUID, serverUIDs.contains(UInt32(uid)) { continue }
             // Skip locally-synthetic Sent rows — they're client-seeded echoes
             // of just-sent replies that the server has no record of yet.
             // The next Sent-folder sync reconciles them by `messageID`
@@ -681,6 +788,7 @@ final class EmailRepository {
             // `preserveLocallySynthetic: true`.
             if preserveLocallySynthetic && email.isLocallySynthetic { continue }
             if hardDelete {
+                hardDeletedIDs.append(email.id)
                 modelContext.delete(email)
             } else {
                 email.isDeleted = true
@@ -688,7 +796,7 @@ final class EmailRepository {
             removed += 1
         }
         if removed > 0 {
-            save()
+            saveThenDeleteAttachments(forEmailIDs: hardDeletedIDs)
         }
         return removed
     }
@@ -721,7 +829,8 @@ final class EmailRepository {
         }
         var changed = 0
         for email in locals {
-            guard let snap = snapshot.flagsByUID[UInt32(email.uid)] else { continue }
+            guard let uid = email.serverUID,
+                  let snap = snapshot.flagsByUID[UInt32(uid)] else { continue }
             // Don't clobber a local flag/read change that hasn't synced yet —
             // the snapshot predates it. `EmailServerAction` clears the marker
             // once the server confirms, releasing the row to refresh again.
@@ -763,9 +872,12 @@ final class EmailRepository {
 
         var removed = 0
         var changed = 0
+        var hardDeletedIDs: [UUID] = []
         for email in locals {
-            let uid = UInt32(email.uid)
-            if let flags = snapshot.flagsByUID[uid], !email.needsFlagSync {
+            // Placeholder UIDs (see `Email.serverUID`) never match the
+            // snapshot: no server flags apply, and the row counts as absent.
+            let uid = email.serverUID.map { UInt32($0) }
+            if let uid, let flags = snapshot.flagsByUID[uid], !email.needsFlagSync {
                 if email.isRead != flags.isRead {
                     email.isRead = flags.isRead
                     changed += 1
@@ -776,13 +888,14 @@ final class EmailRepository {
                 }
             }
 
-            guard !snapshot.uids.contains(uid),
+            guard !(uid.map(snapshot.uids.contains) ?? false),
                   !email.isArchived,
                   !email.isDeleted,
                   !(preserveLocallySynthetic && email.isLocallySynthetic) else {
                 continue
             }
             if hardDelete {
+                hardDeletedIDs.append(email.id)
                 modelContext.delete(email)
             } else {
                 email.isDeleted = true
@@ -790,7 +903,7 @@ final class EmailRepository {
             removed += 1
         }
         if removed > 0 || changed > 0 {
-            save()
+            saveThenDeleteAttachments(forEmailIDs: hardDeletedIDs)
         }
         return MailboxReconciliationOutcome(
             removedCount: removed,
@@ -836,17 +949,21 @@ final class EmailRepository {
 
     private func fetchExistingMailboxIndex(uids: [Int], mailbox: String, accountID: UUID) -> [Int: Email] {
         guard !uids.isEmpty else { return [:] }
+        // Placeholder rows are excluded: their uid isn't a server UID, so a
+        // numeric match would bind them to an unrelated message. They're
+        // matched by Message-ID instead.
         let descriptor = FetchDescriptor<Email>(
             predicate: #Predicate { email in
                 email.mailbox == mailbox
                     && uids.contains(email.uid)
                     && email.accountID == accountID
+                    && !email.isLocallySynthetic
             }
         )
         guard let results = try? modelContext.fetch(descriptor) else {
             return [:]
         }
-        return Dictionary(uniqueKeysWithValues: results.map { ($0.uid, $0) })
+        return Dictionary(results.map { ($0.uid, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// Indexes existing rows by `messageID` for a single `(mailbox, accountID)`.
@@ -992,6 +1109,22 @@ final class EmailRepository {
         }
         if existing.bodyHTML == nil, let html = fetched.bodyHTML {
             existing.bodyHTML = html
+        }
+    }
+
+    /// Saves, then removes the on-disk attachment directories of rows that
+    /// were hard-deleted in this transaction. Files are only removed once the
+    /// rows are durably gone, so a failed save never leaves a row pointing at
+    /// missing attachments.
+    private func saveThenDeleteAttachments(forEmailIDs emailIDs: [UUID]) {
+        do {
+            try modelContext.save()
+        } catch {
+            Self.logger.error("EmailRepository save failed: \(String(describing: error))")
+            return
+        }
+        for emailID in emailIDs {
+            attachmentStore.deleteAttachments(forEmailID: emailID)
         }
     }
 

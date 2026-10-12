@@ -14,6 +14,12 @@ import os
 /// won't sync until the account is re-added. Server failures surface through
 /// `MailSyncMonitor.shared` rather than throwing, so the UI stays responsive
 /// (the row flip + removal-from-card already happened locally).
+///
+/// Rows without a server identity (`Email.serverUID == nil`: a just-sent
+/// echo, a pending move to Trash, a UID invalidated by a UIDVALIDITY reset)
+/// get the local mutation only. Their placeholder uid could name an
+/// unrelated server message, so nothing is sent until sync re-keys them;
+/// pending flag changes are then retried by `MailSyncWorker`.
 @MainActor
 enum EmailServerAction {
     private static let logger = AppLog.make("mail.action")
@@ -24,10 +30,12 @@ enum EmailServerAction {
     /// server call goes through `MailClient.archive(...)` rather than a
     /// hardcoded mailbox name.
     static func archive(email: Email, repository: EmailRepository, mailClient: MailClient?) async {
+        let mailbox = email.mailbox
+        let uid = email.serverUID
         repository.archive(messageID: email.id)
-        guard let mailClient else { return }
+        guard let mailClient, let uid else { return }
         do {
-            try await mailClient.archive(uid: email.uid, from: email.mailbox)
+            try await mailClient.archive(uid: uid, from: mailbox)
         } catch {
             MailSyncMonitor.shared.setStatus(
                 "Couldn't archive on the server: \(error.localizedDescription)",
@@ -42,17 +50,22 @@ enum EmailServerAction {
     /// path via `MailClient.deletePermanently`.
     static func delete(email: Email, repository: EmailRepository, mailClient: MailClient?) async {
         let sourceMailbox = email.mailbox
-        let uid = email.uid
         let fallbackTrashMailbox = EmailAccountStore.shared
             .account(for: email.accountID)?
             .resolvedTrashMailbox ?? "Trash"
         Self.logger.info("""
             delete requested emailID=\(email.id.uuidString, privacy: .public) \
-            uid=\(uid, privacy: .public) sourceMailbox=\(sourceMailbox, privacy: .public) \
+            uid=\(email.uid, privacy: .public) sourceMailbox=\(sourceMailbox, privacy: .public) \
             fallbackTrash=\(fallbackTrashMailbox, privacy: .public)
             """)
+        guard let mailClient, let uid = email.serverUID else {
+            // No server move will happen, so the row keeps its real
+            // source-folder identity; refiling it under Trash would strand
+            // it with a placeholder that no Trash sync ever resolves.
+            repository.delete(messageID: email.id)
+            return
+        }
         repository.delete(messageID: email.id, movedToMailbox: fallbackTrashMailbox)
-        guard let mailClient else { return }
         do {
             try await mailClient.delete(uid: uid, in: sourceMailbox)
             // The server move resolves + caches the account's real Trash
@@ -66,6 +79,10 @@ enum EmailServerAction {
                 repository.delete(messageID: email.id, movedToMailbox: resolvedTrashMailbox)
             }
         } catch {
+            // The message never left the source folder: give the row its
+            // real identity back so later actions (Delete Permanently, flag
+            // sync) address the right server message.
+            repository.revertPendingMove(messageID: email.id, toMailbox: sourceMailbox, uid: uid)
             Self.logger.error("""
                 delete server move failed emailID=\(email.id.uuidString, privacy: .public) \
                 uid=\(uid, privacy: .public) sourceMailbox=\(sourceMailbox, privacy: .public): \
@@ -91,9 +108,9 @@ enum EmailServerAction {
     /// (`mailClient == nil`) the server call is skipped and the local
     /// hard-delete still runs.
     static func deletePermanently(email: Email, repository: EmailRepository, mailClient: MailClient?) async {
-        if let mailClient {
+        if let mailClient, let uid = email.serverUID {
             do {
-                try await mailClient.deletePermanently(uid: email.uid, in: email.mailbox)
+                try await mailClient.deletePermanently(uid: uid, in: email.mailbox)
             } catch {
                 MailSyncMonitor.shared.setStatus(
                     "Couldn't expunge from the server: \(error.localizedDescription)",
@@ -110,15 +127,17 @@ enum EmailServerAction {
     /// return shape).
     @discardableResult
     static func toggleFlag(email: Email, repository: EmailRepository, mailClient: MailClient?) async -> Bool? {
+        let hadPendingChange = email.needsFlagSync
         guard let newValue = repository.toggleFlag(messageID: email.id) else { return nil }
-        guard let mailClient else { return newValue }
+        guard let mailClient, let uid = email.serverUID else { return newValue }
+        let updates = pushUpdate(
+            for: email,
+            hadPendingChange: hadPendingChange,
+            changed: MailFlagUpdate(isRead: nil, isFlagged: newValue)
+        )
         do {
-            try await mailClient.setFlags(
-                uid: email.uid,
-                mailbox: email.mailbox,
-                updates: MailFlagUpdate(isRead: nil, isFlagged: newValue)
-            )
-            repository.clearFlagSyncPending(messageID: email.id)
+            try await mailClient.setFlags(uid: uid, mailbox: email.mailbox, updates: updates)
+            repository.clearFlagSyncPending(messageID: email.id, acknowledging: updates)
         } catch {
             MailSyncMonitor.shared.setStatus(
                 "Couldn't update the flag on the server: \(error.localizedDescription)",
@@ -140,21 +159,37 @@ enum EmailServerAction {
         isRead: Bool?,
         isFlagged: Bool?
     ) async {
+        let hadPendingChange = email.needsFlagSync
         if let isRead { repository.setRead(messageID: email.id, isRead: isRead) }
         if let isFlagged { repository.setFlag(messageID: email.id, isFlagged: isFlagged) }
-        guard let mailClient else { return }
+        guard let mailClient, let uid = email.serverUID else { return }
+        let updates = pushUpdate(
+            for: email,
+            hadPendingChange: hadPendingChange,
+            changed: MailFlagUpdate(isRead: isRead, isFlagged: isFlagged)
+        )
         do {
-            try await mailClient.setFlags(
-                uid: email.uid,
-                mailbox: email.mailbox,
-                updates: MailFlagUpdate(isRead: isRead, isFlagged: isFlagged)
-            )
-            repository.clearFlagSyncPending(messageID: email.id)
+            try await mailClient.setFlags(uid: uid, mailbox: email.mailbox, updates: updates)
+            repository.clearFlagSyncPending(messageID: email.id, acknowledging: updates)
         } catch {
             MailSyncMonitor.shared.setStatus(
                 "Couldn't update flags on the server: \(error.localizedDescription)",
                 syncing: false
             )
         }
+    }
+
+    /// What to send for a flag/read change. Normally only the component the
+    /// user changed, so an unrelated server-side change isn't overwritten.
+    /// When an earlier change was still unconfirmed, the pending marker
+    /// covers both components, so both local values go out and one ack
+    /// settles the whole row.
+    private static func pushUpdate(
+        for email: Email,
+        hadPendingChange: Bool,
+        changed: MailFlagUpdate
+    ) -> MailFlagUpdate {
+        guard hadPendingChange else { return changed }
+        return MailFlagUpdate(isRead: email.isRead, isFlagged: email.isFlagged)
     }
 }

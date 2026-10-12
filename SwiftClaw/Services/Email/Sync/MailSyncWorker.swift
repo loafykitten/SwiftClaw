@@ -177,8 +177,19 @@ actor MailSyncWorker {
                 )
                 inserted += mailboxResult.insertedCount
                 newMail.append(contentsOf: mailboxResult.newMail)
-                // Reconcile per mailbox, throttled to every Nth pass.
-                if shouldReconcile || mailbox.role == .drafts {
+                // Retry read/flag changes whose server update failed (or
+                // never ran, e.g. AI tool flags). Before the snapshot, so a
+                // confirmed change isn't immediately judged against stale
+                // server state.
+                await pushPendingFlagChanges(
+                    client: client,
+                    mailbox: mailbox.name,
+                    accountID: account.id
+                )
+                // Reconcile per mailbox, throttled to every Nth pass. A
+                // UIDVALIDITY reset reconciles immediately so rows left
+                // with invalidated UIDs settle this pass.
+                if shouldReconcile || mailbox.role == .drafts || mailboxResult.didReset {
                     removed += await reconcile(
                         client: client,
                         mailbox: mailbox,
@@ -323,6 +334,23 @@ actor MailSyncWorker {
             )
         }
 
+        // Anti-spam guard: the first sync of an account (no prior state) and
+        // a UIDVALIDITY rebuild both re-pull historical mail that is not
+        // "new" to the user — neither pass may emit notifications.
+        let suppressNotifications = !didHavePriorState || didReset
+
+        let outcome = await upsert(
+            fetched: result.messages,
+            mailbox: mailbox,
+            accountID: account.id,
+            role: syncedMailbox.role,
+            invalidatingExistingUIDs: didReset
+        )
+        // The high-water mark only advances once the messages below it are
+        // committed; otherwise a failed save would leave them absent locally
+        // yet below the next incremental fetch boundary.
+        guard outcome.persisted else { throw MailboxPersistenceError() }
+
         // On a UIDVALIDITY-reset refetch into an empty/rebuilt folder,
         // `result.maxUID` is nil; falling back to the stale `sinceUID` from
         // the dead UIDVALIDITY would record a high-water higher than any real
@@ -335,18 +363,6 @@ actor MailSyncWorker {
             lastSeenUID: nextLastSeen
         )
         await syncStateUpdater(newState, account.id, mailbox)
-
-        // Anti-spam guard: the first sync of an account (no prior state) and
-        // a UIDVALIDITY rebuild both re-pull historical mail that is not
-        // "new" to the user — neither pass may emit notifications.
-        let suppressNotifications = !didHavePriorState || didReset
-
-        let outcome = await upsert(
-            fetched: result.messages,
-            mailbox: mailbox,
-            accountID: account.id,
-            role: syncedMailbox.role
-        )
 
         let newMail: [NewMailNotificationInfo]
         if syncedMailbox.role == .inbox && !suppressNotifications {
@@ -364,14 +380,19 @@ actor MailSyncWorker {
         } else {
             newMail = []
         }
-        return MailboxSyncOutcome(insertedCount: outcome.insertedCount, newMail: newMail)
+        return MailboxSyncOutcome(
+            insertedCount: outcome.insertedCount,
+            newMail: newMail,
+            didReset: didReset
+        )
     }
 
     private func upsert(
         fetched: [FetchedMessage],
         mailbox: String,
         accountID: UUID,
-        role: MailFolderRole
+        role: MailFolderRole,
+        invalidatingExistingUIDs: Bool
     ) async -> EmailUpsertOutcome {
         // File I/O stays off MainActor; the repository receives only metadata
         // and prepared relative paths for its SwiftData transaction.
@@ -383,7 +404,8 @@ actor MailSyncWorker {
                 prepared,
                 mailbox: mailbox,
                 accountID: accountID,
-                role: role
+                role: role,
+                invalidatingExistingUIDs: invalidatingExistingUIDs
             )
         }
         let insertedIDs = Set(outcome.inserted.map(\.id))
@@ -391,6 +413,47 @@ actor MailSyncWorker {
             prepared.filter { !insertedIDs.contains($0.emailID) }
         )
         return outcome
+    }
+
+    /// Re-sends local read/flag state the server hasn't confirmed
+    /// (`Email.needsFlagSync`). Each row's full local state is pushed — the
+    /// pending marker doesn't record which component changed, and while it's
+    /// set reconciliation already treats both as locally authoritative. The
+    /// marker clears only for rows still matching what was acknowledged.
+    /// Stops at the first failure; the next pass retries.
+    private func pushPendingFlagChanges(
+        client: MailClient,
+        mailbox: String,
+        accountID: UUID
+    ) async {
+        let pending = await MainActor.run {
+            EmailRepository(modelContext: ModelContext(modelContainer))
+                .pendingFlagSyncs(mailbox: mailbox, accountID: accountID)
+        }
+        guard !pending.isEmpty else { return }
+
+        var acknowledged: [(emailID: UUID, updates: MailFlagUpdate)] = []
+        for change in pending {
+            let updates = MailFlagUpdate(isRead: change.isRead, isFlagged: change.isFlagged)
+            do {
+                try await client.setFlags(uid: change.uid, mailbox: mailbox, updates: updates)
+                acknowledged.append((change.emailID, updates))
+            } catch {
+                Self.logger.notice("""
+                    pending flag retry failed for \(mailbox, privacy: .public): \
+                    \(String(describing: error))
+                    """)
+                break
+            }
+        }
+        guard !acknowledged.isEmpty else { return }
+        let confirmed = acknowledged
+        await MainActor.run {
+            let repository = EmailRepository(modelContext: ModelContext(modelContainer))
+            for change in confirmed {
+                repository.clearFlagSyncPending(messageID: change.emailID, acknowledging: change.updates)
+            }
+        }
     }
 
     /// Runs the per-`(account, mailbox)` server-side reconciliation pass and
@@ -449,6 +512,12 @@ private struct SyncedMailbox: Sendable {
 private struct MailboxSyncOutcome: Sendable {
     let insertedCount: Int
     let newMail: [NewMailNotificationInfo]
+    let didReset: Bool
+}
+
+/// The upsert's SwiftData save failed and was rolled back.
+private struct MailboxPersistenceError: LocalizedError {
+    var errorDescription: String? { "Couldn't save fetched messages." }
 }
 
 private struct AccountSyncResult: Sendable {

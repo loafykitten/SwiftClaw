@@ -23,6 +23,10 @@ actor MockMailClient: MailClient {
     var mockFolders: [MailFolderDescriptor]? = nil
     var listFoldersError: Error? = nil
     private(set) var listFoldersCount: Int = 0
+    /// When set, `setFlags` / `move` (and so `archive` / `delete`) throw it
+    /// after recording the call, simulating a server failure.
+    var setFlagsError: Error? = nil
+    var moveError: Error? = nil
 
     nonisolated let isConfigured: Bool
     nonisolated let supportsIDLE = false
@@ -47,6 +51,14 @@ actor MockMailClient: MailClient {
 
     func setListFoldersError(_ error: Error?) {
         listFoldersError = error
+    }
+
+    func setSetFlagsError(_ error: Error?) {
+        setFlagsError = error
+    }
+
+    func setMoveError(_ error: Error?) {
+        moveError = error
     }
 
     func testConnection() async throws {
@@ -141,6 +153,7 @@ actor MockMailClient: MailClient {
 
     func setFlags(uid: Int, mailbox: String, updates: MailFlagUpdate) async throws {
         flagUpdates.append((uid, mailbox, updates))
+        if let setFlagsError { throw setFlagsError }
         guard var messages = mailboxes[mailbox],
               let index = messages.firstIndex(where: { $0.uid == uid }) else { return }
         let original = messages[index]
@@ -168,6 +181,7 @@ actor MockMailClient: MailClient {
 
     func move(uid: Int, from mailbox: String, to destination: String) async throws {
         moves.append((uid, mailbox, destination))
+        if let moveError { throw moveError }
         guard var messages = mailboxes[mailbox],
               let index = messages.firstIndex(where: { $0.uid == uid }) else { return }
         let original = messages.remove(at: index)

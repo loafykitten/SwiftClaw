@@ -54,12 +54,20 @@ nonisolated final class EmailAttachmentStore: @unchecked Sendable {
     func prepare(_ messages: [FetchedMessage]) -> [PreparedFetchedMessage] {
         messages.map { message in
             let emailID = UUID()
+            // Parts share the message's directory, so two `attachment.pdf`
+            // parts (or names that sanitize identically) each need their own
+            // file name or the later write replaces the earlier one.
+            var usedNames: Set<String> = []
             let attachments = message.attachmentDescriptors.map { descriptor in
                 var filePath = ""
                 if let data = descriptor.data, !data.isEmpty {
+                    let storageName = Self.uniqueName(
+                        for: sanitizedFilename(descriptor.filename),
+                        avoiding: &usedNames
+                    )
                     filePath = (try? save(
                         data: data,
-                        filename: descriptor.filename,
+                        filename: storageName,
                         forEmailID: emailID
                     )) ?? ""
                 }
@@ -84,10 +92,22 @@ nonisolated final class EmailAttachmentStore: @unchecked Sendable {
         }
     }
 
-    /// Resolves a relative `filePath` stored on `EmailAttachment` back to its
-    /// absolute disk URL.
+    /// Resolves an attachment's `filename` inside the email's directory.
+    /// Prefer `absoluteURL(forRelativePath:)`: duplicate part names are stored
+    /// under suffixed names, so only the stored path identifies the file.
     func absoluteURL(forEmailID emailID: UUID, filename: String) -> URL {
         emailDirectory(for: emailID).appendingPathComponent(sanitizedFilename(filename))
+    }
+
+    /// Resolves the relative `filePath` stored on `EmailAttachment` back to
+    /// its absolute disk URL. `nil` for an empty path or one that would
+    /// escape the attachment root.
+    func absoluteURL(forRelativePath relativePath: String) -> URL? {
+        guard !relativePath.isEmpty else { return nil }
+        let root = rootDirectory.standardizedFileURL
+        let url = root.appendingPathComponent(relativePath).standardizedFileURL
+        guard url.path.hasPrefix(root.path + "/") else { return nil }
+        return url
     }
 
     func deleteAttachments(forEmailID emailID: UUID) {
@@ -100,6 +120,22 @@ nonisolated final class EmailAttachmentStore: @unchecked Sendable {
 
     private func relativePath(emailID: UUID, filename: String) -> String {
         "\(emailID.uuidString)/\(filename)"
+    }
+
+    /// `name`, or `name 2.ext`, `name 3.ext`, … — the first variant not yet in
+    /// `used` (compared case-insensitively, as on default APFS volumes).
+    private static func uniqueName(for name: String, avoiding used: inout Set<String>) -> String {
+        let base = (name as NSString).deletingPathExtension
+        let ext = (name as NSString).pathExtension
+        var candidate = name
+        var counter = 2
+        while used.contains(candidate.lowercased()) {
+            let numbered = "\(base) \(counter)"
+            candidate = ext.isEmpty ? numbered : "\(numbered).\(ext)"
+            counter += 1
+        }
+        used.insert(candidate.lowercased())
+        return candidate
     }
 
     private func sanitizedFilename(_ filename: String) -> String {

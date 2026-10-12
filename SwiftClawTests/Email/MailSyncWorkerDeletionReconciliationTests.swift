@@ -183,12 +183,18 @@ struct MailSyncWorkerDeletionReconciliationTests {
 
         let context = ModelContext(container)
         let allEmails = (try? context.fetch(FetchDescriptor<Email>())) ?? []
-        let byUID = Dictionary(allEmails.map { ($0.uid, $0) }, uniquingKeysWith: { a, _ in a })
-        #expect(byUID[100]?.isDeleted == true, "old-UID row soft-deleted post-rebuild")
-        #expect(byUID[101]?.isDeleted == true, "old-UID row soft-deleted post-rebuild")
-        #expect(byUID[1]?.isDeleted == false, "new-UID row stays active")
-        #expect(byUID[2]?.isDeleted == false, "new-UID row stays active")
-        #expect(byUID[3]?.isDeleted == false, "new-UID row stays active")
+        // The reset invalidates the old rows' UIDs (they're dead numbers
+        // under the new UIDVALIDITY), so look them up by Message-ID.
+        let byMessageID = Dictionary(
+            allEmails.compactMap { email in email.messageID.map { ($0, email) } },
+            uniquingKeysWith: { a, _ in a }
+        )
+        #expect(byMessageID["<m100@example.com>"]?.isDeleted == true, "old-UID row soft-deleted post-rebuild")
+        #expect(byMessageID["<m101@example.com>"]?.isDeleted == true, "old-UID row soft-deleted post-rebuild")
+        #expect(byMessageID["<m100@example.com>"]?.serverUID == nil, "old UID no longer addressable")
+        #expect(byMessageID["<m1@example.com>"]?.isDeleted == false, "new-UID row stays active")
+        #expect(byMessageID["<m2@example.com>"]?.isDeleted == false, "new-UID row stays active")
+        #expect(byMessageID["<m3@example.com>"]?.isDeleted == false, "new-UID row stays active")
     }
 
     @Test func trashSyncPromotesMovedLocalRowToServerUID() async throws {

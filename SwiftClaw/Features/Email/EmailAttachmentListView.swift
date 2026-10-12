@@ -56,10 +56,7 @@ struct EmailAttachmentList: View {
 
     private func resolveURL(for attachment: EmailAttachment) -> URL? {
         guard !attachment.filePath.isEmpty else { return nil }
-        return EmailAttachmentStore.shared.absoluteURL(
-            forEmailID: emailID,
-            filename: attachment.filename
-        )
+        return EmailAttachmentStore.shared.absoluteURL(forRelativePath: attachment.filePath)
     }
 }
 
