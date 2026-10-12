@@ -242,13 +242,15 @@ final class EmailAccountStore {
         Keychain.string(forKey: EmailAccountKeychainKeys.smtpPassword(for: account.id))
     }
 
-    func setPassword(_ password: String, kind: EmailAccountPasswordKind, for account: StoredEmailAccount) {
+    /// Returns `false` when the Keychain write failed.
+    @discardableResult
+    func setPassword(_ password: String, kind: EmailAccountPasswordKind, for account: StoredEmailAccount) -> Bool {
         let key: String
         switch kind {
         case .imap: key = EmailAccountKeychainKeys.imapPassword(for: account.id)
         case .smtp: key = EmailAccountKeychainKeys.smtpPassword(for: account.id)
         }
-        Keychain.set(password, forKey: key)
+        return Keychain.set(password, forKey: key)
     }
 
     // MARK: - Legacy migration

@@ -127,6 +127,7 @@ struct EmailAccountEditorSheet: View {
 
     @State private var testTask: Task<Void, Never>?
     @State private var successfulTestFingerprint: EmailAccountConnectionFingerprint?
+    @State private var showingKeychainSaveError = false
 
     /// Values the validated fields held when the sheet opened. A field's
     /// error is only shown once the user changes it, so a pristine form
@@ -203,6 +204,11 @@ struct EmailAccountEditorSheet: View {
             #endif
         }
         .onAppear(perform: hydrate)
+        .alert("Couldn't Save Password", isPresented: $showingKeychainSaveError) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("SwiftClaw couldn't store the password in the Keychain, so the account wasn't saved. Try again.")
+        }
         .onChange(of: currentConnectionFingerprint) { _, _ in
             successfulTestFingerprint = nil
             if testResult?.isSuccess == true {
@@ -395,29 +401,39 @@ struct EmailAccountEditorSheet: View {
         }
 
         let account = currentSnapshot()
+        // Passwords land in the Keychain before the account is saved, so the
+        // immediate first sync can authenticate — and a failed Keychain write
+        // keeps the sheet open instead of saving an account with no password.
+        guard store.setPassword(imapPassword, kind: .imap, for: account),
+              store.setPassword(smtpPassword, kind: .smtp, for: account) else {
+            showingKeychainSaveError = true
+            return
+        }
         switch mode {
         case .create:
-            // Passwords land in the Keychain before the account is visible so
-            // the immediate first sync below can authenticate.
-            store.setPassword(imapPassword, kind: .imap, for: account)
-            store.setPassword(smtpPassword, kind: .smtp, for: account)
             store.add(account)
             if account.isComplete {
                 EmailWorkflowManager.shared.refreshAfterAccountAdded()
             }
         case .edit:
             store.update(account)
-            store.setPassword(imapPassword, kind: .imap, for: account)
-            store.setPassword(smtpPassword, kind: .smtp, for: account)
         }
         dismiss()
     }
 
-    /// Builds a snapshot of the current field state, reusing the original
-    /// account's UUID when editing (so passwords set in Keychain match).
+    /// Builds a snapshot of the current field state. When editing it starts
+    /// from the store's current copy of the account (so passwords keyed by
+    /// its UUID still match, and folder catalog / review-folder preferences
+    /// the editor doesn't own — possibly refreshed while the sheet was open —
+    /// survive the save).
     private func currentSnapshot() -> StoredEmailAccount {
-        StoredEmailAccount(
-            id: mode.accountID ?? UUID(),
+        let base: StoredEmailAccount
+        if case .edit(let original) = mode {
+            base = store.account(for: original.id) ?? original
+        } else {
+            base = StoredEmailAccount()
+        }
+        return base.applyingEditorFields(
             displayName: displayName,
             imapHost: imapHost,
             imapPort: imapPort,
@@ -445,9 +461,46 @@ private extension EmailAccountEditorSheet.Mode {
         if case .edit = self { return true }
         return false
     }
-    var accountID: UUID? {
-        if case .edit(let account) = self { return account.id }
-        return nil
+}
+
+extension StoredEmailAccount {
+    /// The account with the editor's connection fields applied. Fields the
+    /// editor doesn't show — review-folder opt-ins, the folder catalog, and
+    /// resolved special-use folders — are preserved. When the IMAP server
+    /// identity (host or username) changes, the catalog and special-use
+    /// names are cleared so they re-resolve against the new mailbox instead
+    /// of pointing at the old server's folders; review opt-ins are kept
+    /// (they only apply to folders the new catalog actually lists).
+    func applyingEditorFields(
+        displayName: String,
+        imapHost: String,
+        imapPort: Int,
+        imapUsername: String,
+        smtpHost: String,
+        smtpPort: Int,
+        smtpUsername: String,
+        fromAddress: String
+    ) -> StoredEmailAccount {
+        var updated = self
+        let serverChanged = self.imapHost.caseInsensitiveCompare(imapHost) != .orderedSame
+            || self.imapUsername != imapUsername
+        updated.displayName = displayName
+        updated.imapHost = imapHost
+        updated.imapPort = imapPort
+        updated.imapUsername = imapUsername
+        updated.smtpHost = smtpHost
+        updated.smtpPort = smtpPort
+        updated.smtpUsername = smtpUsername
+        updated.fromAddress = fromAddress
+        if serverChanged {
+            updated.folders = nil
+            updated.archiveMailbox = nil
+            updated.trashMailbox = nil
+            updated.sentMailbox = nil
+            updated.draftsMailbox = nil
+            updated.junkMailbox = nil
+        }
+        return updated
     }
 }
 

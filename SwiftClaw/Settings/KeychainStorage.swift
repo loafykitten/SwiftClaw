@@ -4,6 +4,7 @@ import SwiftUI
 
 nonisolated enum Keychain {
     private static let service = Bundle.main.bundleIdentifier ?? "com.caffeineplz.SwiftClaw"
+    private static let logger = AppLog.make("keychain")
 
     static func string(forKey key: String) -> String? {
         let query: [String: Any] = [
@@ -23,16 +24,19 @@ nonisolated enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func set(_ value: String, forKey key: String) {
+    /// Stores `value` (an empty string deletes the item). Returns `false`
+    /// when the Keychain rejected the write, so callers can surface the
+    /// failure instead of treating the secret as saved.
+    @discardableResult
+    static func set(_ value: String, forKey key: String) -> Bool {
         let existingValue = string(forKey: key)
 
         guard !value.isEmpty else {
-            delete(key)
-            return
+            return delete(key)
         }
 
         guard existingValue != value else {
-            return
+            return true
         }
 
         let data = Data(value.utf8)
@@ -49,43 +53,77 @@ nonisolated enum Keychain {
 
         if status == errSecSuccess {
             postChange(forKey: key)
-        } else if status == errSecItemNotFound {
-            var addQuery = query
-            addQuery[kSecValueData as String] = data
-            addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            if SecItemAdd(addQuery as CFDictionary, nil) == errSecSuccess {
-                postChange(forKey: key)
-            }
+            return true
         }
+        guard status == errSecItemNotFound else {
+            logger.error("Keychain update failed (OSStatus \(status, privacy: .public))")
+            return false
+        }
+
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            logger.error("Keychain add failed (OSStatus \(addStatus, privacy: .public))")
+            return false
+        }
+        postChange(forKey: key)
+        return true
     }
 
-    static func delete(_ key: String) {
+    /// Removes the item. Returns `true` when it's gone afterwards (including
+    /// when it never existed).
+    @discardableResult
+    static func delete(_ key: String) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
         ]
 
-        if SecItemDelete(query as CFDictionary) == errSecSuccess {
+        let status = SecItemDelete(query as CFDictionary)
+        switch status {
+        case errSecSuccess:
             postChange(forKey: key)
+            return true
+        case errSecItemNotFound:
+            return true
+        default:
+            logger.error("Keychain delete failed (OSStatus \(status, privacy: .public))")
+            return false
         }
     }
 
-    /// One-time migration of API keys previously stored in UserDefaults.
-    static func migrateAPIKeysFromUserDefaults() {
-        let keys = [
-            SettingsKeys.azureAPIKey,
-            SettingsKeys.neuralwattAPIKey,
-            SettingsKeys.openRouterAPIKey,
-            SettingsKeys.braveSearchAPIKey,
-        ]
-        let defaults = UserDefaults.standard
+    static let migratedAPIKeys = [
+        SettingsKeys.azureAPIKey,
+        SettingsKeys.neuralwattAPIKey,
+        SettingsKeys.openRouterAPIKey,
+        SettingsKeys.braveSearchAPIKey,
+    ]
 
+    /// One-time migration of API keys previously stored in UserDefaults. The
+    /// UserDefaults copy is removed only once the Keychain verifiably holds a
+    /// value for that key; a failed write leaves it in place for the next
+    /// launch rather than losing the only copy. `read`/`write` are seams for
+    /// tests.
+    static func migrateAPIKeysFromUserDefaults(
+        defaults: UserDefaults = .standard,
+        keys: [String] = migratedAPIKeys,
+        read: (String) -> String? = { string(forKey: $0) },
+        write: (String, String) -> Bool = { set($0, forKey: $1) }
+    ) {
         for key in keys {
-            if let value = defaults.string(forKey: key), !value.isEmpty, string(forKey: key) == nil {
-                set(value, forKey: key)
+            guard let value = defaults.string(forKey: key), !value.isEmpty else {
+                defaults.removeObject(forKey: key)
+                continue
             }
-
+            if read(key) == nil {
+                guard write(value, key), read(key) != nil else {
+                    logger.error("API key migration to the Keychain failed; keeping the UserDefaults copy")
+                    continue
+                }
+            }
             defaults.removeObject(forKey: key)
         }
     }
