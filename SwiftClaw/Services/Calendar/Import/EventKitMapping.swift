@@ -144,12 +144,17 @@ nonisolated enum EventKitMapping {
     /// reverted), or the override itself sat in the window and wasn't
     /// returned (deleted). An override whose original or current slot lies
     /// outside the window may still exist and is kept.
+    ///
+    /// `window` is in the master's encoding (canonical civil dates for an
+    /// all-day series); `overrideWindow` is the same fetch in the override's
+    /// own encoding, which differs when one is all-day and the other timed.
     static func isStaleImportedOverride(
         originalStart: Date,
         overrideStart: Date,
         overrideDuration: TimeInterval,
         masterDuration: TimeInterval,
         window: DateInterval,
+        overrideWindow: DateInterval? = nil,
         actualStarts: [Date]
     ) -> Bool {
         guard windowCovers(originalStart, duration: masterDuration, window: window) else { return false }
@@ -157,7 +162,7 @@ nonisolated enum EventKitMapping {
         if actualStarts.contains(where: { Int64($0.timeIntervalSinceReferenceDate.rounded()) == originalKey }) {
             return true
         }
-        return windowCovers(overrideStart, duration: overrideDuration, window: window)
+        return windowCovers(overrideStart, duration: overrideDuration, window: overrideWindow ?? window)
     }
 
     // MARK: - Colors

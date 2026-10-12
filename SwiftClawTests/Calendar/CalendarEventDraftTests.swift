@@ -30,9 +30,12 @@ struct CalendarEventDraftTests {
         let event = repository.insert(CalendarEvent())
         draft.apply(to: event, in: repository)
 
+        // Stored as civil days (canonical dates), shown as local midnights.
         let dayStart = calendar.startOfDay(for: nineAM)
-        #expect(event.startDate == dayStart)
-        #expect(event.endDate == calendar.date(byAdding: .day, value: 1, to: dayStart))
+        #expect(event.startDate == CivilDay(year: 2026, month: 7, day: 20).canonicalDate)
+        #expect(event.endDate == CivilDay(year: 2026, month: 7, day: 21).canonicalDate)
+        #expect(event.displayInterval(calendar: calendar).start == dayStart)
+        #expect(event.displayInterval(calendar: calendar).end == calendar.date(byAdding: .day, value: 1, to: dayStart))
         #expect(event.isAllDay)
         #expect(event.timeZoneIdentifier == nil)
     }
@@ -51,12 +54,19 @@ struct CalendarEventDraftTests {
         let event = repository.insert(CalendarEvent())
         draft.apply(to: event, in: repository)
 
-        // 20th 14:00 → 22nd 11:00 covers the 20th–22nd: exclusive end is the
-        // 23rd's midnight.
-        #expect(event.startDate == calendar.startOfDay(for: start))
-        #expect(event.endDate == calendar.date(
+        // 20th 14:00 → 22nd 11:00 covers the 20th–22nd: exclusive end day is
+        // the 23rd.
+        #expect(event.startDate == CivilDay(year: 2026, month: 7, day: 20).canonicalDate)
+        #expect(event.endDate == CivilDay(year: 2026, month: 7, day: 23).canonicalDate)
+        #expect(event.allDayDayCount == 3)
+        #expect(event.displayInterval(calendar: calendar).end == calendar.date(
             from: DateComponents(year: 2026, month: 7, day: 23)
         ))
+
+        // Reopening the event loads the same local days back into the draft.
+        let reloaded = CalendarEventDraft(from: event, calendar: calendar)
+        #expect(reloaded.start == calendar.startOfDay(for: start))
+        #expect(reloaded.end == calendar.date(from: DateComponents(year: 2026, month: 7, day: 23)))
     }
 
     @Test func timedDraftGetsCurrentZoneWhenUnset() throws {

@@ -84,7 +84,12 @@ final class CalendarQuickEntryService {
         var draft = CalendarEventDraft(newAt: start, calendarID: calendarID)
         draft.title = parsed.title
         draft.isAllDay = parsed.allDay ?? false
-        if let end = parsed.end.flatMap(Self.parseISODate), end > start {
+        if draft.isAllDay, let days = Self.allDayRange(start: parsed.start, end: parsed.end) {
+            // All-day dates are the model's civil dates as written; an
+            // offset that differs from the device's must not shift the day.
+            draft.start = days.first.startDate()
+            draft.end = days.first.adding(days: days.count).startDate()
+        } else if let end = parsed.end.flatMap(Self.parseISODate), end > start {
             draft.end = end
         } else if draft.isAllDay {
             draft.end = start.addingTimeInterval(24 * 3600)
@@ -100,6 +105,18 @@ final class CalendarQuickEntryService {
     /// code fences and surrounding prose (shared scanner).
     nonisolated static func parseResponse(_ response: String) -> ParsedEvent? {
         ModelResponseJSON.decode(ParsedEvent.self, from: response)
+    }
+
+    /// The civil days of an all-day phrase, read from the "yyyy-MM-dd" the
+    /// model wrote. An end at midnight (or a bare date) is exclusive; an end
+    /// with a clock time ("…T23:59:59") includes its day. At least one day.
+    nonisolated static func allDayRange(start: String, end: String?) -> (first: CivilDay, count: Int)? {
+        guard let first = CivilDay(isoDatePrefix: start) else { return nil }
+        guard let end, let endDay = CivilDay(isoDatePrefix: end) else { return (first, 1) }
+        let time = end.dropFirst(10)
+        let isMidnight = time.isEmpty || time.hasPrefix("T00:00")
+        let exclusiveEnd = isMidnight ? endDay : endDay.adding(days: 1)
+        return (first, max(1, first.days(until: exclusiveEnd)))
     }
 
     nonisolated static func parseISODate(_ string: String) -> Date? {

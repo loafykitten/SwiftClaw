@@ -19,6 +19,26 @@ Apple Calendar overlay.
   values every view consumes.
 - "Edit this event only" = EXDATE on the master + a detached override row
   (`parentEventID` / `originalOccurrenceDate`), the same shape EventKit uses.
+- **All-day events are civil dates, never instants.** `startDate`/`endDate`
+  of an all-day row hold canonical `CivilDay` dates (midnight UTC of each
+  day, `Models/CivilDay.swift`) with an exclusive end day, so July 10 stays
+  July 10, one day long, in any zone the device moves to. The master's
+  EXDATEs, its overrides' `originalOccurrenceDate`, and its RRULE UNTIL (end
+  of the civil day) use the same encoding, and all-day series expand in
+  canonical (GMT) space, so they step by whole days, months, and years.
+  Conversion to the current zone happens only at the boundaries:
+  `CalendarOccurrenceBuilder` (which tests each occurrence's real local
+  interval, so a 23-hour day can't drop out of a late window), the editor
+  draft, alert fire dates (wall-clock offsets on the civil day), `.ics`
+  `VALUE=DATE`, EventKit import/overlay, and quick entry.
+  `EventOccurrence.start` is local; repository occurrence APIs take
+  `occurrenceKey` (the stored encoding). Store window predicates widen by a
+  day (`CalendarEvent.storeFetchWindow`). Timed events keep absolute
+  instants. Legacy rows (`dateEncodingVersion == nil`, local-midnight
+  instants) convert once at launch
+  (`CalendarRepository.migrateAllDayDatesToCivilEncodingIfNeeded`, from
+  `AppBootstrap`), reading each instant in the zone current at migration
+  time; the per-row marker keeps it idempotent.
 - `Services/Calendar/Repository/CalendarRepository.swift` is the single
   mutation boundary and the identity authority (deterministic lookups,
   `dedupeAfterRemoteMerge()` for CloudKit-merge duplicates). User-facing
@@ -56,8 +76,11 @@ pass on remote-change notifications once sync is live.
   tolerant parse; mixed-component files work). All VEVENT usage funnels
   through `ICSTransfer.swift` (VTODO through the Reminders subsystem's
   `ICSTodoTransfer.swift`) so the backend is swappable. All-day values
-  serialize as floating local dates (`VALUE=DATE`, including EXDATEs — never
-  UTC, which would shift the date in non-UTC zones). `RECURRENCE-ID` VEVENTs
+  serialize as `VALUE=DATE` civil dates (DTSTART/DTEND, EXDATE, and UNTIL as
+  a DATE), and parse straight back to canonical `CivilDay` dates, so neither
+  direction depends on the device's zone. Stray DATE-TIME EXDATEs or
+  RECURRENCE-IDs on an all-day event map to the day they fall on in their
+  own zone. `RECURRENCE-ID` VEVENTs
   import as detached override rows keyed `uid@detached@<original-start>`,
   masters first regardless of file order. Re-importing a master drops
   imported overrides the file no longer carries (unless it still EXDATEs
@@ -94,7 +117,9 @@ as chips in the month grid, all-day strip, and agenda — see
 ## Alerts (`Services/Calendar/CalendarAlertScheduler.swift`)
 
 - Event alarms become `UNCalendarNotificationTrigger` requests through
-  `AppNotificationService`, the only scheduled posting path.
+  `AppNotificationService`, the only scheduled posting path. All-day alarm
+  offsets are wall-clock times on the civil day in the current zone ("-15 h"
+  = 9:00 the day before), so they hold across DST and follow the device.
 - The scheduler reconciles a rolling 7-day window by fire date. It expands
   occurrences 28 days further so long-lead alarms still book, then keeps the
   soonest requests.
@@ -150,7 +175,8 @@ overlay events can't be edited, deleted, or dragged.
 ## Testing
 
 `SwiftClawTests/Calendar/` — recurrence goldens (DST, leap day, BYSETPOS,
-COUNT/UNTIL, EXDATE), repository CRUD + dedup, layout-engine packing, month
+COUNT/UNTIL, EXDATE), civil-date zone changes and migration
+(`CivilDateTests`, shared with Reminders), repository CRUD + dedup, layout-engine packing, month
 math, ICS round-trips (incl. Google-flavored fixtures), EventKit mapping,
 alert-scheduler reconciliation against the notification spy, review
 service/tool seams, and quick-entry parsing. Run with

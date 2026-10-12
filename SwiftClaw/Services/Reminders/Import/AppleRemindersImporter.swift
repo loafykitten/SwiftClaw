@@ -120,7 +120,11 @@ final class AppleRemindersImporter {
             let due = ReminderKitMapping.resolvedDueDate(from: snapshot.dueDateComponents)
             // A repeat without a due date has no anchor to roll forward from;
             // drop it alongside genuinely unmappable rules.
-            let ruleString = due.date == nil ? nil : snapshot.recurrenceRule?.rruleString
+            // A date-only series' UNTIL is a civil day, like its due date.
+            let storedRule = due.hasDueTime
+                ? snapshot.recurrenceRule
+                : snapshot.recurrenceRule?.civilizingUntil(readingIn: .current)
+            let ruleString = due.date == nil ? nil : storedRule?.rruleString
             if snapshot.hadUnmappableRecurrence || (snapshot.recurrenceRule != nil && ruleString == nil) {
                 summary.degradedRuleCount += 1
             }

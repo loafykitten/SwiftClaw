@@ -137,7 +137,7 @@ struct ReminderCalendarItemBuilderTests {
 
         let onTransitionDay = Reminder(
             title: "DST day",
-            dueDate: newYork.date(from: DateComponents(year: 2026, month: 3, day: 8))!
+            dueDate: CivilDay(year: 2026, month: 3, day: 8).canonicalDate
         )
         let afterTransition = Reminder(
             title: "After",

@@ -17,9 +17,13 @@ import SwiftData
 final class CalendarEvent {
     var id: UUID = UUID()
     var title: String = ""
-    /// UTC instants. `timeZoneIdentifier` records the zone the event was
-    /// created in so recurrence math and display anchor to it; nil floats the
-    /// event in the viewer's local zone (used for all-day events).
+    /// Timed events: UTC instants, with `timeZoneIdentifier` recording the
+    /// zone the event was created in so recurrence math and display anchor
+    /// to it. All-day events: canonical civil dates (`CivilDay`, midnight
+    /// UTC of each day) with an exclusive end day and a nil zone. The same
+    /// encoding applies to an all-day master's EXDATEs, its overrides'
+    /// `originalOccurrenceDate`, and its RRULE UNTIL. Read them through
+    /// `displayInterval(calendar:)`, never as instants.
     var startDate: Date = Date.now
     var endDate: Date = Date.now.addingTimeInterval(3600)
     var isAllDay: Bool = false
@@ -52,6 +56,10 @@ final class CalendarEvent {
     /// Last time a calendar-review pass included this event. Mirrors
     /// `EmailThread.lastReviewedAt` suppression.
     var lastReviewedAt: Date? = nil
+    /// How this row stores all-day values: `CivilDay.encodingVersion` for
+    /// canonical civil dates; nil for a legacy row (local-midnight instants)
+    /// the startup migration hasn't converted yet.
+    var dateEncodingVersion: Int? = nil
     var calendar: UserCalendar? = nil
 
     init(
@@ -84,6 +92,7 @@ final class CalendarEvent {
         self.externalIdentifier = externalIdentifier
         self.sourceRawValue = source.rawValue
         self.calendar = calendar
+        dateEncodingVersion = CivilDay.encodingVersion
     }
 
     var source: CalendarEventSource {
@@ -107,24 +116,83 @@ final class CalendarEvent {
         timeZoneIdentifier.flatMap(TimeZone.init(identifier:))
     }
 
-    /// Whole local days an all-day event spans (at least one). Counted by
-    /// calendar days, not seconds: a one-day event created on a 23- or
-    /// 25-hour DST day still spans exactly one day.
-    func allDaySpan(calendar: Calendar = .current) -> Int {
-        let firstDay = calendar.startOfDay(for: startDate)
-        let exclusiveEnd = EventKitMapping.normalizedAllDayEnd(max(endDate, startDate), calendar: calendar)
-        let days = calendar.dateComponents([.day], from: firstDay, to: exclusiveEnd).day ?? 1
-        return max(1, days)
+    // MARK: - All-day civil dates
+
+    /// The zone recurrence expands in: canonical civil space for all-day
+    /// series (whole-day steps, immune to DST and zone changes), otherwise
+    /// the event's own zone (nil = the current zone).
+    var recurrenceTimeZone: TimeZone? {
+        isAllDay ? CivilDay.canonicalTimeZone : timeZone
     }
 
-    /// End of this event's occurrence starting at `start`. Timed events keep
-    /// their elapsed duration; all-day events keep their day count, so an
-    /// occurrence on a DST-transition day still ends at the next local
-    /// midnight instead of an hour into the following day.
-    func occurrenceEnd(forStart start: Date, calendar: Calendar = .current) -> Date {
+    /// Civil days an all-day event spans (at least one). Exact, because both
+    /// stored ends are canonical civil dates.
+    var allDayDayCount: Int {
+        max(1, CivilDay(canonical: startDate).days(until: CivilDay(canonical: endDate)))
+    }
+
+    /// Stores an all-day span: `dayCount` civil days from `firstDay`.
+    func setAllDaySpan(from firstDay: CivilDay, dayCount: Int) {
+        isAllDay = true
+        startDate = firstDay.canonicalDate
+        endDate = firstDay.adding(days: max(1, dayCount)).canonicalDate
+        timeZoneIdentifier = nil
+    }
+
+    /// Stores an all-day span from local instants (editors, EventKit): the
+    /// day containing `localStart` through the day before the exclusive end
+    /// (an inclusive 23:59:59 end rounds up to the next midnight), read in
+    /// `calendar`'s zone. Always at least one day.
+    func setAllDaySpan(localStart: Date, localEnd: Date, calendar: Calendar = .current) {
+        let firstDay = CivilDay(containing: localStart, in: calendar)
+        let exclusiveEnd = EventKitMapping.normalizedAllDayEnd(max(localEnd, localStart), calendar: calendar)
+        let endDay = CivilDay(containing: exclusiveEnd, in: calendar)
+        setAllDaySpan(from: firstDay, dayCount: firstDay.days(until: endDay))
+    }
+
+    /// The row's own interval as shown in `calendar`'s zone.
+    func displayInterval(calendar: Calendar = .current) -> DateInterval {
+        displayInterval(forStoredStart: startDate, calendar: calendar)
+    }
+
+    /// The displayed interval of the occurrence whose stored start (the
+    /// master's encoding, which the expander and EXDATEs use) is `start`.
+    /// All-day occurrences run local midnight to local midnight in
+    /// `calendar`, however long those days are; timed ones keep their
+    /// elapsed duration.
+    func displayInterval(forStoredStart start: Date, calendar: Calendar = .current) -> DateInterval {
+        guard isAllDay else {
+            return DateInterval(start: start, duration: max(0, duration))
+        }
+        let firstDay = CivilDay(canonical: start)
+        let localStart = firstDay.startDate(in: calendar)
+        let localEnd = firstDay.adding(days: allDayDayCount).startDate(in: calendar)
+        return DateInterval(start: localStart, end: max(localStart, localEnd))
+    }
+
+    /// Stored end of the occurrence starting at stored `start`. Timed events
+    /// keep their elapsed duration; all-day events keep their day count.
+    func occurrenceEnd(forStart start: Date) -> Date {
         guard isAllDay else { return start.addingTimeInterval(duration) }
-        return calendar.date(byAdding: .day, value: allDaySpan(calendar: calendar), to: start)
-            ?? start.addingTimeInterval(duration)
+        return CivilDay(canonical: start).adding(days: allDayDayCount).canonicalDate
+    }
+
+    /// The stored-encoding key for a displayed occurrence start: the
+    /// canonical date of its local day for all-day events, the instant
+    /// itself otherwise.
+    func storedDate(forDisplayed date: Date, calendar: Calendar = .current) -> Date {
+        isAllDay ? CivilDay.canonicalDate(forLocal: date, in: calendar) : date
+    }
+
+    /// The window store fetches over `startDate`/`endDate`/`recurrenceEndDate`
+    /// use: the visible one widened by `CivilDay.storagePadding`, because
+    /// all-day rows store canonical dates up to a day from their local
+    /// instants. `CalendarOccurrenceBuilder` applies the exact test after.
+    static func storeFetchWindow(for window: DateInterval) -> DateInterval {
+        DateInterval(
+            start: window.start.addingTimeInterval(-CivilDay.storagePadding),
+            end: window.end.addingTimeInterval(CivilDay.storagePadding)
+        )
     }
 
     var url: URL? {

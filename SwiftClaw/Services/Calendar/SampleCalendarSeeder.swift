@@ -61,13 +61,9 @@ enum SampleCalendarSeeder {
         insertEvent("Dentist", at(3, 8, 30), hours: 1, in: personal)
         insertEvent("Release cut", at(3, 15), hours: 1, in: work)
         insertEvent("Dinner Saturday", at(5, 19), hours: 2, in: personal, location: "New ramen place by the park")
-        context.insert(CalendarEvent(
-            title: "Farmers market",
-            startDate: calendar.date(byAdding: .day, value: 6, to: today) ?? today,
-            endDate: calendar.date(byAdding: .day, value: 7, to: today) ?? today,
-            isAllDay: true,
-            calendar: personal
-        ))
+        let farmersMarket = CalendarEvent(title: "Farmers market", calendar: personal)
+        farmersMarket.setAllDaySpan(from: CivilDay(containing: today).adding(days: 6), dayCount: 1)
+        context.insert(farmersMarket)
 
         let errands = ReminderList(name: "Errands", colorHex: "#FF9F0A", sortOrder: 0)
         let launch = ReminderList(name: "Launch prep", colorHex: "#BF5AF2", sortOrder: 1)
@@ -76,7 +72,11 @@ enum SampleCalendarSeeder {
 
         context.insert(Reminder(title: "Pay invoice #8841", dueDate: at(4, 17), hasDueTime: true, priority: .high, isFlagged: true, list: launch))
         context.insert(Reminder(title: "Write release notes", dueDate: at(3, 12), hasDueTime: true, list: launch))
-        context.insert(Reminder(title: "Record demo video", dueDate: at(2, 0), list: launch))
+        context.insert(Reminder(
+            title: "Record demo video",
+            dueDate: CivilDay(containing: today).adding(days: 2).canonicalDate,
+            list: launch
+        ))
         context.insert(Reminder(title: "Pick up dry cleaning", dueDate: at(0, 18), hasDueTime: true, list: errands))
         context.insert(Reminder(title: "Buy coffee beans", list: errands))
         context.insert(Reminder(

@@ -17,9 +17,12 @@ final class Reminder {
     var title: String = ""
     var notes: String?
     var urlString: String?
-    /// Nil = inbox item. Date-only reminders store local start-of-day with
-    /// `hasDueTime == false` and nil `timeZoneIdentifier`, matching all-day
-    /// calendar event floating semantics.
+    /// Nil = inbox item. Timed reminders store the due instant. Date-only
+    /// reminders (`hasDueTime == false`, nil `timeZoneIdentifier`) store the
+    /// canonical civil date of the due day (`CivilDay`, midnight UTC), like
+    /// all-day calendar events; so do their log rows'
+    /// `originalOccurrenceDate` and their RRULE UNTIL. Read the due moment
+    /// through `localDueDate(calendar:)`, never `dueDate` directly.
     var dueDate: Date?
     var hasDueTime: Bool = false
     var timeZoneIdentifier: String?
@@ -55,6 +58,10 @@ final class Reminder {
     var modifiedAt: Date = Date.now
     /// Last time a reminders-review pass included this reminder.
     var lastReviewedAt: Date?
+    /// How this row stores date-only values: `CivilDay.encodingVersion` for
+    /// canonical civil dates; nil for a legacy row (local start-of-day
+    /// instants) the startup migration hasn't converted yet.
+    var dateEncodingVersion: Int?
     var list: ReminderList?
 
     init(
@@ -91,6 +98,7 @@ final class Reminder {
         self.externalIdentifier = externalIdentifier
         sourceRawValue = source.rawValue
         self.list = list
+        dateEncodingVersion = CivilDay.encodingVersion
     }
 
     var source: ReminderSource {
@@ -125,14 +133,38 @@ final class Reminder {
 
     /// The one overdue rule every surface shares (rows, calendar chips,
     /// workspace tile, AI review): timed reminders are overdue past their due
-    /// instant; date-only ones keep all of their local day and only go
-    /// overdue once that day has passed. Completed reminders never are.
+    /// instant; date-only ones keep all of their civil day and only go
+    /// overdue once that day has passed in `calendar`'s zone. Completed
+    /// reminders never are.
     func isOverdue(now: Date, calendar: Calendar = .current) -> Bool {
         guard !isCompleted, let dueDate else { return false }
         if hasDueTime {
             return dueDate < now
         }
-        return dueDate < calendar.startOfDay(for: now)
+        return CivilDay(canonical: dueDate) < CivilDay(containing: now, in: calendar)
+    }
+
+    // MARK: - Civil due days
+
+    /// The due day of a date-only reminder (nil when timed or undated).
+    var dueDay: CivilDay? {
+        guard !hasDueTime, let dueDate else { return nil }
+        return CivilDay(canonical: dueDate)
+    }
+
+    /// The due moment as it reads in `calendar`'s zone: the instant for
+    /// timed reminders, the local start of the civil due day for date-only
+    /// ones. Every display, sorting, and bucketing surface reads this.
+    func localDueDate(calendar: Calendar = .current) -> Date? {
+        guard let dueDate else { return nil }
+        return hasDueTime ? dueDate : CivilDay(canonical: dueDate).startDate(in: calendar)
+    }
+
+    /// Makes the reminder date-only, due on `day`.
+    func setDueDay(_ day: CivilDay) {
+        dueDate = day.canonicalDate
+        hasDueTime = false
+        timeZoneIdentifier = nil
     }
 
     /// Whether the reminder's list is shown in the UI (list-less reminders

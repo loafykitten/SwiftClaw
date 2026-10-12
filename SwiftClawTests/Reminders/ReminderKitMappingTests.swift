@@ -29,15 +29,15 @@ struct ReminderKitMappingTests {
         #expect(resolved.timeZoneIdentifier == nil)
     }
 
-    /// Date-only dues are floating local days: whatever zone the components
-    /// carry, the reminder lands on that calendar day's local midnight with
-    /// no stored zone (the all-day event convention).
-    @Test func dateOnlyDueIsLocalStartOfDayIgnoringComponentZone() throws {
+    /// Date-only dues are civil days: whatever zone the components carry,
+    /// the reminder stores that day's canonical date with no zone (the
+    /// all-day event convention).
+    @Test func dateOnlyDueIsCivilDayIgnoringComponentZone() throws {
         var components = DateComponents(year: 2026, month: 7, day: 15)
         components.timeZone = TimeZone(identifier: "Asia/Tokyo")
 
         let resolved = ReminderKitMapping.resolvedDueDate(from: components)
-        let expected = Calendar.current.date(from: DateComponents(year: 2026, month: 7, day: 15))!
+        let expected = CivilDay(year: 2026, month: 7, day: 15).canonicalDate
         #expect(resolved.date == expected)
         #expect(!resolved.hasDueTime)
         #expect(resolved.timeZoneIdentifier == nil)

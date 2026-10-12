@@ -42,19 +42,17 @@ struct ICSRoundTripTests {
         #expect(!parsed.isAllDay)
     }
 
-    /// All-day starts are stored as *local* midnight (floating dates), so the
-    /// fixture must be local midnight too — a UTC-midnight instant would
-    /// legitimately serialize as the previous local day in negative-offset
-    /// zones (and the next in positive ones).
-    private static func localMidnight(_ year: Int, _ month: Int, _ day: Int) -> Date {
-        Calendar.current.date(from: DateComponents(year: year, month: month, day: day))!
+    /// All-day values are civil dates stored canonically (midnight UTC of the
+    /// day, `CivilDay`), whatever zone the exporting device is in.
+    private static func civil(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        CivilDay(year: year, month: month, day: day).canonicalDate
     }
 
     @Test func allDayEventRoundTripsWithExclusiveEnd() throws {
         var event = ICSEventRepresentation(
             uid: "test-2",
-            start: Self.localMidnight(2026, 6, 10),
-            end: Self.localMidnight(2026, 6, 11)
+            start: Self.civil(2026, 6, 10),
+            end: Self.civil(2026, 6, 11)
         )
         event.title = "Conference day"
         event.isAllDay = true
@@ -72,12 +70,12 @@ struct ICSRoundTripTests {
     @Test func allDayExceptionsSerializeAsDateValues() throws {
         var event = ICSEventRepresentation(
             uid: "test-2b",
-            start: Self.localMidnight(2026, 6, 10),
-            end: Self.localMidnight(2026, 6, 11)
+            start: Self.civil(2026, 6, 10),
+            end: Self.civil(2026, 6, 11)
         )
         event.isAllDay = true
         event.rruleString = "FREQ=WEEKLY"
-        event.exceptionDates = [Self.localMidnight(2026, 6, 24)]
+        event.exceptionDates = [Self.civil(2026, 6, 24)]
 
         // RFC 5545 requires EXDATE to match DTSTART's value type; a UTC
         // date-time EXDATE against a VALUE=DATE start gets ignored by other

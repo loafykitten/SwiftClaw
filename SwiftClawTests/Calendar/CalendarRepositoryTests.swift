@@ -269,8 +269,12 @@ struct CalendarRepositoryTests {
         let finalStart = Self.date(2026, 6, 3)
         #expect(event.recurrenceEndDate == Self.date(2026, 6, 4))
 
+        // All-day dates are civil (canonical UTC midnights here), shown in
+        // the viewer's zone; view in UTC so the window instants line up.
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
         let finalDay = DateInterval(start: finalStart, end: Self.date(2026, 6, 4))
-        #expect(repository.occurrences(in: finalDay).map(\.start) == [finalStart])
+        #expect(repository.occurrences(in: finalDay, calendar: utc).map(\.start) == [finalStart])
     }
 
     // MARK: - Import support

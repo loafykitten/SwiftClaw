@@ -7,7 +7,8 @@ import Foundation
 /// plus SwiftClaw's X- properties for flags, checklists, and
 /// after-completion repeats.
 ///
-/// Date policy: all-day events use VALUE=DATE (exclusive DTEND per spec);
+/// Date policy: all-day events (and date-only to-dos) use VALUE=DATE written
+/// from their canonical civil dates (exclusive DTEND per spec, DATE UNTIL);
 /// non-recurring timed events serialize as UTC instants ("...Z" — universally
 /// portable); recurring timed events keep their zone via TZID so wall-clock
 /// semantics survive DST. No VTIMEZONE component is emitted — every major
@@ -54,18 +55,15 @@ nonisolated enum ICSSerializer {
         lines.append("DTSTAMP:\(ICSDateFormat.utcString(from: .now))")
 
         if event.isAllDay {
-            // All-day starts are floating local dates (stored as local
-            // midnight instants). Format them in the local calendar — a UTC
-            // read would shift the date in positive-offset zones (Tokyo's
-            // July 10 midnight is July 9 UTC).
-            let calendar = ICSDateFormat.calendar(for: TimeZone.current.identifier)
+            // All-day values are canonical civil dates (`CivilDay`, midnight
+            // UTC), so they format in the canonical calendar and write the
+            // same dates whatever zone the exporting device is in.
+            let calendar = CivilDay.canonicalCalendar
             lines.append("DTSTART;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: event.start, calendar: calendar))")
-            // DTEND for VALUE=DATE is exclusive: the morning after the last day.
-            let exclusiveEnd = max(
-                event.end,
-                calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: event.start)) ?? event.end
-            )
-            lines.append("DTEND;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: exclusiveEnd, calendar: calendar))")
+            // DTEND for VALUE=DATE is exclusive: the day after the last day.
+            let firstDay = CivilDay(canonical: event.start)
+            let exclusiveEnd = max(CivilDay(canonical: event.end), firstDay.adding(days: 1))
+            lines.append("DTEND;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: exclusiveEnd.canonicalDate, calendar: calendar))")
         } else if event.rruleString != nil, let zone = event.timeZoneIdentifier, !ICSDateFormat.isUTC(zone) {
             let calendar = ICSDateFormat.calendar(for: zone)
             lines.append("DTSTART;TZID=\(zone):\(ICSDateFormat.localString(from: event.start, calendar: calendar))")
@@ -86,14 +84,14 @@ nonisolated enum ICSSerializer {
             lines.append("URL:\(urlString)")
         }
         if let rrule = event.rruleString {
-            lines.append("RRULE:\(rrule)")
+            lines.append("RRULE:\(event.isAllDay ? Self.dateOnlyRRule(rrule) : rrule)")
         }
         for exception in event.exceptionDates {
             if event.isAllDay {
                 // RFC 5545 requires EXDATE to match DTSTART's value type, so
-                // an all-day series excludes whole dates (same local calendar
+                // an all-day series excludes whole dates (canonical calendar,
                 // as DTSTART above).
-                let calendar = ICSDateFormat.calendar(for: TimeZone.current.identifier)
+                let calendar = CivilDay.canonicalCalendar
                 lines.append("EXDATE;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: exception, calendar: calendar))")
             } else if let zone = event.timeZoneIdentifier, event.rruleString != nil, !ICSDateFormat.isUTC(zone) {
                 let calendar = ICSDateFormat.calendar(for: zone)
@@ -122,10 +120,9 @@ nonisolated enum ICSSerializer {
 
         if let due = todo.due {
             if todo.isDateOnly {
-                // Date-only dues are floating local days (stored as local
-                // midnight instants) — format them in the local calendar,
-                // same as all-day DTSTART.
-                let calendar = ICSDateFormat.calendar(for: TimeZone.current.identifier)
+                // Date-only dues are canonical civil dates, same as all-day
+                // DTSTART.
+                let calendar = CivilDay.canonicalCalendar
                 lines.append("DUE;VALUE=DATE:\(ICSDateFormat.dateOnlyString(from: due, calendar: calendar))")
             } else if todo.rruleString != nil || todo.afterCompletionRepeat != nil,
                       let zone = todo.timeZoneIdentifier, !ICSDateFormat.isUTC(zone) {
@@ -157,7 +154,7 @@ nonisolated enum ICSSerializer {
             lines.append("STATUS:NEEDS-ACTION")
         }
         if let rrule = todo.rruleString {
-            lines.append("RRULE:\(rrule)")
+            lines.append("RRULE:\(todo.isDateOnly ? Self.dateOnlyRRule(rrule) : rrule)")
         } else if let repeatAfter = todo.afterCompletionRepeat {
             lines.append("X-SWIFTCLAW-REPEAT-AFTER:\(repeatAfter.count) \(repeatAfter.unit.rawValue)")
         }
@@ -172,6 +169,14 @@ nonisolated enum ICSSerializer {
     }
 
     // MARK: - Primitives
+
+    /// An all-day / date-only RRULE with UNTIL as a DATE, matching the
+    /// VALUE=DATE start (RFC 5545 §3.3.10). Rules outside our subset pass
+    /// through verbatim.
+    static func dateOnlyRRule(_ rrule: String) -> String {
+        guard let rule = RecurrenceRule(rruleString: rrule), case .untilDate = rule.end else { return rrule }
+        return rule.dateOnlyRRuleString
+    }
 
     /// RFC 5545 §3.3.11 TEXT escaping.
     static func escapeText(_ text: String) -> String {
@@ -273,6 +278,10 @@ nonisolated enum ICSDateFormat {
 
     /// Parses "yyyyMMdd" (DATE), "yyyyMMdd'T'HHmmss" (local in `zone`), or
     /// "yyyyMMdd'T'HHmmssZ" (UTC). Returns nil on malformed input.
+    ///
+    /// `isDateOnly` values (VALUE=DATE) are civil dates and come back as
+    /// canonical `CivilDay` instants (midnight UTC), the store's all-day /
+    /// date-only encoding; any TZID is ignored, as RFC 5545 DATE has none.
     static func parse(_ value: String, timeZoneIdentifier: String?, isDateOnly: Bool) -> Date? {
         let characters = Array(value)
         func digits(_ range: Range<Int>) -> Int? {
@@ -290,7 +299,11 @@ nonisolated enum ICSDateFormat {
             components.hour = 0
             components.minute = 0
             components.second = 0
-            // DATE values are floating; resolve in the caller's zone choice.
+            if isDateOnly {
+                zoneIdentifier = "UTC"
+            }
+            // A bare 8-digit value without VALUE=DATE resolves in the
+            // caller's zone choice, as before.
         } else {
             guard characters.count >= 15, characters[8] == "T",
                   let hour = digits(9..<11), let minute = digits(11..<13), let second = digits(13..<15)

@@ -181,14 +181,14 @@ final class CalendarReviewNotifyTool: Tool {
     /// one-offs, past events, and series with no near-term occurrence.
     @MainActor
     private static func upcomingStart(of event: CalendarEvent, repository: CalendarRepository) -> Date {
-        guard event.isRecurring else { return event.startDate }
+        guard event.isRecurring else { return event.displayInterval().start }
         let window = DateInterval(start: .now, duration: 60 * 24 * 3600)
         let occurrences = CalendarOccurrenceBuilder.occurrences(
             from: [event] + repository.overrides(of: event),
             in: window,
             visibleCalendarsOnly: false
         )
-        return occurrences.first?.start ?? event.startDate
+        return occurrences.first?.start ?? event.displayInterval().start
     }
 
     @MainActor

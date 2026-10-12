@@ -214,13 +214,14 @@ struct ReminderReviewServiceTests {
     }
 
     @Test func dateOnlyReminderIsNotOverdueUntilItsDayPasses() throws {
-        let calendar = Calendar.current
-        let today = Reminder(title: "Today", dueDate: calendar.startOfDay(for: .now), hasDueTime: false)
+        // Date-only dues store the civil day's canonical date.
+        let todayDay = CivilDay(containing: .now)
+        let today = Reminder(title: "Today", dueDate: todayDay.canonicalDate, hasDueTime: false)
         #expect(!ReminderReviewFetchTool.isOverdue(today, now: .now))
 
         let yesterday = Reminder(
             title: "Yesterday",
-            dueDate: calendar.startOfDay(for: .now.addingTimeInterval(-24 * 3600)),
+            dueDate: todayDay.adding(days: -1).canonicalDate,
             hasDueTime: false
         )
         #expect(ReminderReviewFetchTool.isOverdue(yesterday, now: .now))

@@ -343,8 +343,8 @@ struct ReminderListDetailView: View {
         /// Smart views interleave lists: soonest due first, then flagged, then
         /// title — a stable, explainable order.
         private static func smartOrder(_ lhs: Reminder, _ rhs: Reminder) -> Bool {
-            let lhsDue = lhs.dueDate ?? .distantFuture
-            let rhsDue = rhs.dueDate ?? .distantFuture
+            let lhsDue = lhs.localDueDate() ?? .distantFuture
+            let rhsDue = rhs.localDueDate() ?? .distantFuture
             if lhsDue != rhsDue { return lhsDue < rhsDue }
             if lhs.isFlagged != rhs.isFlagged { return lhs.isFlagged }
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending

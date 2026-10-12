@@ -10,6 +10,12 @@
     post-merge dedup).
     Apply the same shape to any future model destined for the CloudKit
     configuration in `SwiftClawModelContainerFactory`.
+- Date-only values (all-day events, date-only reminders) persist as
+  canonical `CivilDay` dates (midnight UTC of the day), never local-midnight
+  instants; convert with `CivilDay` at the display/import/export boundary
+  (`docs/features/CALENDAR.md`). A new field adopting a new encoding needs a
+  per-row marker (template: `dateEncodingVersion`, optional so existing rows
+  read as legacy) and a startup migration in `AppBootstrap`.
 - Enums persisted as a raw `String` plus a computed accessor (template:
   `ChatMessage.roleRawValue` / `.role`).
 - `@Relationship(deleteRule: .cascade, inverse: \Child.parent)` for

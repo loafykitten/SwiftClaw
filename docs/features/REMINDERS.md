@@ -34,8 +34,21 @@ template (`docs/features/CALENDAR.md`).
   `uncomplete` throw `UndoCompletionError`, which the row shows in its alert.
   Logs written before snapshots existed are refused too. There are no EXDATEs
   or per-occurrence overrides; editing a recurring reminder edits the series.
-- Date-only vs timed: `hasDueTime: Bool`; date-only reminders store local
-  start-of-day with a nil timezone (floating, like the calendar's `isAllDay`).
+- Date-only vs timed: `hasDueTime: Bool`. **Date-only reminders are civil
+  dates**: `dueDate` holds the due day's canonical `CivilDay` date (midnight
+  UTC) with a nil timezone, exactly like all-day calendar events (see
+  CALENDAR.md), and so do their log rows' `originalOccurrenceDate` and their
+  RRULE UNTIL. Read it through `Reminder.localDueDate(calendar:)` (local
+  start of the civil day) or `dueDay`, never raw: smart lists, overdue,
+  rows, chips, the Workspace tile, alerts, and review payloads all do, so a
+  July 10 reminder stays July 10 after travel. Fixed-schedule date-only
+  repeats expand in canonical space (whole-day steps); after-completion
+  ones step from the civil day of the completion in the current zone.
+  `pendingReminders(dueBefore:)` widens its store bound by a day and
+  filters and sorts on the local due moment. Timed reminders keep absolute
+  instants. Legacy rows convert once at launch
+  (`ReminderRepository.migrateDateOnlyDueDatesToCivilEncodingIfNeeded`,
+  per-row `dateEncodingVersion` marker).
 - Priority raw values sit on the RFC 5545 / EKReminder scale (0/1/5/9).
 - Checklist items are a JSON blob on `checklistData` (the `alarmsData`
   pattern from `docs/conventions/MODELS.md`).
@@ -98,7 +111,8 @@ back to the manual editor with the typed phrase as the title.
   active and 48 otherwise.
 - Timed reminders fire at `dueDate`. Date-only reminders use
   `settings.reminders.allDayAlertMinutes` (default 9:00 AM; configured in
-  Settings › Notifications), with calendar components preventing DST shifts.
+  Settings › Notifications) on their civil due day in the current zone,
+  with calendar components preventing DST shifts.
 - Content fingerprints make edits replace stale requests. Disabling the alert
   source or feature clears booked alerts, after waiting for in-flight posts
   so an add already past its gate is removed instead of surviving; a pass

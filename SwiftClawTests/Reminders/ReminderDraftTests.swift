@@ -61,11 +61,14 @@ struct ReminderDraftTests {
         let reminder = Reminder()
         draft.apply(to: reminder, in: repository)
 
-        #expect(reminder.dueDate == Calendar.current.startOfDay(for: Self.date(2026, 4, 15)))
+        // Stored as the civil day; reloaded as its local start of day.
+        #expect(reminder.dueDate == CivilDay(containing: Self.date(2026, 4, 15)).canonicalDate)
         #expect(!reminder.hasDueTime)
         #expect(reminder.timeZoneIdentifier == nil)
 
-        #expect(ReminderDraft(from: reminder).dueDateMode == .date)
+        let reloaded = ReminderDraft(from: reminder)
+        #expect(reloaded.dueDateMode == .date)
+        #expect(reloaded.dueDate == Calendar.current.startOfDay(for: Self.date(2026, 4, 15)))
     }
 
     @Test func clearingDueDateClearsStoredFields() throws {

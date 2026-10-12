@@ -6,6 +6,12 @@ import os
 /// masters expand via `RecurrenceExpander`. Shared by `CalendarRepository`
 /// (predicate-fetched rows) and the calendar views (`@Query` rows), so both
 /// paths render identically.
+///
+/// All-day rows store canonical civil dates (`CivilDay`); this is where they
+/// become local intervals in `calendar`'s zone. All-day series expand in
+/// canonical civil space against every civil day the window touches, then
+/// each occurrence is tested against the window by its real local interval
+/// (a day can run 23 or 25 hours, so no seconds-based duration is exact).
 @MainActor
 enum CalendarOccurrenceBuilder {
     private static let logger = AppLog.make("calendar.occurrences")
@@ -13,58 +19,61 @@ enum CalendarOccurrenceBuilder {
     static func occurrences(
         from events: [CalendarEvent],
         in window: DateInterval,
-        visibleCalendarsOnly: Bool = true
+        visibleCalendarsOnly: Bool = true,
+        calendar: Calendar = .current
     ) -> [EventOccurrence] {
         var occurrences: [EventOccurrence] = []
+        func appendIfVisible(_ event: CalendarEvent, storedStart: Date) {
+            let interval = event.displayInterval(forStoredStart: storedStart, calendar: calendar)
+            guard interval.start < window.end, interval.end > window.start else { return }
+            occurrences.append(occurrence(for: event, interval: interval, storedStart: storedStart))
+        }
+
         for event in events {
             if visibleCalendarsOnly && !(event.calendar?.isVisible ?? true) { continue }
 
             guard event.isRecurring else {
-                if event.startDate < window.end && event.endDate > window.start {
-                    occurrences.append(occurrence(for: event, start: event.startDate, end: event.endDate))
-                }
+                appendIfVisible(event, storedStart: event.startDate)
                 continue
             }
             guard let rule = event.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:)) else {
                 // Unparseable rule (imported beyond our subset): render the
                 // master as a one-off rather than dropping it silently.
                 Self.logger.warning("unparseable RRULE on event \(event.id, privacy: .public); rendering as one-off")
-                if event.startDate < window.end && event.endDate > window.start {
-                    occurrences.append(occurrence(for: event, start: event.startDate, end: event.endDate))
-                }
+                appendIfVisible(event, storedStart: event.startDate)
                 continue
             }
             let starts = RecurrenceExpander.occurrenceStarts(
                 rule: rule,
                 eventStart: event.startDate,
                 duration: event.duration,
-                window: window,
+                window: event.isAllDay ? CivilDay.canonicalWindow(covering: window, in: calendar) : window,
                 exceptionDates: event.exceptionDates,
-                timeZone: event.timeZone
+                timeZone: event.recurrenceTimeZone
             )
             for start in starts {
-                // Calendar-day end for all-day series (see `occurrenceEnd`);
-                // the expander's second-based window test can admit a day
-                // that the DST-correct end no longer reaches.
-                let end = event.occurrenceEnd(forStart: start)
-                guard end > window.start else { continue }
-                occurrences.append(occurrence(for: event, start: start, end: end))
+                appendIfVisible(event, storedStart: start)
             }
         }
         return occurrences.sorted { ($0.start, $0.title) < ($1.start, $1.title) }
     }
 
-    private static func occurrence(for event: CalendarEvent, start: Date, end: Date) -> EventOccurrence {
+    private static func occurrence(
+        for event: CalendarEvent,
+        interval: DateInterval,
+        storedStart: Date
+    ) -> EventOccurrence {
         EventOccurrence(
             eventID: event.id,
             calendarID: event.calendar?.id,
             title: event.title,
-            start: start,
-            end: end,
+            start: interval.start,
+            end: interval.end,
             isAllDay: event.isAllDay,
             colorHex: event.calendar?.colorHex ?? UserCalendar.defaultColorHex,
             source: event.source,
-            isOverride: event.isOverride
+            isOverride: event.isOverride,
+            storedStart: storedStart
         )
     }
 }

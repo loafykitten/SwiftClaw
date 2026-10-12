@@ -71,10 +71,12 @@ nonisolated enum ICSParser {
         var notes: String?
         var urlString: String?
         var rruleString: String?
-        var recurrenceID: Date?
-        var exceptionDates: [Date] = []
+        var recurrenceID: ParsedDate?
+        var exceptionDates: [ParsedDate] = []
         var alarmOffsets: [TimeInterval] = []
         var durationValue: TimeInterval?
+        var endIsDateOnly = false
+        var endTimeZoneIdentifier: String?
 
         var index = startIndex
         while index < lines.count {
@@ -83,9 +85,29 @@ nonisolated enum ICSParser {
             case "END" where line.value.uppercased() == "VEVENT":
                 index += 1
                 guard let uid, let start else { return (nil, index) }
-                let resolvedEnd = end
+                var resolvedEnd = end
                     ?? durationValue.map { start.addingTimeInterval($0) }
                     ?? (isAllDay ? start.addingTimeInterval(24 * 3600) : start.addingTimeInterval(3600))
+                if isAllDay {
+                    // DATE values are already canonical civil dates. Some
+                    // producers mix in DATE-TIME ends or EXDATEs; read those
+                    // as days in their own zone. (RECURRENCE-ID keys the
+                    // *master's* occurrence, so the importer normalizes it
+                    // against the master, not this event's start type.)
+                    let firstDay = CivilDay(canonical: start)
+                    // No DTEND: DURATION / the default day ran in canonical space.
+                    let endDay = end == nil || endIsDateOnly
+                        ? CivilDay(canonical: resolvedEnd)
+                        : CivilDay(containing: EventKitMapping.normalizedAllDayEnd(
+                            resolvedEnd,
+                            calendar: Self.zoneCalendar(endTimeZoneIdentifier)
+                        ), in: Self.zoneCalendar(endTimeZoneIdentifier))
+                    resolvedEnd = firstDay.adding(days: max(1, firstDay.days(until: endDay))).canonicalDate
+                    exceptionDates = exceptionDates.map { $0.isDateOnly ? $0 : $0.civilized() }
+                    rruleString = rruleString.map {
+                        RecurrenceRule.civilRuleString(fromImported: $0, readingIn: .current)
+                    }
+                }
                 var event = ICSEventRepresentation(uid: uid, start: start, end: resolvedEnd)
                 event.title = title
                 event.isAllDay = isAllDay
@@ -95,8 +117,10 @@ nonisolated enum ICSParser {
                 event.notes = notes
                 event.urlString = urlString
                 event.rruleString = rruleString
-                event.recurrenceID = recurrenceID
-                event.exceptionDates = exceptionDates
+                event.recurrenceID = recurrenceID?.date
+                event.recurrenceIDIsDateOnly = recurrenceID?.isDateOnly ?? false
+                event.recurrenceIDTimeZoneIdentifier = recurrenceID?.timeZoneIdentifier
+                event.exceptionDates = exceptionDates.map(\.date)
                 event.alarmOffsets = alarmOffsets
                 return (event, index)
 
@@ -126,11 +150,7 @@ nonisolated enum ICSParser {
             case "RRULE":
                 rruleString = line.value
             case "RECURRENCE-ID":
-                recurrenceID = ICSDateFormat.parse(
-                    line.value,
-                    timeZoneIdentifier: line.parameters["TZID"],
-                    isDateOnly: line.parameters["VALUE"]?.uppercased() == "DATE"
-                )
+                recurrenceID = ParsedDate(line.value, parameters: line.parameters)
             case "DTSTART":
                 let dateOnly = line.parameters["VALUE"]?.uppercased() == "DATE"
                 isAllDay = dateOnly
@@ -139,18 +159,16 @@ nonisolated enum ICSParser {
                 start = ICSDateFormat.parse(line.value, timeZoneIdentifier: line.parameters["TZID"], isDateOnly: dateOnly)
             case "DTEND":
                 let dateOnly = line.parameters["VALUE"]?.uppercased() == "DATE"
+                endIsDateOnly = dateOnly
+                endTimeZoneIdentifier = line.parameters["TZID"]
+                    ?? (line.value.uppercased().hasSuffix("Z") ? "UTC" : nil)
                 end = ICSDateFormat.parse(line.value, timeZoneIdentifier: line.parameters["TZID"], isDateOnly: dateOnly)
             case "DURATION":
                 durationValue = parseDuration(line.value)
             case "EXDATE":
                 // May carry several comma-separated values.
                 for value in line.value.split(separator: ",") {
-                    let dateOnly = line.parameters["VALUE"]?.uppercased() == "DATE"
-                    if let date = ICSDateFormat.parse(
-                        String(value),
-                        timeZoneIdentifier: line.parameters["TZID"],
-                        isDateOnly: dateOnly
-                    ) {
+                    if let date = ParsedDate(String(value), parameters: line.parameters) {
                         exceptionDates.append(date)
                     }
                 }
@@ -207,7 +225,10 @@ nonisolated enum ICSParser {
                 todo.isFlagged = isFlagged
                 todo.completedAt = completedAt
                 todo.isCompleted = statusCompleted || completedAt != nil
-                todo.rruleString = rruleString
+                // A date-only to-do's UNTIL is a civil day, like its DUE.
+                todo.rruleString = todo.isDateOnly
+                    ? rruleString.map { RecurrenceRule.civilRuleString(fromImported: $0, readingIn: .current) }
+                    : rruleString
                 todo.afterCompletionRepeat = rruleString == nil ? afterCompletionRepeat : nil
                 todo.checklist = checklist
                 return (todo, index)
@@ -271,6 +292,40 @@ nonisolated enum ICSParser {
     /// a repeat.
     private static func recurrenceZone(isUTC: Bool, recurs: Bool) -> String? {
         isUTC && recurs ? "UTC" : nil
+    }
+
+    /// The calendar a DATE-TIME's wall clock reads in: its TZID or UTC
+    /// form, else floating in the current zone.
+    fileprivate static func zoneCalendar(_ timeZoneIdentifier: String?) -> Calendar {
+        ICSDateFormat.calendar(for: timeZoneIdentifier ?? TimeZone.current.identifier)
+    }
+
+    /// An EXDATE / RECURRENCE-ID value plus how it was written, so an
+    /// all-day event can map stray DATE-TIME values onto civil days.
+    fileprivate struct ParsedDate {
+        var date: Date
+        var isDateOnly: Bool
+        var timeZoneIdentifier: String?
+
+        init?(_ value: String, parameters: [String: String]) {
+            let isDateOnly = parameters["VALUE"]?.uppercased() == "DATE"
+            guard let date = ICSDateFormat.parse(
+                value,
+                timeZoneIdentifier: parameters["TZID"],
+                isDateOnly: isDateOnly
+            ) else { return nil }
+            self.date = date
+            self.isDateOnly = isDateOnly
+            timeZoneIdentifier = parameters["TZID"] ?? (value.uppercased().hasSuffix("Z") ? "UTC" : nil)
+        }
+
+        /// The canonical civil date of the day this value falls on.
+        func civilized() -> ParsedDate {
+            var copy = self
+            copy.date = CivilDay.canonicalDate(forLocal: date, in: ICSParser.zoneCalendar(timeZoneIdentifier))
+            copy.isDateOnly = true
+            return copy
+        }
     }
 
     /// "<count> <unit>" (e.g. "2 week") → after-completion repeat.

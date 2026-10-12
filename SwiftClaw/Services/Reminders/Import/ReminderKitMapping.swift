@@ -58,10 +58,9 @@ nonisolated enum ReminderKitMapping {
 
     /// `EKReminder.dueDateComponents` → our due-date triple. An hour present
     /// means a timed reminder (resolved in the components' zone, which is
-    /// kept); otherwise the reminder is date-only and stores the *local*
-    /// start of that calendar day with no zone — the same floating semantics
-    /// as all-day calendar events, regardless of any zone the components
-    /// carry.
+    /// kept); otherwise the reminder is date-only and stores that civil day's
+    /// canonical date (`CivilDay`) with no zone, the same as all-day
+    /// calendar events, regardless of any zone the components carry.
     static func resolvedDueDate(from components: DateComponents?, now _: Date = .now) -> ResolvedDueDate {
         guard let components,
               let year = components.year, let month = components.month, let day = components.day
@@ -69,8 +68,7 @@ nonisolated enum ReminderKitMapping {
 
         var calendar = Calendar(identifier: .gregorian)
         guard let hour = components.hour else {
-            calendar.timeZone = .current
-            let date = calendar.date(from: DateComponents(year: year, month: month, day: day))
+            let date = CivilDay(year: year, month: month, day: day).canonicalDate
             return ResolvedDueDate(date: date, hasDueTime: false, timeZoneIdentifier: nil)
         }
 

@@ -30,6 +30,8 @@ final class CalendarOverlayProvider {
     private struct CacheKey: Equatable {
         let window: DateInterval
         let changeVersion: Int
+        /// EventKit floats all-day events in the current zone.
+        let timeZoneIdentifier: String
     }
 
     private init() {}
@@ -74,7 +76,11 @@ final class CalendarOverlayProvider {
     /// values. Empty when the overlay is off or access wasn't granted.
     func occurrences(in window: DateInterval) -> [EventOccurrence] {
         guard hasAccess, let store else { return [] }
-        let key = CacheKey(window: window, changeVersion: changeVersion)
+        let key = CacheKey(
+            window: window,
+            changeVersion: changeVersion,
+            timeZoneIdentifier: TimeZone.current.identifier
+        )
         if cachedKey == key {
             return cachedOccurrences
         }
@@ -84,7 +90,17 @@ final class CalendarOverlayProvider {
             calendars: nil
         )
         let occurrences = store.events(matching: predicate).compactMap { event -> EventOccurrence? in
-            guard let start = event.startDate, let end = event.endDate else { return nil }
+            guard var start = event.startDate, var end = event.endDate else { return nil }
+            if event.isAllDay {
+                // EventKit floats all-day events at local midnight; snap to
+                // whole local days with an exclusive end, like stored ones.
+                let calendar = Calendar.current
+                start = calendar.startOfDay(for: start)
+                end = max(
+                    EventKitMapping.normalizedAllDayEnd(end, calendar: calendar),
+                    calendar.date(byAdding: .day, value: 1, to: start) ?? end
+                )
+            }
             return EventOccurrence(
                 // Stable per EK occurrence: hash the event identifier into a
                 // UUID-shaped namespace so SwiftUI identity holds across

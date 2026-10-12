@@ -51,6 +51,11 @@ nonisolated enum ReminderRecurrenceEngine {
     /// Returns the next due date for completion-based repeats. Units are
     /// calendar components, not seconds, so month-end and DST behavior follows
     /// the provided calendar.
+    ///
+    /// `completedAt` is an instant read in `calendar`'s zone. Date-only
+    /// repeats step from the civil day it falls on and return that day's
+    /// canonical civil date (the `Reminder.dueDate` encoding); timed repeats
+    /// return an instant.
     static func nextDueDate(
         afterCompletion completedAt: Date,
         repeat repeatRule: ReminderAfterCompletionRepeat,
@@ -63,12 +68,15 @@ nonisolated enum ReminderRecurrenceEngine {
         case .month: .month
         case .year: .year
         }
-        let advanced = calendar.date(
+        guard hasDueTime else {
+            return CivilDay(containing: completedAt, in: calendar)
+                .adding(component, value: max(1, repeatRule.count))
+                .canonicalDate
+        }
+        return calendar.date(
             byAdding: component,
             value: max(1, repeatRule.count),
             to: completedAt
         ) ?? completedAt
-        guard !hasDueTime else { return advanced }
-        return calendar.startOfDay(for: advanced)
     }
 }

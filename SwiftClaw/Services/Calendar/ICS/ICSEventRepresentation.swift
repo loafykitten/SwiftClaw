@@ -20,6 +20,11 @@ nonisolated struct ICSEventRepresentation: Sendable, Hashable {
     /// series occurrence originally starting at this instant (the master is
     /// the VEVENT sharing the same UID with no RECURRENCE-ID).
     var recurrenceID: Date?
+    /// How RECURRENCE-ID was written: a DATE value is already a canonical
+    /// civil date; a DATE-TIME one is an instant (in this zone, nil =
+    /// floating) that an all-day master needs mapped onto its civil day.
+    var recurrenceIDIsDateOnly = false
+    var recurrenceIDTimeZoneIdentifier: String?
     var exceptionDates: [Date] = []
     /// VALARM display triggers as offsets from the event start (negative =
     /// before).

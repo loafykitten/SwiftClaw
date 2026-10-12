@@ -69,16 +69,36 @@ enum ICSImporter {
         // regardless of file order.
         let masters = parsed.filter { $0.recurrenceID == nil }
         let overrides = parsed.filter { $0.recurrenceID != nil }
+        // RECURRENCE-ID keys the master's occurrence, in the master's
+        // encoding: a civil date for an all-day master (even when this
+        // override is timed), an instant for a timed one.
+        let mastersAreAllDay = Dictionary(masters.map { ($0.uid, $0.isAllDay) }, uniquingKeysWith: { first, _ in first })
+        func masterKey(of representation: ICSEventRepresentation) -> Date? {
+            guard let recurrenceID = representation.recurrenceID else { return nil }
+            let masterIsAllDay = mastersAreAllDay[representation.uid]
+                ?? repository.event(withExternalIdentifier: representation.uid)?.isAllDay
+                ?? false
+            guard masterIsAllDay, !representation.recurrenceIDIsDateOnly else { return recurrenceID }
+            let zone = ICSDateFormat.calendar(
+                for: representation.recurrenceIDTimeZoneIdentifier ?? TimeZone.current.identifier
+            )
+            return CivilDay.canonicalDate(forLocal: recurrenceID, in: zone)
+        }
         // Every identity this file carries: standalone events (SwiftClaw
         // exports overrides that way) and RECURRENCE-ID overrides.
         let fileIdentifiers = Set(masters.map(\.uid)).union(overrides.compactMap { representation in
-            representation.recurrenceID.map { overrideIdentifier(uid: representation.uid, originalStart: $0) }
+            masterKey(of: representation).map { overrideIdentifier(uid: representation.uid, originalStart: $0) }
         })
 
         for representation in masters {
             let master = repository.upsertImportedEvent(externalIdentifier: representation.uid) { event in
+                let wasAllDay = event.isAllDay
                 apply(representation, to: event, calendar: calendar)
                 event.recurrenceRuleString = representation.rruleString
+                // A series that changed between timed and all-day carries its
+                // surviving (native) override keys into the new encoding;
+                // the file's EXDATEs replace the old ones regardless.
+                repository.reencodeOccurrenceKeys(of: event, wasAllDay: wasAllDay, nativeOverridesOnly: true)
                 event.exceptionDates = representation.exceptionDates
             }
             // Replacing the master's EXDATEs un-masks occurrences whose
@@ -91,7 +111,7 @@ enum ICSImporter {
             )
         }
         for representation in overrides {
-            guard let originalStart = representation.recurrenceID else { continue }
+            guard let originalStart = masterKey(of: representation) else { continue }
             // Occurrence-scoped identity (the Apple importer's shape) so the
             // override never collides with its master's UID-keyed row.
             let overrideID = overrideIdentifier(uid: representation.uid, originalStart: originalStart)

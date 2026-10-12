@@ -53,6 +53,9 @@ final class CalendarAlertScheduler {
     /// Injectable clock so tests pin "now".
     var now: () -> Date = { .now }
 
+    /// Injectable zone: all-day occurrences and their alarms resolve in it.
+    var calendarProvider: () -> Calendar = { .current }
+
     /// Injectable settings gate. When alerts are off, reconciliation books
     /// nothing *and clears what's already booked* — `canPost` alone only
     /// stops new requests, leaving previously scheduled ones to fire.
@@ -174,9 +177,14 @@ final class CalendarAlertScheduler {
             let isAllDay: Bool
         }
         var desired: [DesiredAlert] = []
+        let calendar = calendarProvider()
         let eventsByID = alertsEnabledProvider()
             ? Dictionary(
-                grouping: repository.occurrences(in: occurrenceWindow, visibleCalendarsOnly: false),
+                grouping: repository.occurrences(
+                    in: occurrenceWindow,
+                    visibleCalendarsOnly: false,
+                    calendar: calendar
+                ),
                 by: \.eventID
             )
             : [:]
@@ -192,7 +200,7 @@ final class CalendarAlertScheduler {
             guard !alarms.isEmpty else { continue }
             for occurrence in occurrences {
                 for alarm in alarms {
-                    let fireDate = occurrence.start.addingTimeInterval(alarm.offsetSeconds)
+                    let fireDate = Self.fireDate(for: occurrence, offsetSeconds: alarm.offsetSeconds, calendar: calendar)
                     guard fireDate > currentDate, fireDate <= fireWindow.end else { continue }
                     desired.append(DesiredAlert(
                         identifier: NotificationIdentifier.calendarAlert(
@@ -253,6 +261,20 @@ final class CalendarAlertScheduler {
                 (\(desired.count, privacy: .public) booked in window)
                 """)
         }
+    }
+
+    /// When an alarm fires. Timed occurrences: the offset in elapsed seconds.
+    /// All-day occurrences: the offset as wall-clock time on the civil day in
+    /// `calendar` ("-15 h" = 9:00 the day before), so it lands on the
+    /// intended local time across DST and after a zone change.
+    static func fireDate(
+        for occurrence: EventOccurrence,
+        offsetSeconds: TimeInterval,
+        calendar: Calendar = .current
+    ) -> Date {
+        guard occurrence.isAllDay else { return occurrence.start.addingTimeInterval(offsetSeconds) }
+        return CivilDay(containing: occurrence.start, in: calendar)
+            .wallClockDate(offsetSeconds: offsetSeconds, in: calendar)
     }
 
     /// Stable (cross-launch) digest of the user-visible alert content, folded

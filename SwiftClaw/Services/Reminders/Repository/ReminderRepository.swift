@@ -212,27 +212,31 @@ final class ReminderRepository {
 
     // MARK: - Smart Views
 
-    /// Pending masters and one-offs, bounded in the store before models are
-    /// materialized. Dated rows lead in due order; optional undated rows trail
-    /// oldest-first, matching review-tool ordering.
+    /// Pending masters and one-offs. The `dueBefore` horizon bounds the store
+    /// fetch before models are materialized; date-only rows store canonical
+    /// civil dates, so that bound is widened by `CivilDay.storagePadding` and
+    /// the exact test (local due moment in `calendar`) runs in memory, as do
+    /// the due ordering and `limit`. Dated rows lead in due order; optional
+    /// undated rows trail oldest-first, matching review-tool ordering.
     func pendingReminders(
         dueBefore: Date? = nil,
         includeUndated: Bool = true,
-        limit: Int? = nil
+        limit: Int? = nil,
+        calendar: Calendar = .current
     ) -> [Reminder] {
         if let limit, limit <= 0 { return [] }
 
-        var datedDescriptor: FetchDescriptor<Reminder>
+        let datedDescriptor: FetchDescriptor<Reminder>
         if let dueBefore {
             let distantFuture = Date.distantFuture
+            let storeBound = dueBefore.addingTimeInterval(CivilDay.storagePadding)
             datedDescriptor = FetchDescriptor(
                 predicate: #Predicate {
                     $0.completedAt == nil
                         && $0.parentReminderID == nil
                         && $0.dueDate != nil
-                        && ($0.dueDate ?? distantFuture) <= dueBefore
-                },
-                sortBy: [SortDescriptor(\.dueDate), SortDescriptor(\.createdAt)]
+                        && ($0.dueDate ?? distantFuture) <= storeBound
+                }
             )
         } else {
             datedDescriptor = FetchDescriptor(
@@ -240,14 +244,20 @@ final class ReminderRepository {
                     $0.completedAt == nil
                         && $0.parentReminderID == nil
                         && $0.dueDate != nil
-                },
-                sortBy: [SortDescriptor(\.dueDate), SortDescriptor(\.createdAt)]
+                }
             )
         }
-        if let limit {
-            datedDescriptor.fetchLimit = limit
+        var dated = ((try? modelContext.fetch(datedDescriptor)) ?? []).map { reminder in
+            (reminder: reminder, due: reminder.localDueDate(calendar: calendar) ?? .distantFuture)
         }
-        var result = (try? modelContext.fetch(datedDescriptor)) ?? []
+        if let dueBefore {
+            dated.removeAll { $0.due > dueBefore }
+        }
+        dated.sort { ($0.due, $0.reminder.createdAt) < ($1.due, $1.reminder.createdAt) }
+        var result = dated.map(\.reminder)
+        if let limit, result.count > limit {
+            result.removeLast(result.count - limit)
+        }
 
         guard includeUndated, limit.map({ result.count < $0 }) ?? true else {
             return result
@@ -270,14 +280,17 @@ final class ReminderRepository {
     /// Whether any pending master in the review scope (undated, or due at or
     /// before `dueBefore`) is new or changed since its last review stamp.
     /// Counted in the store across the whole scope, so it can't miss a
-    /// change that sorts past a fetch page.
+    /// change that sorts past a fetch page. The horizon is widened by
+    /// `CivilDay.storagePadding` for date-only rows' canonical dates, so a
+    /// change just past it can at worst trigger a needless pass.
     func hasUnreviewedPendingReminders(dueBefore: Date) -> Bool {
         let distantPast = Date.distantPast
+        let storeBound = dueBefore.addingTimeInterval(CivilDay.storagePadding)
         var descriptor = FetchDescriptor<Reminder>(
             predicate: #Predicate {
                 $0.completedAt == nil
                     && $0.parentReminderID == nil
-                    && ($0.dueDate ?? distantPast) <= dueBefore
+                    && ($0.dueDate ?? distantPast) <= storeBound
                     && ($0.lastReviewedAt ?? distantPast) < $0.modifiedAt
             }
         )
@@ -352,7 +365,7 @@ final class ReminderRepository {
     func skipOccurrence(of master: Reminder, at date: Date = .now) throws {
         guard !master.isCompletionLog else { return }
         try performTransaction {
-            if let repeatRule = master.afterCompletionRepeat, let dueDate = master.dueDate {
+            if let repeatRule = master.afterCompletionRepeat, let dueDate = master.localDueDate() {
                 master.dueDate = ReminderRecurrenceEngine.nextDueDate(
                     afterCompletion: dueDate,
                     repeat: repeatRule,
@@ -596,6 +609,49 @@ final class ReminderRepository {
         }
     }
 
+    /// One-time, per-row conversion of legacy date-only values (local
+    /// start-of-day instants) to canonical civil dates: due dates, log rows'
+    /// `originalOccurrenceDate`, and RRULE UNTIL. Legacy instants are read
+    /// as days in `calendar`'s zone (best effort: the day the row showed on
+    /// this device just before the upgrade). The `dateEncodingVersion`
+    /// marker makes it idempotent, so stamped rows are never fetched again
+    /// and nothing double-converts. A failed fetch or save changes nothing
+    /// and retries next launch.
+    @discardableResult
+    func migrateDateOnlyDueDatesToCivilEncodingIfNeeded(calendar: Calendar = .current) -> Int {
+        let legacy = (try? modelContext.fetch(FetchDescriptor<Reminder>(
+            predicate: #Predicate { $0.dateEncodingVersion == nil }
+        ))) ?? []
+        guard !legacy.isEmpty else { return 0 }
+        let civil = { (date: Date) in CivilDay.canonicalDate(forLocal: date, in: calendar) }
+
+        var converted = 0
+        for reminder in legacy {
+            if !reminder.hasDueTime {
+                if let dueDate = reminder.dueDate {
+                    reminder.dueDate = civil(dueDate)
+                    converted += 1
+                }
+                // A log row copies its master's `hasDueTime` at completion.
+                reminder.originalOccurrenceDate = reminder.originalOccurrenceDate.map(civil)
+                if let rule = reminder.recurrenceRuleString {
+                    reminder.recurrenceRuleString = RecurrenceRule.civilRuleString(fromImported: rule, readingIn: calendar)
+                    refreshRecurrenceEnd(of: reminder)
+                }
+            }
+            reminder.dateEncodingVersion = CivilDay.encodingVersion
+        }
+        do {
+            try modelContext.save()
+            NotificationCenter.default.post(name: .reminderStoreDidChange, object: nil)
+        } catch {
+            modelContext.rollback()
+            Self.logger.error("civil date migration failed: \(String(describing: error))")
+            return 0
+        }
+        return converted
+    }
+
     /// Logs the completion of `master`'s current occurrence, advances it,
     /// and records on the log what the advance changed, for undo.
     private func logCompletion(of master: Reminder, at date: Date, advance: () -> Void) {
@@ -795,20 +851,30 @@ final class ReminderRepository {
             if $0.sortOrder != $1.sortOrder {
                 return $0.sortOrder < $1.sortOrder
             }
-            if $0.dueDate != $1.dueDate {
-                return ($0.dueDate ?? .distantFuture) < ($1.dueDate ?? .distantFuture)
+            let lhsDue = $0.localDueDate() ?? .distantFuture
+            let rhsDue = $1.localDueDate() ?? .distantFuture
+            if lhsDue != rhsDue {
+                return lhsDue < rhsDue
             }
             return $0.createdAt < $1.createdAt
         }
     }
 
+    /// The zone fixed-schedule recurrence expands in: canonical civil space
+    /// for date-only reminders (their `dueDate` is a `CivilDay` encoding, so
+    /// steps are whole days and immune to DST and zone changes), otherwise
+    /// the reminder's own zone.
     private func timeZone(for reminder: Reminder) -> TimeZone {
-        reminder.timeZone ?? .current
+        guard reminder.hasDueTime else { return CivilDay.canonicalTimeZone }
+        return reminder.timeZone ?? .current
     }
 
+    /// The calendar after-completion repeats read completion instants in:
+    /// the reminder's own zone, or the current one for date-only reminders
+    /// (the day you completed it is the day it was where you are).
     private func calendar(for reminder: Reminder) -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone(for: reminder)
+        calendar.timeZone = reminder.timeZone ?? .current
         return calendar
     }
 

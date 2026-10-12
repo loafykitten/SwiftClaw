@@ -128,7 +128,7 @@ final class ReminderReviewNotifyTool: Tool {
                     subject: reminder.title,
                     // A recurring master's dueDate is already the next
                     // pending occurrence — no expansion needed.
-                    date: reminder.dueDate.map { due in
+                    date: reminder.localDueDate().map { due in
                         reminder.hasDueTime
                             ? due.formatted(date: .abbreviated, time: .shortened)
                             : due.formatted(.dateTime.weekday(.abbreviated).month().day())

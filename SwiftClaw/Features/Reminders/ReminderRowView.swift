@@ -124,7 +124,7 @@ struct ReminderRowView: View {
     }
 
     private var dueText: String? {
-        guard let dueDate = reminder.dueDate else { return nil }
+        guard let dueDate = reminder.localDueDate() else { return nil }
         if reminder.hasDueTime {
             if Calendar.current.isDate(dueDate, inSameDayAs: now) {
                 return dueDate.formatted(date: .omitted, time: .shortened)

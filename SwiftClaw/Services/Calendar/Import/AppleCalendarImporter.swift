@@ -191,7 +191,11 @@ final class AppleCalendarImporter {
             // occurrence-scoped identity so re-imports stay idempotent.
             summary.degradedSeriesCount += 1
             for occurrence in occurrences {
-                let occurrenceID = "\(externalIdentifier)@\(occurrence.startDate.timeIntervalSinceReferenceDate)"
+                // Keyed by the stored start, so an all-day occurrence keeps
+                // its identity across zone changes.
+                let start: Date = occurrence.startDate
+                let key = occurrence.isAllDay ? CivilDay.canonicalDate(forLocal: start) : start
+                let occurrenceID = "\(externalIdentifier)@\(key.timeIntervalSinceReferenceDate)"
                 repository.upsertImportedEvent(externalIdentifier: occurrenceID) { event in
                     apply(occurrence, to: event, calendar: target)
                 }
@@ -200,11 +204,26 @@ final class AppleCalendarImporter {
             return
         }
 
+        // An all-day series' UNTIL is a civil day, like its start; storage and
+        // the deleted-occurrence diff below must expand the same rule.
+        let storedRule = master.isAllDay ? rule.civilizingUntil(readingIn: .current) : rule
         let masterRow = repository.upsertImportedEvent(externalIdentifier: externalIdentifier) { event in
+            let wasAllDay = event.isAllDay
             apply(master, to: event, calendar: target)
-            event.recurrenceRuleString = rule.rruleString
+            event.recurrenceRuleString = storedRule.rruleString
+            // A series that changed between timed and all-day carries its
+            // EXDATEs and override keys into the new encoding before the
+            // windowed reconciliation below compares them.
+            repository.reencodeOccurrenceKeys(of: event, wasAllDay: wasAllDay)
         }
         summary.eventCount += 1
+
+        // An all-day series lives in canonical civil space: EventKit's local
+        // midnights (occurrence starts, original dates, the fetch window)
+        // map onto civil days before they are keyed and diffed.
+        let isCivilSeries = masterRow.isAllDay
+        let stored: (Date) -> Date = { isCivilSeries ? CivilDay.canonicalDate(forLocal: $0) : $0 }
+        let storedRange = isCivilSeries ? CivilDay.canonicalWindow(covering: range) : range
 
         // Detached occurrences (edited instances) become override rows.
         var detachedOriginalStarts: [Date] = []
@@ -212,7 +231,7 @@ final class AppleCalendarImporter {
             // `startDate` is an IUO in EventKit; bind it before the nil-
             // coalescing so the result is non-optional.
             let occurrenceStart: Date = occurrence.startDate
-            let originalStart = occurrence.occurrenceDate ?? occurrenceStart
+            let originalStart = stored(occurrence.occurrenceDate ?? occurrenceStart)
             detachedOriginalStarts.append(originalStart)
             let overrideID = "\(externalIdentifier)@detached@\(originalStart.timeIntervalSinceReferenceDate)"
             repository.upsertImportedEvent(externalIdentifier: overrideID) { event in
@@ -226,6 +245,7 @@ final class AppleCalendarImporter {
         let actualStarts: [Date] = occurrences
             .filter { !$0.isDetached }
             .compactMap(\.startDate)
+            .map(stored)
 
         // Drop override rows from an earlier import whose detached occurrence
         // no longer exists in EventKit (the edit was reverted or the instance
@@ -244,7 +264,8 @@ final class AppleCalendarImporter {
                 overrideStart: override.startDate,
                 overrideDuration: override.duration,
                 masterDuration: masterRow.duration,
-                window: range,
+                window: storedRange,
+                overrideWindow: override.isAllDay ? CivilDay.canonicalWindow(covering: range) : range,
                 actualStarts: actualStarts
             ) {
             try repository.deleteEventSeries(override)
@@ -255,19 +276,19 @@ final class AppleCalendarImporter {
         // outside the fetched window are kept — this fetch can't speak for
         // them, and dropping them would resurrect deleted occurrences.
         let missing = EventKitMapping.missingOccurrenceStarts(
-            rule: rule,
+            rule: storedRule,
             masterStart: masterRow.startDate,
             duration: masterRow.duration,
-            window: range,
+            window: storedRange,
             actualStarts: actualStarts,
-            timeZone: masterRow.timeZone
+            timeZone: masterRow.recurrenceTimeZone
         )
         masterRow.exceptionDates = EventKitMapping.reconciledExceptionDates(
             existing: masterRow.exceptionDates,
             missing: missing,
             detachedOriginalStarts: detachedOriginalStarts,
             duration: masterRow.duration,
-            window: range
+            window: storedRange
         )
         // The rebuild can un-mask an occurrence the user detached inside
         // SwiftClaw (EventKit still reports it); re-mask those native edits.
@@ -283,12 +304,13 @@ final class AppleCalendarImporter {
     /// which the series importer owns).
     private func apply(_ ekEvent: EKEvent, to event: CalendarEvent, calendar target: UserCalendar) {
         event.title = ekEvent.title ?? ""
-        event.startDate = ekEvent.startDate
-        event.isAllDay = ekEvent.isAllDay
         if ekEvent.isAllDay {
-            event.timeZoneIdentifier = nil
-            event.endDate = EventKitMapping.normalizedAllDayEnd(ekEvent.endDate, calendar: .current)
+            // EventKit floats all-day events at local midnight in the
+            // current zone; store them as civil days.
+            event.setAllDaySpan(localStart: ekEvent.startDate, localEnd: ekEvent.endDate)
         } else {
+            event.isAllDay = false
+            event.startDate = ekEvent.startDate
             event.timeZoneIdentifier = ekEvent.timeZone?.identifier
             event.endDate = ekEvent.endDate
         }

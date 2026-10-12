@@ -124,6 +124,32 @@ final class CalendarRepository {
     }
 
     func event(withExternalIdentifier externalIdentifier: String) -> CalendarEvent? {
+        if let event = exactEvent(withExternalIdentifier: externalIdentifier) {
+            return event
+        }
+        // Files written before civil dates key all-day occurrences by their
+        // local-midnight instant ("…@<seconds>"); the migration re-keyed
+        // those rows to the canonical date, so try that spelling too.
+        guard let alias = Self.civilAlias(ofLegacyIdentifier: externalIdentifier),
+              let event = exactEvent(withExternalIdentifier: alias)
+        else { return nil }
+        return event
+    }
+
+    /// "<prefix>@<local midnight>" → "<prefix>@<canonical civil date>", or
+    /// nil when the suffix isn't a local-midnight instant.
+    private static func civilAlias(ofLegacyIdentifier identifier: String) -> String? {
+        guard let separator = identifier.lastIndex(of: "@"),
+              let seconds = Double(identifier[identifier.index(after: separator)...])
+        else { return nil }
+        let instant = Date(timeIntervalSinceReferenceDate: seconds)
+        guard Calendar.current.startOfDay(for: instant) == instant else { return nil }
+        let canonical = CivilDay.canonicalDate(forLocal: instant)
+        guard canonical != instant else { return nil }
+        return "\(identifier[..<separator])@\(canonical.timeIntervalSinceReferenceDate)"
+    }
+
+    private func exactEvent(withExternalIdentifier externalIdentifier: String) -> CalendarEvent? {
         if let importedEventsByExternalIdentifier {
             return importedEventsByExternalIdentifier[externalIdentifier]
                 ?? nativeEvent(forExportedUID: externalIdentifier)
@@ -166,9 +192,15 @@ final class CalendarRepository {
     /// All occurrences intersecting `window` from visible (or all) calendars,
     /// sorted by start: one-offs and overrides as-is, recurring masters
     /// expanded via `RecurrenceExpander` with their overrides substituted.
-    func occurrences(in window: DateInterval, visibleCalendarsOnly: Bool = true) -> [EventOccurrence] {
-        let windowStart = window.start
-        let windowEnd = window.end
+    func occurrences(
+        in window: DateInterval,
+        visibleCalendarsOnly: Bool = true,
+        calendar: Calendar = .current
+    ) -> [EventOccurrence] {
+        // Widened for all-day rows' canonical dates; the builder is exact.
+        let fetchWindow = CalendarEvent.storeFetchWindow(for: window)
+        let windowStart = fetchWindow.start
+        let windowEnd = fetchWindow.end
 
         // One-offs and overrides intersecting the window.
         let plainPredicate = #Predicate<CalendarEvent> {
@@ -190,11 +222,16 @@ final class CalendarRepository {
         return CalendarOccurrenceBuilder.occurrences(
             from: plain + recurring,
             in: window,
-            visibleCalendarsOnly: visibleCalendarsOnly
+            visibleCalendarsOnly: visibleCalendarsOnly,
+            calendar: calendar
         )
     }
 
     // MARK: - Recurring edit/delete semantics
+
+    // Occurrence starts here are in the master's stored encoding (canonical
+    // civil dates for all-day series): pass `EventOccurrence.occurrenceKey`,
+    // not the displayed `start`.
 
     /// Detaches one occurrence of a recurring master for an independent edit:
     /// the occurrence joins the master's EXDATEs and a standalone override row
@@ -373,7 +410,7 @@ final class CalendarRepository {
                     start: event.startDate.addingTimeInterval(-1),
                     end: .distantFuture
                 ),
-                timeZone: event.timeZone,
+                timeZone: event.recurrenceTimeZone,
                 cap: count
             )
             event.recurrenceEndDate = starts.last.map { $0.addingTimeInterval(event.duration) }
@@ -406,6 +443,116 @@ final class CalendarRepository {
         }
         userDefaults.set(true, forKey: key)
         return changed
+    }
+
+    /// One-time, per-row conversion of legacy all-day values (local-midnight
+    /// instants) to canonical civil dates. Each legacy instant is read as a
+    /// day in `calendar`'s zone, which is best effort: a row created in
+    /// another zone and never opened since migrates to the day it showed on
+    /// this device just before the upgrade. The `dateEncodingVersion` marker
+    /// makes it idempotent: stamped rows are never fetched again, so nothing
+    /// double-converts, and a legacy row that arrives later (a CloudKit
+    /// merge from an older build) converts on the next launch. A failed
+    /// fetch or save changes nothing and retries next launch.
+    @discardableResult
+    func migrateAllDayDatesToCivilEncodingIfNeeded(calendar: Calendar = .current) -> Int {
+        let legacy = (try? modelContext.fetch(FetchDescriptor<CalendarEvent>(
+            predicate: #Predicate { $0.dateEncodingVersion == nil }
+        ))) ?? []
+        guard !legacy.isEmpty else { return 0 }
+        // Overrides key their original occurrence in the master's encoding.
+        let allDayMasterIDs = Set(
+            ((try? modelContext.fetch(FetchDescriptor<CalendarEvent>(
+                predicate: #Predicate { $0.isAllDay && $0.parentEventID == nil }
+            ))) ?? []).map(\.id)
+        )
+        let civil = { (date: Date) in CivilDay.canonicalDate(forLocal: date, in: calendar) }
+
+        var converted = 0
+        for event in legacy {
+            if event.isAllDay {
+                let legacyStart = event.startDate
+                event.setAllDaySpan(localStart: event.startDate, localEnd: event.endDate, calendar: calendar)
+                event.exceptionDates = event.exceptionDates.map(civil)
+                if let rule = event.recurrenceRuleString {
+                    event.recurrenceRuleString = RecurrenceRule.civilRuleString(fromImported: rule, readingIn: calendar)
+                }
+                // Degraded one-off occurrences are keyed "<uid>@<start>".
+                event.externalIdentifier = Self.rekeyed(
+                    event.externalIdentifier,
+                    replacing: legacyStart,
+                    with: event.startDate
+                )
+                refreshRecurrenceEnd(of: event)
+                converted += 1
+            }
+            if let parentID = event.parentEventID, allDayMasterIDs.contains(parentID),
+               let original = event.originalOccurrenceDate {
+                event.originalOccurrenceDate = civil(original)
+                // Imported overrides are keyed "<uid>@detached@<original>".
+                event.externalIdentifier = Self.rekeyed(
+                    event.externalIdentifier,
+                    replacing: original,
+                    with: civil(original)
+                )
+            }
+            event.dateEncodingVersion = CivilDay.encodingVersion
+        }
+        do {
+            try modelContext.save()
+            NotificationCenter.default.post(name: .calendarStoreDidChange, object: nil)
+        } catch {
+            modelContext.rollback()
+            Self.logger.error("civil date migration failed: \(String(describing: error))")
+            return 0
+        }
+        return converted
+    }
+
+    /// Re-keys a recurring master's EXDATEs and its overrides'
+    /// `originalOccurrenceDate` after the series switched between timed and
+    /// all-day (`wasAllDay` is the old state), so they keep naming the same
+    /// local days: all-day keys are canonical civil dates, timed keys are
+    /// instants at the series' start time. Call before saving the edit.
+    /// `nativeOverridesOnly` skips imported overrides, for a file re-import
+    /// that rebuilds those (and the EXDATEs) in the new encoding itself:
+    /// re-keying the stale ones would keep them masked and doubled.
+    func reencodeOccurrenceKeys(
+        of master: CalendarEvent,
+        wasAllDay: Bool,
+        nativeOverridesOnly: Bool = false,
+        calendar: Calendar = .current
+    ) {
+        guard master.isAllDay != wasAllDay, master.isRecurring, !master.isOverride else { return }
+        let convert: (Date) -> Date
+        if master.isAllDay {
+            convert = { CivilDay.canonicalDate(forLocal: $0, in: calendar) }
+        } else {
+            var zone = Calendar(identifier: .gregorian)
+            zone.timeZone = master.timeZone ?? calendar.timeZone
+            let time = zone.dateComponents([.hour, .minute, .second], from: master.startDate)
+            convert = { key in
+                let dayStart = CivilDay(canonical: key).startDate(in: zone)
+                return zone.date(
+                    bySettingHour: time.hour ?? 0,
+                    minute: time.minute ?? 0,
+                    second: time.second ?? 0,
+                    of: dayStart
+                ) ?? dayStart
+            }
+        }
+        master.exceptionDates = master.exceptionDates.map(convert)
+        for override in overrides(of: master) where !nativeOverridesOnly || override.externalIdentifier == nil {
+            override.originalOccurrenceDate = override.originalOccurrenceDate.map(convert)
+        }
+    }
+
+    /// An import identity whose trailing "@<reference-date seconds>" names
+    /// `old`, re-pointed at `new`; anything else passes through.
+    private static func rekeyed(_ identifier: String?, replacing old: Date, with new: Date) -> String? {
+        let suffix = "@\(old.timeIntervalSinceReferenceDate)"
+        guard let identifier, identifier.hasSuffix(suffix) else { return identifier }
+        return String(identifier.dropLast(suffix.count)) + "@\(new.timeIntervalSinceReferenceDate)"
     }
 
     // MARK: - Transactions

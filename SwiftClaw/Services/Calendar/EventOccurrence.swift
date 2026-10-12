@@ -17,6 +17,17 @@ nonisolated struct EventOccurrence: Identifiable, Sendable, Hashable {
     /// True when this occurrence comes from a detached "this event only"
     /// override rather than the recurring master.
     let isOverride: Bool
+    /// The occurrence start in the event row's stored encoding, which is what
+    /// EXDATEs, detached overrides, and `CalendarRepository`'s occurrence
+    /// APIs key on. It differs from `start` for all-day events: their rows
+    /// store canonical civil dates (`CivilDay`), while `start` is local
+    /// midnight in the viewer's zone. Nil = same as `start`.
+    var storedStart: Date? = nil
+
+    /// The key to hand back to the repository for this occurrence.
+    var occurrenceKey: Date {
+        storedStart ?? start
+    }
 
     /// Stable per-instance identity: the same event contributes many
     /// occurrences, so the id folds in the start instant.

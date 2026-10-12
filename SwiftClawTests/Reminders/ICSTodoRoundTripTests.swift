@@ -14,10 +14,10 @@ struct ICSTodoRoundTripTests {
         utcCalendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
     }
 
-    /// Date-only dues are stored as *local* midnight (floating dates), so
-    /// fixtures must be local midnight too.
-    private static func localMidnight(_ year: Int, _ month: Int, _ day: Int) -> Date {
-        Calendar.current.date(from: DateComponents(year: year, month: month, day: day))!
+    /// Date-only dues are civil dates stored canonically (midnight UTC of the
+    /// day, `CivilDay`), whatever zone the exporting device is in.
+    private static func civil(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        CivilDay(year: year, month: month, day: day).canonicalDate
     }
 
     private static func roundTrip(_ todo: ICSTodoRepresentation) -> ICSTodoRepresentation? {
@@ -49,7 +49,7 @@ struct ICSTodoRoundTripTests {
     @Test func dateOnlyDueRoundTripsAsFloatingDate() throws {
         var todo = ICSTodoRepresentation(uid: "todo-2")
         todo.title = "Trash day"
-        todo.due = Self.localMidnight(2026, 7, 10)
+        todo.due = Self.civil(2026, 7, 10)
         todo.isDateOnly = true
 
         let output = ICSSerializer.serialize(todos: [todo])
@@ -169,7 +169,7 @@ struct ICSTodoRoundTripTests {
     @Test func afterCompletionRepeatRoundTrips() throws {
         var todo = ICSTodoRepresentation(uid: "todo-6")
         todo.title = "Change air filter"
-        todo.due = Self.localMidnight(2026, 8, 1)
+        todo.due = Self.civil(2026, 8, 1)
         todo.isDateOnly = true
         todo.afterCompletionRepeat = ReminderAfterCompletionRepeat(count: 3, unit: .month)
 
@@ -249,7 +249,7 @@ struct ICSTodoRoundTripTests {
 
         var todo = ICSTodoRepresentation(uid: "todo-import")
         todo.title = "Water plants"
-        todo.due = Self.localMidnight(2026, 7, 12)
+        todo.due = Self.civil(2026, 7, 12)
         todo.isDateOnly = true
         let first = ICSSerializer.serialize(todos: [todo])
         #expect(try ICSTodoImporter.importTodos(from: first, into: list, repository: repository) == 1)
@@ -333,7 +333,7 @@ struct ICSTodoRoundTripTests {
 
         let reminder = Reminder(
             title: "Change air filter",
-            dueDate: Self.localMidnight(2026, 8, 1),
+            dueDate: Self.civil(2026, 8, 1),
             hasDueTime: false,
             priority: .medium,
             isFlagged: true
@@ -360,7 +360,7 @@ struct ICSTodoRoundTripTests {
         #expect(roundTripped.isFlagged)
         #expect(roundTripped.checklist.map(\.text) == ["Buy filter"])
         #expect(roundTripped.afterCompletionRepeat == ReminderAfterCompletionRepeat(count: 3, unit: .month))
-        #expect(roundTripped.dueDate == Self.localMidnight(2026, 8, 1))
+        #expect(roundTripped.dueDate == Self.civil(2026, 8, 1))
         #expect(!roundTripped.hasDueTime)
     }
 
@@ -375,7 +375,7 @@ struct ICSTodoRoundTripTests {
         let chores = repository.createList(name: "Chores")
         let inbox = repository.createList(name: "Inbox")
         let reminder = repository.insert(
-            Reminder(title: "Change air filter", dueDate: Self.localMidnight(2026, 8, 1), hasDueTime: false),
+            Reminder(title: "Change air filter", dueDate: Self.civil(2026, 8, 1), hasDueTime: false),
             into: chores
         )
 

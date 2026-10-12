@@ -72,7 +72,9 @@ final class ReminderReviewFetchTool: Tool {
                     "reminderGUID: \(reminder.id.uuidString)",
                     "title: \(reminder.title)",
                 ]
-                if let due = reminder.dueDate {
+                // Date-only dues are civil days: format their local start so
+                // the model sees the stored date in any zone.
+                if let due = reminder.localDueDate() {
                     parts.append(reminder.hasDueTime
                         ? "due: \(due.formatted(date: .abbreviated, time: .shortened))"
                         : "due: \(due.formatted(.dateTime.year().month().day())) (date-only)")

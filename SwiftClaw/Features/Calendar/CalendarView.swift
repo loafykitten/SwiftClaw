@@ -117,7 +117,7 @@ struct CalendarView: View {
                     Button("Edit This Event") {
                         editorRequest = .editOccurrence(
                             masterID: occurrence.eventID,
-                            occurrenceStart: occurrence.start
+                            occurrenceStart: occurrence.occurrenceKey
                         )
                         scopePromptOccurrence = nil
                     }
@@ -139,7 +139,7 @@ struct CalendarView: View {
                     Button("Delete This Event", role: .destructive) {
                         if let master = repository.event(withID: occurrence.eventID) {
                             perform(Self.deleteFailureTitle) {
-                                try repository.deleteOccurrence(of: master, at: occurrence.start)
+                                try repository.deleteOccurrence(of: master, at: occurrence.occurrenceKey)
                             }
                         }
                         deletePromptOccurrence = nil
@@ -147,7 +147,7 @@ struct CalendarView: View {
                     Button("Delete This and Future Events", role: .destructive) {
                         if let master = repository.event(withID: occurrence.eventID) {
                             perform(Self.deleteFailureTitle) {
-                                try repository.deleteThisAndFuture(of: master, from: occurrence.start)
+                                try repository.deleteThisAndFuture(of: master, from: occurrence.occurrenceKey)
                             }
                         }
                         deletePromptOccurrence = nil
@@ -416,8 +416,11 @@ struct CalendarView: View {
         }
     }
 
+    // Timeline drags are timed-only (the layout engine never lays out
+    // all-day blocks); the guards keep instants out of civil-date rows.
+
     private func moveOccurrence(_ occurrence: EventOccurrence, to newStart: Date) {
-        guard let event = repository.event(withID: occurrence.eventID) else { return }
+        guard let event = repository.event(withID: occurrence.eventID), !event.isAllDay else { return }
         let newEnd = newStart.addingTimeInterval(event.duration)
         perform(Self.rescheduleFailureTitle) {
             try repository.reschedule(event, start: newStart, end: newEnd)
@@ -425,7 +428,8 @@ struct CalendarView: View {
     }
 
     private func resizeOccurrence(_ occurrence: EventOccurrence, to newEnd: Date) {
-        guard let event = repository.event(withID: occurrence.eventID), newEnd > event.startDate else { return }
+        guard let event = repository.event(withID: occurrence.eventID), !event.isAllDay,
+              newEnd > event.startDate else { return }
         perform(Self.rescheduleFailureTitle) {
             try repository.reschedule(event, start: event.startDate, end: newEnd)
         }
@@ -446,7 +450,7 @@ struct CalendarView: View {
         // The chip's dueDate is the occurrence it rendered; a stale
         // double-click must not consume the next occurrence too.
         perform(String(localized: "Couldn't Complete Reminder")) {
-            try reminderRepository.complete(reminder, expectedOccurrence: item.due)
+            try reminderRepository.complete(reminder, expectedOccurrence: item.storedDueDate)
         }
     }
 }
@@ -524,8 +528,10 @@ private struct CalendarWindowContent: View {
         self.onSelectReminder = onSelectReminder
         self.onCompleteReminder = onCompleteReminder
 
-        let windowStart = window.start
-        let windowEnd = window.end
+        // Widened for civil-date rows; the item builders filter exactly.
+        let fetchWindow = CalendarEvent.storeFetchWindow(for: window)
+        let windowStart = fetchWindow.start
+        let windowEnd = fetchWindow.end
         let distantFuture = Date.distantFuture
         _plainEvents = Query(filter: #Predicate<CalendarEvent> {
             $0.recurrenceRuleString == nil
@@ -617,6 +623,8 @@ private struct CalendarWindowContent: View {
 private final class CalendarOccurrenceCache {
     private struct Key: Equatable {
         let window: DateInterval
+        /// All-day rows render in the current zone; a zone change re-expands.
+        let timeZoneIdentifier: String
         let events: [EventContent]
         let overlay: [EventOccurrence]
     }
@@ -669,6 +677,7 @@ private final class CalendarOccurrenceCache {
     ) -> [EventOccurrence] {
         let nextKey = Key(
             window: window,
+            timeZoneIdentifier: TimeZone.current.identifier,
             events: events.map(EventContent.init),
             overlay: overlay
         )

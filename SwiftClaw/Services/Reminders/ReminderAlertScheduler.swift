@@ -52,6 +52,9 @@ final class ReminderAlertScheduler {
     /// Injectable clock so tests pin "now".
     var now: () -> Date = { .now }
 
+    /// Injectable zone: date-only due days resolve to local fire times in it.
+    var calendarProvider: () -> Calendar = { .current }
+
     /// Injectable settings gate. When alerts are off, reconciliation books
     /// nothing *and clears what's already booked* — `canPost` alone only
     /// stops new requests, leaving previously scheduled ones to fire.
@@ -167,17 +170,22 @@ final class ReminderAlertScheduler {
         var desired: [DesiredAlert] = []
         if alertsEnabledProvider() {
             let allDayMinutes = allDayAlertMinutesProvider()
+            let calendar = calendarProvider()
             // Bound materialization at the horizon while retaining undated and
             // overdue candidates; fire-date rules below decide what is booked.
             for reminder in repository.pendingReminders(
                 dueBefore: fireWindow.end,
-                includeUndated: true
+                includeUndated: true,
+                calendar: calendar
             ) {
-                guard let dueDate = reminder.dueDate else { continue }
+                // Date-only dues are civil days: fire on that day's local
+                // morning wherever the device is now.
+                guard let dueDate = reminder.localDueDate(calendar: calendar) else { continue }
                 let fireDate = Self.fireDate(
                     forDueDate: dueDate,
                     hasDueTime: reminder.hasDueTime,
-                    allDayAlertMinutes: allDayMinutes
+                    allDayAlertMinutes: allDayMinutes,
+                    calendar: calendar
                 )
                 guard fireDate > currentDate, fireDate <= fireWindow.end else { continue }
                 desired.append(DesiredAlert(

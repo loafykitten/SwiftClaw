@@ -104,7 +104,7 @@ struct AppleRemindersImporterTests {
         let dayReminder = try #require(repository.reminder(withExternalIdentifier: "ek-day"))
         #expect(!dayReminder.hasDueTime)
         #expect(dayReminder.timeZoneIdentifier == nil)
-        #expect(dayReminder.dueDate == Calendar.current.date(from: DateComponents(year: 2026, month: 8, day: 4)))
+        #expect(dayReminder.dueDay == CivilDay(year: 2026, month: 8, day: 4))
     }
 
     @Test func completedWithoutTimestampStillImportsAsCompleted() throws {

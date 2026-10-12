@@ -49,7 +49,7 @@ nonisolated struct WorkspaceRemindersSummary: Equatable {
             if reminder.isOverdue(now: now, calendar: calendar) {
                 overdueCount += 1
             }
-            guard let due = reminder.dueDate else { continue }
+            guard let due = reminder.localDueDate(calendar: calendar) else { continue }
 
             if due < endOfToday {
                 todayCount += 1

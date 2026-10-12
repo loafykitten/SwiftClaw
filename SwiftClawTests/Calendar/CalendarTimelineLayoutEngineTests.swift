@@ -241,25 +241,24 @@ struct CalendarTimelineLayoutEngineTests {
     @MainActor
     @Test func allDayOccurrenceEndKeepsWholeDaysAcrossDST() {
         let calendar = Self.newYork
-        let event = CalendarEvent(
-            title: "Holiday",
-            startDate: calendar.startOfDay(for: Self.newYorkDate(3, 1, 12)),
-            endDate: calendar.startOfDay(for: Self.newYorkDate(3, 2, 12)),
-            isAllDay: true
-        )
-        let springForward = calendar.startOfDay(for: Self.newYorkDate(3, 8, 12))
-        #expect(event.occurrenceEnd(forStart: springForward, calendar: calendar)
-            == calendar.startOfDay(for: Self.newYorkDate(3, 9, 12)))
+        let event = CalendarEvent(title: "Holiday")
+        event.setAllDaySpan(from: CivilDay(year: 2026, month: 3, day: 1), dayCount: 1)
+        let springForward = CivilDay(year: 2026, month: 3, day: 8).canonicalDate
+        let shortDay = event.displayInterval(forStoredStart: springForward, calendar: calendar)
+        #expect(shortDay.start == calendar.startOfDay(for: Self.newYorkDate(3, 8, 12)))
+        #expect(shortDay.end == calendar.startOfDay(for: Self.newYorkDate(3, 9, 12)))
+        #expect(shortDay.duration == 23 * 3600)
 
         // Created on the short day itself: still one day elsewhere.
-        let shortDayEvent = CalendarEvent(
-            title: "Holiday",
-            startDate: springForward,
-            endDate: calendar.startOfDay(for: Self.newYorkDate(3, 9, 12)),
-            isAllDay: true
+        let shortDayEvent = CalendarEvent(title: "Holiday")
+        shortDayEvent.setAllDaySpan(
+            localStart: calendar.startOfDay(for: Self.newYorkDate(3, 8, 12)),
+            localEnd: calendar.startOfDay(for: Self.newYorkDate(3, 9, 12)),
+            calendar: calendar
         )
-        let normalDay = calendar.startOfDay(for: Self.newYorkDate(3, 15, 12))
-        #expect(shortDayEvent.occurrenceEnd(forStart: normalDay, calendar: calendar)
+        #expect(shortDayEvent.allDayDayCount == 1)
+        let normalDay = CivilDay(year: 2026, month: 3, day: 15).canonicalDate
+        #expect(shortDayEvent.displayInterval(forStoredStart: normalDay, calendar: calendar).end
             == calendar.startOfDay(for: Self.newYorkDate(3, 16, 12)))
 
         // Timed events keep elapsed duration.
@@ -268,7 +267,7 @@ struct CalendarTimelineLayoutEngineTests {
             startDate: Self.newYorkDate(3, 1, 9),
             endDate: Self.newYorkDate(3, 1, 10)
         )
-        #expect(timed.occurrenceEnd(forStart: Self.newYorkDate(3, 8, 9), calendar: calendar)
+        #expect(timed.occurrenceEnd(forStart: Self.newYorkDate(3, 8, 9))
             == Self.newYorkDate(3, 8, 10))
     }
 }

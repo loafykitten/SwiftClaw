@@ -13,8 +13,12 @@ nonisolated struct ReminderCalendarItem: Identifiable, Sendable, Hashable {
     /// reminders surface on today (matching the Today smart list — a chip on
     /// a past page nobody revisits helps no one).
     let day: Date
-    /// The actual due instant (start-of-day when `hasDueTime` is false).
+    /// The actual due moment in the viewer's zone (local start of the civil
+    /// due day when `hasDueTime` is false).
     let due: Date
+    /// The reminder's stored `dueDate` this item rendered: the
+    /// `expectedOccurrence` to complete with.
+    let storedDueDate: Date
     let hasDueTime: Bool
     let isOverdue: Bool
     let colorHex: String
@@ -38,7 +42,8 @@ enum ReminderCalendarItemBuilder {
         for reminder in reminders {
             guard !reminder.isCompleted, !reminder.isCompletionLog,
                   reminder.list?.isVisible ?? true,
-                  let due = reminder.dueDate
+                  let storedDueDate = reminder.dueDate,
+                  let due = reminder.localDueDate(calendar: calendar)
             else { continue }
 
             let dueDay = calendar.startOfDay(for: due)
@@ -52,6 +57,7 @@ enum ReminderCalendarItemBuilder {
                     title: reminder.title,
                     day: day,
                     due: due,
+                    storedDueDate: storedDueDate,
                     hasDueTime: reminder.hasDueTime,
                     isOverdue: isOverdue,
                     colorHex: reminder.list?.colorHex ?? ReminderList.defaultColorHex

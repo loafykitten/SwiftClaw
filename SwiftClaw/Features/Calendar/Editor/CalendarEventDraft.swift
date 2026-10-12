@@ -22,16 +22,23 @@ nonisolated struct CalendarEventDraft {
         self.alarms = defaultAlarms
     }
 
-    init(from event: CalendarEvent) {
+    /// Loads in local terms: an all-day event's canonical civil dates become
+    /// local midnights in `calendar` (exclusive end), and so does its
+    /// series' UNTIL, so the pickers show the stored days in any zone.
+    init(from event: CalendarEvent, calendar: Calendar = .current) {
         title = event.title
         calendarID = event.calendar?.id
-        start = event.startDate
-        end = event.endDate
+        let interval = event.displayInterval(calendar: calendar)
+        start = interval.start
+        end = interval.end
         isAllDay = event.isAllDay
         location = event.locationText ?? ""
         urlString = event.urlString ?? ""
         notes = event.notes ?? ""
         rule = event.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:))
+        if event.isAllDay {
+            rule = rule?.localizingCivilUntil(to: calendar)
+        }
         alarms = event.alarms
     }
 
@@ -42,22 +49,15 @@ nonisolated struct CalendarEventDraft {
     /// Copies the draft onto a model row. Recurrence is skipped for override
     /// rows — a detached occurrence can't itself recur.
     @MainActor
-    func apply(to event: CalendarEvent, in repository: CalendarRepository) {
+    func apply(to event: CalendarEvent, in repository: CalendarRepository, calendar: Calendar = .current) {
         event.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let wasAllDay = event.isAllDay
         if isAllDay {
-            // All-day events are floating whole days: local midnight start,
-            // exclusive next-midnight end, no time zone. Without this, a
-            // timed event toggled all-day would keep its 09:00–10:00 clock
-            // times in the store.
-            let calendar = Calendar.current
-            let dayStart = calendar.startOfDay(for: start)
-            let dayEnd = EventKitMapping.normalizedAllDayEnd(max(end, start), calendar: calendar)
-            event.startDate = dayStart
-            event.endDate = max(
-                dayEnd,
-                calendar.date(byAdding: .day, value: 1, to: dayStart) ?? dayEnd
-            )
-            event.timeZoneIdentifier = nil
+            // All-day events are whole civil days (canonical dates, exclusive
+            // end day, no time zone), read from the local pickers in
+            // `calendar`. Without this, a timed event toggled all-day would
+            // keep its 09:00–10:00 clock times in the store.
+            event.setAllDaySpan(localStart: start, localEnd: end, calendar: calendar)
         } else {
             event.startDate = start
             event.endDate = end
@@ -71,7 +71,10 @@ nonisolated struct CalendarEventDraft {
         event.notes = notes.isEmpty ? nil : notes
         event.alarms = alarms
         if !event.isOverride {
-            event.recurrenceRuleString = rule?.rruleString
+            let storedRule = isAllDay ? rule?.civilizingUntil(readingIn: calendar) : rule
+            event.recurrenceRuleString = storedRule?.rruleString
+            // Switching encodings must carry EXDATEs and override keys along.
+            repository.reencodeOccurrenceKeys(of: event, wasAllDay: wasAllDay, calendar: calendar)
         }
         if let calendarID {
             event.calendar = repository.calendar(withID: calendarID)
@@ -93,7 +96,8 @@ nonisolated enum CalendarEditorRequest: Identifiable {
     /// Edit a one-off event, a detached override, or a whole recurring series.
     case editEvent(id: UUID)
     /// Edit a single occurrence of a recurring master ("this event only"):
-    /// Save detaches an override.
+    /// Save detaches an override. `occurrenceStart` is the stored-encoding
+    /// key (`EventOccurrence.occurrenceKey`), not the displayed start.
     case editOccurrence(masterID: UUID, occurrenceStart: Date)
 
     var id: String {

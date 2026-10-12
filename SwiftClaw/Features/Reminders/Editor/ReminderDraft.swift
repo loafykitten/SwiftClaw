@@ -4,8 +4,9 @@ import Foundation
 /// the store in one repository call on Save, so Cancel is a no-op and a
 /// half-edited form never touches SwiftData (the `CalendarEventDraft` pattern).
 nonisolated struct ReminderDraft {
-    /// How the due date is expressed. `date` reminders float (local
-    /// start-of-day, no time zone); `dateTime` pins an instant.
+    /// How the due date is expressed. `date` reminders are civil days (the
+    /// draft holds local start-of-day; the store, a canonical civil date);
+    /// `dateTime` pins an instant.
     enum DueDateMode: String, CaseIterable, Identifiable {
         case none = "None"
         case date = "On a Day"
@@ -47,12 +48,15 @@ nonisolated struct ReminderDraft {
         }
     }
 
-    init(from reminder: Reminder) {
+    /// Loads in local terms: a date-only due day (stored as a canonical civil
+    /// date) becomes its local start of day in `calendar`, and so does its
+    /// series' UNTIL, so the pickers show the stored dates in any zone.
+    init(from reminder: Reminder, calendar: Calendar = .current) {
         title = reminder.title
         notes = reminder.notes ?? ""
         urlString = reminder.urlString ?? ""
         listID = reminder.list?.id
-        if let due = reminder.dueDate {
+        if let due = reminder.localDueDate(calendar: calendar) {
             dueDate = due
             dueDateMode = reminder.hasDueTime ? .dateTime : .date
         }
@@ -60,6 +64,9 @@ nonisolated struct ReminderDraft {
         isFlagged = reminder.isFlagged
         checklist = reminder.checklist
         rule = reminder.recurrenceRuleString.flatMap(RecurrenceRule.init(rruleString:))
+        if reminder.dueDate != nil, !reminder.hasDueTime {
+            rule = rule?.localizingCivilUntil(to: calendar)
+        }
         if let afterCompletion = reminder.afterCompletionRepeat {
             afterCompletionRepeat = afterCompletion
             repeatMode = .afterCompletion
@@ -80,8 +87,9 @@ nonisolated struct ReminderDraft {
 
     /// Copies the draft onto a model row. Never called on completion-log rows
     /// (they're history, not editable reminders).
+    /// Date-only values go back to canonical civil dates, read in `calendar`.
     @MainActor
-    func apply(to reminder: Reminder, in repository: ReminderRepository) {
+    func apply(to reminder: Reminder, in repository: ReminderRepository, calendar: Calendar = .current) {
         reminder.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         reminder.notes = notes.isEmpty ? nil : notes
         reminder.urlString = urlString.isEmpty ? nil : urlString
@@ -95,11 +103,9 @@ nonisolated struct ReminderDraft {
             reminder.hasDueTime = false
             reminder.timeZoneIdentifier = nil
         case .date:
-            // Date-only reminders float: local start-of-day, no zone — the
-            // all-day calendar event convention.
-            reminder.dueDate = Calendar.current.startOfDay(for: dueDate)
-            reminder.hasDueTime = false
-            reminder.timeZoneIdentifier = nil
+            // Date-only reminders are civil days (no zone), the all-day
+            // calendar event convention: July 10 stays July 10 everywhere.
+            reminder.setDueDay(CivilDay(containing: dueDate, in: calendar))
         case .dateTime:
             reminder.dueDate = dueDate
             reminder.hasDueTime = true
@@ -113,7 +119,8 @@ nonisolated struct ReminderDraft {
             reminder.recurrenceRuleString = nil
             reminder.afterCompletionRepeat = nil
         case .schedule:
-            reminder.recurrenceRuleString = rule?.rruleString
+            let storedRule = dueDateMode == .date ? rule?.civilizingUntil(readingIn: calendar) : rule
+            reminder.recurrenceRuleString = storedRule?.rruleString
             reminder.afterCompletionRepeat = nil
         case .afterCompletion:
             reminder.recurrenceRuleString = nil

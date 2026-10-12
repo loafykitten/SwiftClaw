@@ -15,11 +15,11 @@ struct ReminderAlertSchedulerTests {
         now.addingTimeInterval(hours * 3600)
     }
 
-    /// Local start-of-day `days` from now — date-only due dates store local
-    /// midnight. Two days out keeps every derived morning fire date safely in
-    /// the future no matter what time the suite runs.
+    /// The local civil day `days` from now, in the stored date-only encoding
+    /// (`CivilDay` canonical date). Two days out keeps every derived morning
+    /// fire date safely in the future no matter what time the suite runs.
     private static func startOfDay(daysFromNow days: Int) -> Date {
-        Calendar.current.startOfDay(for: now.addingTimeInterval(Double(days) * 24 * 3600))
+        CivilDay(containing: now.addingTimeInterval(Double(days) * 24 * 3600)).canonicalDate
     }
 
     private struct Harness {

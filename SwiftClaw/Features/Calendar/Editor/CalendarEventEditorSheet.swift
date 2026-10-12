@@ -154,8 +154,9 @@ struct CalendarEventEditorSheet: View {
         case .editOccurrence(let masterID, let occurrenceStart):
             if let master = repository.event(withID: masterID) {
                 var draft = CalendarEventDraft(from: master)
-                draft.start = occurrenceStart
-                draft.end = master.occurrenceEnd(forStart: occurrenceStart)
+                let interval = master.displayInterval(forStoredStart: occurrenceStart)
+                draft.start = interval.start
+                draft.end = interval.end
                 draft.rule = nil
                 self.draft = draft
             }

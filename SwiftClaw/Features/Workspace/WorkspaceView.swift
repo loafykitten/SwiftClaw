@@ -498,8 +498,10 @@ private struct WorkspaceCalendarStatsContent: View {
         self.now = now
         self.calendar = calendar
 
-        let windowStart = window.start
-        let windowEnd = window.end
+        // Widened for civil-date rows; the occurrence builder filters exactly.
+        let fetchWindow = CalendarEvent.storeFetchWindow(for: window)
+        let windowStart = fetchWindow.start
+        let windowEnd = fetchWindow.end
         let distantFuture = Date.distantFuture
         _plainEvents = Query(filter: #Predicate<CalendarEvent> {
             $0.recurrenceRuleString == nil
@@ -561,6 +563,8 @@ private struct WorkspaceCalendarStatsContent: View {
 private final class WorkspaceCalendarOccurrenceCache {
     private struct Key: Equatable {
         let window: DateInterval
+        /// All-day rows render in the current zone; a zone change re-expands.
+        let timeZoneIdentifier: String
         let events: [EventContent]
     }
 
@@ -604,7 +608,11 @@ private final class WorkspaceCalendarOccurrenceCache {
     /// Expansion invalidates by exact window and rendered event content, so
     /// minute ticks reuse it while event edits and the day-keyed window do not.
     func occurrences(from events: [CalendarEvent], in window: DateInterval) -> [EventOccurrence] {
-        let nextKey = Key(window: window, events: events.map(EventContent.init))
+        let nextKey = Key(
+            window: window,
+            timeZoneIdentifier: TimeZone.current.identifier,
+            events: events.map(EventContent.init)
+        )
         guard key != nextKey else { return value }
 
         key = nextKey
