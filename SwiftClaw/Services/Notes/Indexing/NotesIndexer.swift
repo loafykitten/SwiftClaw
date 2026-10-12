@@ -46,6 +46,12 @@ actor NotesIndexer {
 
     private(set) var freshness = Freshness.initial
 
+    /// Serializes `apply(delta:)` with `syncCatalog`'s stale-entry cleanup.
+    /// Actor reentrancy would otherwise let reconciliation index a new note
+    /// while the cleanup is suspended, and the cleanup then delete it.
+    private var isCleanupExclusive = false
+    private var cleanupExclusionWaiters: [CheckedContinuation<Void, Never>] = []
+
     init(
         searchIndex: SearchIndex,
         linkGraph: NoteLinkGraph,
@@ -115,6 +121,8 @@ actor NotesIndexer {
     @discardableResult
     func apply(delta: VaultReconciler.ReconcileDelta) async -> RunOutcome {
         guard !delta.isEmpty else { return RunOutcome(indexed: 0, removed: 0, failedPaths: []) }
+        await acquireCleanupExclusion()
+        defer { releaseCleanupExclusion() }
 
         var indexed = 0
         var removed = 0
@@ -151,16 +159,22 @@ actor NotesIndexer {
         var removed = 0
         var failed: [String] = []
 
-        let catalogPaths = Set(notes.map(\.relativePath))
+        await acquireCleanupExclusion()
         do {
             let cachedPaths = try await searchIndex.sourceIDs(sourceType: Self.sourceType)
                 .union(linkGraph.notePaths())
+            // `notes` may predate a delta that already indexed a new note.
+            // The repository adds a note before its delta reaches this
+            // indexer, so the live catalog covers everything applied so far.
+            let liveNotes = await catalogProvider()
+            let catalogPaths = Set((notes + liveNotes).map(\.relativePath))
             for path in cachedPaths.subtracting(catalogPaths).sorted() {
                 if await removeNote(path) { removed += 1 } else { failed.append(path) }
             }
         } catch {
             Self.logger.error("listing cached notes failed, skipping stale-entry cleanup: \(String(describing: error))")
         }
+        releaseCleanupExclusion()
 
         for note in notes {
             if await indexNote(note.relativePath, catalogHash: note.sha256) {
@@ -229,6 +243,24 @@ actor NotesIndexer {
             embeddingAvailable: embeddingAvailable, lastIndexSuccessAt: freshness.lastSuccessAt,
             lastIndexFailedPaths: freshness.lastFailedPaths, indexError: errors.isEmpty ? nil : errors.joined(separator: "; ")
         )
+    }
+
+    private func acquireCleanupExclusion() async {
+        guard isCleanupExclusive else {
+            isCleanupExclusive = true
+            return
+        }
+        await withCheckedContinuation { cleanupExclusionWaiters.append($0) }
+    }
+
+    /// Hands exclusion straight to the next waiter, so no newcomer can slip
+    /// in between.
+    private func releaseCleanupExclusion() {
+        if cleanupExclusionWaiters.isEmpty {
+            isCleanupExclusive = false
+        } else {
+            cleanupExclusionWaiters.removeFirst().resume()
+        }
     }
 
     // MARK: - Per-note indexing

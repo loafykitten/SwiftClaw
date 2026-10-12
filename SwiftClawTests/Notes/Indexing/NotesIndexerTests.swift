@@ -149,6 +149,62 @@ struct NotesIndexerTests {
         #expect(try await searchIndex.sourceIDs(sourceType: NotesIndexer.sourceType) == ["New Name.md", "Target.md"])
     }
 
+    /// Reconciliation is already running during the startup sync, so a note
+    /// can be indexed after the sync's catalog snapshot was taken. Cleanup
+    /// must not treat it as deleted.
+    @Test func catalogSyncKeepsANoteIndexedAfterItsCatalogSnapshot() async throws {
+        let store = FakeNoteStore()
+        await store.set("Target.md", content: "the target", modifiedAt: Self.epoch)
+        let (indexer, searchIndex, linkGraph) = try makeIndexer(store: store)
+        let snapshot = await store.catalog()
+
+        await store.set("New.md", content: "narwhal facts [[Target]]", modifiedAt: Self.epoch)
+        await indexer.apply(delta: .init(added: ["New.md"], modified: [], removed: [], renamedPairs: []))
+        let outcome = await indexer.syncCatalog(snapshot)
+
+        #expect(outcome.removed == 0)
+        #expect(try await searchIndex.ftsSearch(query: "narwhal").map(\.document.sourceID) == ["New.md"])
+        #expect(try await linkGraph.backlinks(to: "Target.md").map(\.sourcePath) == ["New.md"])
+    }
+
+    /// A delta that arrives while the cleanup is suspended waits for it, so
+    /// a note re-created under a stale cached path ends up indexed rather
+    /// than deleted after the delta indexed it.
+    @Test func deltaArrivingDuringCatalogCleanupIsAppliedAfterIt() async throws {
+        let store = FakeNoteStore()
+        await store.set("Recreated.md", content: "old walrus", modifiedAt: Self.epoch)
+        let searchIndex = try SearchIndex(path: ":memory:")
+        let gate = ToolOperationGate()
+        let indexer = NotesIndexer(
+            searchIndex: searchIndex, linkGraph: try NoteLinkGraph(path: ":memory:"),
+            noteReader: { path in try await store.read(path) },
+            catalogProvider: {
+                // Captured before the hold, like a catalog read that
+                // precedes a note being re-created.
+                let catalog = await store.catalog()
+                await gate.enterAndWaitForRelease()
+                return catalog
+            }
+        )
+        await indexer.apply(delta: .init(added: ["Recreated.md"], modified: [], removed: [], renamedPairs: []))
+        await store.remove("Recreated.md")
+
+        async let sync = indexer.syncCatalog(await store.catalog())
+        await gate.waitUntilEntered()
+        await store.set("Recreated.md", content: "new narwhal", modifiedAt: Self.epoch)
+        let delta = Task {
+            await indexer.apply(delta: .init(added: ["Recreated.md"], modified: [], removed: [], renamedPairs: []))
+        }
+        // Give an unserialized delta the chance to finish inside the hold.
+        try await Task.sleep(for: .milliseconds(100))
+        gate.release()
+        _ = await sync
+        _ = await delta.value
+
+        #expect(try await searchIndex.ftsSearch(query: "walrus").isEmpty)
+        #expect(try await searchIndex.ftsSearch(query: "narwhal").map(\.document.sourceID) == ["Recreated.md"])
+    }
+
     @Test func modifiedContentReindexes() async throws {
         let store = FakeNoteStore()
         await store.set("Note.md", content: "original alpha content", modifiedAt: Self.epoch)

@@ -87,7 +87,8 @@ normalizer.
 `NotesIndexer` parses and chunks changed notes, skips unchanged hashes, and can
 rebuild the cache from the catalog. The startup catalog sync also drops cached
 notes the catalog lacks (deletions/renames made while the app was closed).
-Multi-statement writes run as one `SQLiteDatabase.transaction` call, never as
+That cleanup runs exclusively of reconcile deltas and rechecks the live
+catalog, so a note indexed meanwhile is never dropped. Multi-statement writes run as one `SQLiteDatabase.transaction` call, never as
 separately awaited `BEGIN`/`COMMIT`s. Search combines FTS and optional on-device
 `NLEmbedding` cosine results with reciprocal-rank fusion. Missing embeddings or
 FTS5 degrade visibly instead of crashing. The generated 5,000-note performance

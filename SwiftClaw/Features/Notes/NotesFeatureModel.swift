@@ -681,7 +681,9 @@ final class NotesFeatureModel {
         // operation is still using them.
         let teardown = await vaultOperationLeases.beginTeardownAndWaitForDrain()
         defer { vaultOperationLeases.endTeardown(teardown) }
-        // Typing may have continued while the drain was suspended.
+        // Typing may have continued while the drain was suspended. From here
+        // to `editor = nil` nothing may suspend, or a new edit could land in
+        // a buffer that is about to be discarded.
         guard await preserveEditorBufferForTeardown() else { return false }
 
         configurationGeneration &+= 1
@@ -700,7 +702,7 @@ final class NotesFeatureModel {
             NotificationCenter.default.removeObserver(activationObserver)
             self.activationObserver = nil
         }
-        await reconciler?.stop()
+        let stoppingReconciler = reconciler
         reconciler = nil
         vault = nil
         indexer = nil
@@ -732,6 +734,13 @@ final class NotesFeatureModel {
         healthError = nil
         isRebuildingIndex = false
         rebuildIndexError = nil
+
+        // Stopped only now that the editor is discarded. Any delta still in
+        // flight carries the old generation, so it can't touch the new state.
+        if let teardownOperationGate {
+            await teardownOperationGate.enterAndWaitForRelease()
+        }
+        await stoppingReconciler?.stop()
         return true
     }
 
@@ -769,6 +778,11 @@ final class NotesFeatureModel {
         if let selectedPath, delta.added.contains(selectedPath) || delta.modified.contains(selectedPath)
             || delta.removed.contains(selectedPath) || delta.renamedPairs.contains(where: { $0.from == selectedPath || $0.to == selectedPath }) {
             await refreshBacklinks()
+            if let reconcileBacklinksGate {
+                await reconcileBacklinksGate.enterAndWaitForRelease()
+            }
+            // The selection and editor below must still be this vault's.
+            guard generation == configurationGeneration else { return }
         }
 
         if let selectedPath {
@@ -1187,6 +1201,16 @@ final class NotesFeatureModel {
     /// a vault switch inside that real suspension window.
     @ObservationIgnored
     var reconcileOperationGate: ToolOperationGate?
+
+    /// Test-only, like `reconcileOperationGate`: holds a reconcile delta
+    /// right after its `refreshBacklinks()` returns.
+    @ObservationIgnored
+    var reconcileBacklinksGate: ToolOperationGate?
+
+    /// Test-only: holds `teardownCurrentVault()` just before it stops the
+    /// old reconciler, so a test can type into that suspension window.
+    @ObservationIgnored
+    var teardownOperationGate: ToolOperationGate?
 
     /// `search_notes`' sole search boundary — the indexer, never the raw
     /// index database. Captures `configurationGeneration` and the indexer

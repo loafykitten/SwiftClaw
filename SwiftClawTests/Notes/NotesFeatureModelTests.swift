@@ -766,6 +766,71 @@ struct NotesFeatureModelTests {
         #expect(model.searchResults.map(\.document.sourceID) == ["Shared.md"])
     }
 
+    /// The same race one suspension later: a removal delta from the old
+    /// vault held after its backlinks refresh must not clear or retarget the
+    /// new vault's selection on a matching path.
+    @Test func reconcileDeltaSuspendedAfterBacklinksCannotTouchTheNewVaultsSelection() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let model = try makeModel(defaults: fixture.defaults)
+        let externalFolder = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: externalFolder) }
+        try Data("A note about narwhals.".utf8).write(to: externalFolder.appendingPathComponent("Shared.md"))
+
+        await model.chooseAppManagedVault()
+        let oldRoot = URL(fileURLWithPath: try #require(model.stats.resolvedPath))
+        try Data("old vault copy".utf8).write(to: oldRoot.appendingPathComponent("Shared.md"))
+        await model.handle(delta: .init(added: ["Shared.md"], modified: [], removed: [], renamedPairs: []))
+        await model.select(path: "Shared.md")
+        try FileManager.default.removeItem(at: oldRoot.appendingPathComponent("Shared.md"))
+
+        let gate = ToolOperationGate()
+        model.reconcileBacklinksGate = gate
+        async let staleDelta: Void = model.handle(
+            delta: .init(added: [], modified: [], removed: ["Shared.md"], renamedPairs: [])
+        )
+        await gate.waitUntilEntered()
+        model.reconcileBacklinksGate = nil
+        await model.chooseExternalVault(url: externalFolder)
+        await model.select(path: "Shared.md")
+        gate.release()
+        await staleDelta
+
+        #expect(model.selectedPath == "Shared.md")
+        #expect(model.editor?.selectedPath == "Shared.md")
+        #expect(model.editor?.currentText == "A note about narwhals.")
+        #expect(model.editor?.externalRemovalBanner == nil)
+    }
+
+    /// Teardown's last suspension, stopping the old reconciler, comes after
+    /// the editor is discarded: nothing typed there can land in a buffer
+    /// that teardown then drops unsaved.
+    @Test func typingDuringReconcilerShutdownCannotReachADiscardedBuffer() async throws {
+        let fixture = try UserDefaultsFixture()
+        defer { fixture.cleanup() }
+        let model = try makeModel(defaults: fixture.defaults)
+
+        await model.chooseAppManagedVault()
+        await model.createNote()
+        let selectedPath = try #require(model.selectedPath)
+        let vaultRoot = URL(fileURLWithPath: try #require(model.stats.resolvedPath))
+        model.editor?.textDidChange("typed before reset")
+
+        let gate = ToolOperationGate()
+        model.teardownOperationGate = gate
+        async let reset = model.resetVaultConfiguration()
+        await gate.waitUntilEntered()
+        // The UI can only type into the editor the model still exposes.
+        #expect(model.editor == nil)
+        #expect(model.selectedPath == nil)
+        model.editor?.textDidChange("typed during reconciler shutdown")
+        gate.release()
+
+        #expect(await reset)
+        let onDisk = try String(contentsOf: vaultRoot.appendingPathComponent(selectedPath), encoding: .utf8)
+        #expect(onDisk == "typed before reset")
+    }
+
     /// Teardown must not discard the only copy of the open note's edits:
     /// a reset first saves a dirty buffer, and refuses (keeping the vault
     /// and editor) when that save fails.
