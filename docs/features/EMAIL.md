@@ -96,8 +96,28 @@ tool, then the model decides which slice of inbox to pull before optionally
 calling `notify_user_about_emails`. The service stamps
 `EmailThread.lastReviewedAt` only for threads the model actually fetched, and
 only after a successful inference call — a failure retries next pass instead of
-suppressing threads forever. Suppression is via `lastReviewedAt` plus
-`reviewedCount`; flagged/notated threads bypass it.
+suppressing threads forever. A thread that gained reviewable mail after the
+fetch (mail landing mid-inference) is left unstamped so the unseen message
+isn't suppressed. Suppression is via `lastReviewedAt` plus
+`reviewedCount`; flagged/notated threads bypass it. The fetched payload
+serializes exactly the messages the selection considered
+(`EmailRepository.consideredMessages`), so it honors the same folder scope.
+
+Email content is untrusted. The review prompt and fetch result tell the model
+not to follow instructions inside thread data. Review follow-up chats keep
+trusted guidance first and put referenced emails in a JSON-encoded
+`<untrusted_email_data>` block (`<`/`>` escaped so senders can't close the
+fence). `add_email_note` / `set_email_flag` only act on emails the chat's own
+review cards reference (`EmailReviewToolScope`).
+
+## HTML rendering
+
+`EmailHTMLBodyView` loads sender HTML with content JavaScript disabled, a strict
+CSP `<meta>` first in `<head>` (no scripts/frames/forms/`<base>`; only
+`data:`/`cid:` images until the user taps "Load Remote Content"), a
+non-persistent data store, and a navigation policy that allows only the
+`about:` document — clicked http(s)/mailto links open externally, everything
+else is cancelled (`EmailHTMLDocument`).
 
 Scheduled review always includes INBOX. Custom folders are excluded by default
 and can be opted in per account from Email settings. Junk/Spam, Sent, Drafts,

@@ -9,6 +9,9 @@ All settings code lives in `Settings/`.
    (API keys, IMAP/SMTP passwords). Use `Keychain.set/delete/string(forKey:)`
    outside SwiftUI. Per-account keys are runtime values, so account passwords
    use `Keychain.set(...)` directly rather than the property wrapper.
+   `Keychain.set`/`delete` return `false` on failure — check it wherever a
+   user confirms a save, and never delete a migration source until the
+   Keychain verifiably holds the value.
 4. **`SettingsStorage`** — static helpers with an injectable `UserDefaults` for
    tests (template: `isWebSearchEnabled(userDefaults:)`). Defaults/ranges live
    as `static let defaultX` / `xRange` next to the helper. Tests pass a
