@@ -317,9 +317,9 @@ struct CivilDateTests {
         reminder.setDueDay(Self.day(2026, 3, 5))
         repository.insert(reminder)
 
-        repository.complete(reminder, at: Self.date(2026, 3, 5, 18, in: Self.newYork))
+        try repository.complete(reminder, at: Self.date(2026, 3, 5, 18, in: Self.newYork))
         #expect(reminder.dueDay == Self.day(2026, 3, 12))
-        repository.complete(reminder, at: Self.date(2026, 3, 12, 18, in: Self.newYork))
+        try repository.complete(reminder, at: Self.date(2026, 3, 12, 18, in: Self.newYork))
         #expect(reminder.dueDay == Self.day(2026, 3, 19))
         // The log rows remember the civil occurrence they completed.
         let logs = repository.completionLog(of: reminder)
