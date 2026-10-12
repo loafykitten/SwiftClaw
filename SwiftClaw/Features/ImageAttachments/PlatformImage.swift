@@ -19,11 +19,21 @@ extension PlatformImage {
         #endif
     }
 
+    /// Pixels in display orientation. On iOS, `cgImage` is the raw sensor
+    /// buffer and `imageOrientation` (from EXIF) says how to show it; the
+    /// re-encoded JPEG carries no orientation metadata, so bake it in here or
+    /// portrait/mirrored photos come out rotated or flipped.
     var attachmentCGImage: CGImage? {
         #if os(macOS)
         cgImage(forProposedRect: nil, context: nil, hints: nil)
         #elseif os(iOS)
-        cgImage
+        guard imageOrientation != .up else { return cgImage }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.preferredRange = .standard
+        return UIGraphicsImageRenderer(size: size, format: format)
+            .image { _ in draw(in: CGRect(origin: .zero, size: size)) }
+            .cgImage
         #endif
     }
 }

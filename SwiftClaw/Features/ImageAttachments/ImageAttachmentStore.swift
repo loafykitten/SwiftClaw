@@ -67,7 +67,7 @@ final class ImageAttachmentStore {
         limits: ImageAttachmentLimits = ImageAttachmentLimits(),
         fileManager: FileManager = .default
     ) {
-        self.rootDirectory = rootDirectory ?? Self.defaultRootDirectory(fileManager: fileManager)
+        self.rootDirectory = rootDirectory ?? Self.defaultRootDirectory
         self.limits = limits
         self.fileManager = fileManager
     }
@@ -336,7 +336,10 @@ final class ImageAttachmentStore {
         }
     }
 
-    private static func defaultRootDirectory(fileManager: FileManager) -> URL {
+    /// The current container's attachment root. Also what
+    /// `ImageAttachmentRecord.fileURL` re-roots stale absolute paths onto.
+    nonisolated static let defaultRootDirectory: URL = {
+        let fileManager = FileManager.default
         let applicationSupport = fileManager.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
@@ -345,5 +348,5 @@ final class ImageAttachmentStore {
         return applicationSupport
             .appendingPathComponent("SwiftClaw", isDirectory: true)
             .appendingPathComponent("ImageAttachments", isDirectory: true)
-    }
+    }()
 }

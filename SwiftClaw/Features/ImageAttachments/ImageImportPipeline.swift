@@ -166,17 +166,20 @@ enum ImageImportPipeline {
             ]
         }
 
-        var sources: [ImageImportSource] = []
+        // One item usually carries the same image as several representations
+        // (PNG + TIFF, …): take the first one that decodes, in preference
+        // order, so a single paste yields a single attachment.
         for contentType in pasteboardImageContentTypes {
             let pasteboardType = NSPasteboard.PasteboardType(contentType.identifier)
-            guard let data = item.data(forType: pasteboardType) else {
+            guard let data = item.data(forType: pasteboardType),
+                  NSImage(data: data) != nil else {
                 continue
             }
 
-            sources.append(.data(data, contentTypeIdentifier: contentType.identifier))
+            return [.data(data, contentTypeIdentifier: contentType.identifier)]
         }
 
-        return sources
+        return []
     }
 
     private static var pasteboardImageContentTypes: [UTType] {
